@@ -1,0 +1,71 @@
+// Useful links:
+// - https://pest.rs/book/grammars/built-ins.html#built-in-grammars
+// - https://pest.rs/book/grammars/syntax.html#cheat-sheet
+// - https://pest.rs/#editor
+
+WHITESPACE           = _{ " " | "\t" | "\r" }
+COMMENT              = _{ multiline_comment | singleline_comment }
+multiline_comment    = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+singleline_comment   = _{ "//" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI) }
+EXPRESSION_DELIMITER = _{ (";" ~ NEWLINE*) | NEWLINE+ | &EOI }
+
+ESCAPED_CHAR = _{ ("\\" ~ (
+        "n" | "r"  | "t"  | "0"  | "\\" | "\"" | "'" |
+        "x" ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT |
+        "u" ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT |
+        "U" ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT ~ ASCII_HEX_DIGIT
+    )) | (!"\\" ~ ANY) }
+
+UNICODE_ALPHA         =  { ASCII_ALPHA | OTHER_SYMBOL }
+identifier_char       =  { UNICODE_ALPHA | ASCII_DIGIT | "_" }
+identifier_char_start =  { UNICODE_ALPHA | "_" }
+identifier            = @{ identifier_char_start ~ identifier_char* }
+integer               = @{ ASCII_DIGIT+ }
+float                 = @{ integer ~ "." ~ integer }
+number                = _{ float | integer }
+boolean               = @{ "true" | "false" }
+string                = @{ (!"\"" ~ ESCAPED_CHAR)* }
+string_outer          = _{ "\"" ~ string ~ "\"" }
+character             = @{ !"'" ~ ESCAPED_CHAR }
+character_outer       = _{ "'" ~ character ~ "'" }
+primitive_value       = _{ boolean | identifier | number | string_outer | character_outer }
+
+type_expression       =  { identifier ~ type_parameter? }
+type_parameter        =  { "<" ~ type_expression ~ ("," ~ type_expression)* ~ ">" }
+
+list          =  { "[" ~ (op_expression ~ ("," ~ op_expression)*)? ~ "]" }
+map_entry_key = _{ identifier | string_outer | character_outer | boolean | number }
+map_entry     =  { map_entry_key ~ ":" ~ op_expression }
+map           =  { "{" ~ (map_entry ~ ("," ~ map_entry)*)? ~ "}" }
+tuple         =  { "(" ~ (op_expression ~ ("," ~ op_expression)*)? ~ ")" }
+struct_value  = _{ list | map | tuple }
+
+function_args      =  { op_expression ~ ("," ~ op_expression)* }
+function_call      =  { identifier ~ "(" ~ function_args? ~ ")" }
+block_expression   =  { "{" ~ (top_level ~ (EXPRESSION_DELIMITER ~ top_level)*) ~ "}" } // At least one top level expression
+grouped_expression = _{ "(" ~ op_expression ~ ")" }
+primary_expression = _{ function_call | grouped_expression | primitive_value | struct_value | block_expression }
+
+// Compound expressions
+operator                = @{ ("+" | "-" | "*" | "/" | "%" | "=" | "!" | "<" | ">" | "&" | "|" | "^" | "~" | "?" | ":" | ".")+ }
+prefix_op               = @{ operator }
+infix_op                = @{ operator }
+postfix_op              = @{ operator }
+primary_op_expr         = ${ prefix_op* ~ primary_expression ~ postfix_op* }
+op_expression           =  { primary_op_expr ~ (infix_op ~ primary_op_expr)* }
+// prefix_expression       = _{ prefix_op ~ (prefix_expression | primary_expression) }
+// infix_expression        = _{ (prefix_expression | primary_expression) ~ infix_op ~ op_expression }
+// op_expression           = _{ infix_expression | prefix_expression | primary_expression }
+// unordered_op_expression =  { op_expression }
+
+typed_declaration = _{ type_expression ~ identifier }
+function_params   =  { ((typed_declaration ~ ",") | typed_declaration)* }
+function_def      =  { typed_declaration ~ "(" ~ function_params ~ ")" ~ (("=" ~ op_expression) | block_expression ) }
+
+// Destructuring assignments and pattern matching
+destruct_pattern    	  	= _{ identifier | struct_value }
+destruct_declaration		= _{ (type_expression ~ destruct_pattern) | destruct_pattern }
+destruct_pattern_assignment =  { destruct_declaration ~ "=" ~ op_expression } // Types can be inferred
+
+top_level = _{ function_def | destruct_pattern_assignment | op_expression }
+program   =  { SOI ~ (top_level ~ EXPRESSION_DELIMITER)* ~ EOI }

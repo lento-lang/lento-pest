@@ -1,0 +1,4 @@
+x = 5, int y = 10
+z = x + y
+u = v = w = 3
+println x y z u v w
