@@ -262,15 +262,20 @@ fn apply_call(callee: Value, args: Vec<Value>) -> Result<Value, String> {
 pub(crate) fn apply_one(callee: Value, arg: Value) -> Result<Value, String> {
     match callee {
         Value::Closure(closure) => {
-            if closure.params.len() != 1 {
-                return Err(format!(
-                    "closure expected {} arguments, got 1",
-                    closure.params.len()
-                ));
-            }
             let mut local_env = closure.env.clone();
             bind_pattern(&closure.params[0], arg, false, &mut local_env)?;
-            eval_expr(&closure.body, &mut local_env)
+            if closure.params.len() == 1 {
+                eval_expr(&closure.body, &mut local_env)
+            } else {
+                // Partial application: bind the first parameter and hand
+                // back a closure carrying the remaining parameters and the
+                // extended environment.
+                Ok(Value::Closure(Rc::new(Closure {
+                    params: closure.params[1..].to_vec(),
+                    body: closure.body.clone(),
+                    env: local_env,
+                })))
+            }
         }
         Value::Intrinsic(mut intrinsic) => {
             intrinsic.args.push(arg);

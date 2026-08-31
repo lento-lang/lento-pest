@@ -1,0 +1,23 @@
+fn add3 a b c = a + b + c
+
+let add1 = add3 1
+let add12 = add1 2
+assert (add12 3 == 6)
+println (add12 3)
+
+let lam = a b c => a + b + c
+let lam1 = lam 10
+let lam12 = lam1 20
+assert (lam12 30 == 60)
+println (lam12 30)
+
+let cA = concat "A"
+assert (cA "B" == "AB")
+println (cA "B")
+
+fn add2 a b = a + b
+let plus10 = add2 10
+assert (map plus10 [1, 2, 3] == [11, 12, 13])
+println (map plus10 [1, 2, 3])
+
+println (map (concat "x") ["1", "2"])

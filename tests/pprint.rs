@@ -31,6 +31,7 @@ const SAMPLES: &[&str] = &[
     "match_tuples",
     "mutation_spec",
     "polymorphism",
+    "partial_application",
     "records",
     "spec_where",
     "tuple_destructuring",
