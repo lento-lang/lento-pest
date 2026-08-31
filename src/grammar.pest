@@ -136,8 +136,8 @@ postfix_op     = _{ member_access | index_access }
 member_access  = { "." ~ identifier }
 index_access   = { "[" ~ expression ~ "]" }
 
-primary        = _{ literal | tuple | list | block | ref_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
-match_primary  = _{ literal | tuple | list | ref_match_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
+primary        = _{ literal | tuple | list | block | record_value | ref_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
+match_primary  = _{ literal | tuple | list | record_value | ref_match_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
 literal        = _{ boolean | number | string }
 ref_expr       = { "ref" ~ expression }
 ref_match_expr = { "ref" ~ match_scrutinee }
@@ -153,3 +153,10 @@ match_arm_sep  = _{ (";" ~ NEWLINE*) | NEWLINE+ | "," }
 call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 tuple          = { "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 list           = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
+
+// `{ a: 1, ...r, b: 2 }` — record value literal. A bare `{}` is a block
+// (empty braces), never an empty record, so records must have an entry.
+record_value   = { "{" ~ (record_value_entry ~ ("," ~ record_value_entry)*)? ~ "}" }
+record_value_entry = _{ record_value_field | record_value_spread }
+record_value_field  = { identifier ~ ":" ~ expression }
+record_value_spread = { "..." ~ expression }

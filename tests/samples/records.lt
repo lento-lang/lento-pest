@@ -1,0 +1,20 @@
+let origin = { x: 0, y: 0 }
+println origin
+
+let shifted = { x: 5, y: 7 }
+let moved = { ...origin, x: shifted.x }
+println moved
+assert (moved == { x: 5, y: 0 })
+
+let merged = { ...origin, z: 9, y: 1 }
+println merged
+assert (merged == { x: 0, y: 1, z: 9 })
+
+fn norm { x: a, y: b } = (a, b)
+let (dx, dy) = norm { x: 3, y: 4 }
+assert (dx == 3)
+assert (dy == 4)
+
+println (match merged {
+    { x: mx, z: mz, ..._ } => mx + mz
+})

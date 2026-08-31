@@ -4,8 +4,8 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::{
-    BinaryOp, BlockExpr, Decl, Expr, LetDecl, Lit, MatchArm, PatKind, Pattern, Program, Stmt,
-    UnaryOp,
+    BinaryOp, BlockExpr, Decl, Expr, LetDecl, Lit, MatchArm, PatKind, Pattern, Program,
+    RecordValueExpr, Stmt, UnaryOp,
 };
 use crate::intrinsics::{apply_intrinsic, install_intrinsics, Intrinsic};
 
@@ -188,6 +188,7 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
             Ok(Value::Tuple(items))
         }
         Expr::List(list) => eval_list(list, env),
+        Expr::Record(record) => eval_record(record, env),
         Expr::Block(block) => eval_block(block, env),
         Expr::Match(match_expr) => {
             let scrutinee = eval_expr(&match_expr.scrutinee, env)?;
@@ -471,6 +472,34 @@ fn eval_list(list: &crate::ast::ListExpr, env: &mut Env) -> Result<Value, String
             }
         }
     }
+}
+
+fn eval_record(record: &RecordValueExpr, env: &mut Env) -> Result<Value, String> {
+    use std::collections::HashMap;
+    let mut fields: HashMap<String, Value> = HashMap::new();
+    for entry in &record.entries {
+        match entry {
+            crate::ast::RecordValueEntry::Field(name, value) => {
+                fields.insert(name.clone(), eval_expr(value, env)?);
+            }
+            crate::ast::RecordValueEntry::Spread(source) => {
+                let value = eval_expr(source, env)?;
+                match value {
+                    Value::Record(mut src) => {
+                        for (k, v) in src.drain() {
+                            fields.insert(k, v);
+                        }
+                    }
+                    other => {
+                        return Err(format!(
+                            "record spread expects a record, got {other}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(Value::Record(fields))
 }
 
 fn eval_block(block: &BlockExpr, env: &mut Env) -> Result<Value, String> {

@@ -169,6 +169,7 @@ pub enum Expr {
     Binary(BinaryExpr),
     Tuple(TupleExpr),
     List(ListExpr),
+    Record(RecordValueExpr),
     Block(BlockExpr),
     Match(MatchExpr),
 }
@@ -286,6 +287,20 @@ pub struct ListCons {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockExpr {
     pub body: Vec<Stmt>,
+}
+
+/// `{ a: 1, ...r, b: 2 }` — a record value literal. Entries apply in order:
+/// a spread merges another record's fields, a field inserts or overrides the
+/// key. A bare `{}` is a block, never an empty record.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RecordValueExpr {
+    pub entries: Vec<RecordValueEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecordValueEntry {
+    Field(String, Expr),
+    Spread(Expr),
 }
 
 /// `match scrutinee { pattern [if guard] => body, ... }` — a pattern match.

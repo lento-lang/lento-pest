@@ -357,6 +357,7 @@ fn format_expr_inner(out: &mut String, expr: &Expr, ctx: Prec) {
             let _ = write!(out, "({})", items.join(", "));
         }
         Expr::List(l) => format_list(out, l),
+        Expr::Record(r) => format_record(out, r),
         Expr::Block(b) => {
             out.push_str("{\n");
             for stmt in &b.body {
@@ -420,6 +421,7 @@ fn format_call(out: &mut String, call: &CallExpr) {
                 | Expr::Index(_)
                 | Expr::Tuple(_)
                 | Expr::List(_)
+                | Expr::Record(_)
                 | Expr::Block(_)
                 | Expr::Match(_)
         );
@@ -458,6 +460,26 @@ fn format_list(out: &mut String, list: &ListExpr) {
     } else {
         let _ = write!(out, "[{}]", items.join(", "));
     }
+}
+
+fn format_record(out: &mut String, record: &RecordValueExpr) {
+    if record.entries.is_empty() {
+        // A bare `{}` cannot be a record; render as an empty block fallback.
+        out.push_str("{}");
+        return;
+    }
+    let mut parts = Vec::new();
+    for entry in &record.entries {
+        match entry {
+            RecordValueEntry::Field(name, value) => {
+                parts.push(format!("{name}: {}", expr_str_top(value)));
+            }
+            RecordValueEntry::Spread(value) => {
+                parts.push(format!("...{}", expr_str_top(value)));
+            }
+        }
+    }
+    let _ = write!(out, "{{{}}}", parts.join(", "));
 }
 
 fn format_lit(lit: &Lit) -> String {

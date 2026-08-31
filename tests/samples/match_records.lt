@@ -1,5 +1,7 @@
-// Record patterns in match arms (the record braces delimit the pattern).
-let origin = pt => match pt {
+let origin = { x: 0, y: 0 }
+let point = { x: 3, y: 4 }
+
+let describe = pt => match pt {
     { x: 0, y: 0 } => "zero"
     { x: a, y: b } => a + b
     _ => 0
@@ -9,3 +11,16 @@ let get_x = pt => match pt {
     { x: v, y: _ } => v
     _ => 0
 }
+
+let rest_keys = pt => match pt {
+    { x: xv, ...rest } => len rest
+    _ => 0
+}
+
+assert (describe origin == "zero")
+assert (describe point == 7)
+assert (get_x point == 3)
+assert (rest_keys point == 1)
+
+println (describe point)
+println (get_x point)

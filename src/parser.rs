@@ -362,6 +362,7 @@ fn expression(pair: Pair<'_, Rule>) -> Expr {
         Rule::call => call(pair),
         Rule::tuple => tuple(pair),
         Rule::list => list(pair),
+        Rule::record_value => record_value(pair),
         Rule::block => block(pair),
         Rule::member_access => member_access(pair),
         Rule::index_access => index_access(pair),
@@ -575,6 +576,26 @@ fn list(pair: Pair<'_, Rule>) -> Expr {
         }));
     }
     Expr::List(tail)
+}
+
+fn record_value(pair: Pair<'_, Rule>) -> Expr {
+    let mut entries = Vec::new();
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::record_value_field => {
+                let mut it = inner.into_inner();
+                let name = it.next().unwrap().as_str().to_string();
+                let value = expression(it.next().unwrap());
+                entries.push(RecordValueEntry::Field(name, value));
+            }
+            Rule::record_value_spread => {
+                let value = expression(inner.into_inner().next().unwrap());
+                entries.push(RecordValueEntry::Spread(value));
+            }
+            _ => panic!("unexpected record_value child: {:?}", inner.as_rule()),
+        }
+    }
+    Expr::Record(RecordValueExpr { entries })
 }
 
 fn block(pair: Pair<'_, Rule>) -> Expr {

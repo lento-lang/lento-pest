@@ -96,7 +96,8 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
             Value::List(items) => Ok(Value::Int(items.len() as i64)),
             Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
             Value::Str(text) => Ok(Value::Int(text.chars().count() as i64)),
-            value => Err(format!("len expects list, tuple, or string; got {value}")),
+            Value::Record(fields) => Ok(Value::Int(fields.len() as i64)),
+            value => Err(format!("len expects list, tuple, record, or string; got {value}")),
         },
         IntrinsicKind::Assert => match &intrinsic.args[0] {
             Value::Bool(true) => Ok(Value::Unit),
