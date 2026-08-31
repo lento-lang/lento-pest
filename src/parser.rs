@@ -255,10 +255,6 @@ fn atom_pattern(pair: Pair<'_, Rule>) -> Pattern {
             kind: PatKind::Var(pair.as_str().to_string()),
         },
         Rule::list_pattern => list_pattern(pair),
-        Rule::spread_pattern => Pattern {
-            annotation: None,
-            kind: PatKind::Spread(Box::new(pattern(pair.into_inner().next().unwrap()))),
-        },
         Rule::record_pattern => record_pattern(pair),
         Rule::boolean => Pattern {
             annotation: None,
@@ -286,7 +282,7 @@ fn list_pattern(pair: Pair<'_, Rule>) -> Pattern {
             Rule::pattern => items.push(pattern(inner)),
             Rule::spread_pattern => items.push(Pattern {
                 annotation: None,
-                kind: PatKind::Spread(Box::new(pattern(inner.into_inner().next().unwrap()))),
+                kind: PatKind::Spread(inner.into_inner().next().unwrap().as_str().to_string()),
             }),
             _ => {}
         }
@@ -304,7 +300,7 @@ fn record_pattern(pair: Pair<'_, Rule>) -> Pattern {
         match inner.as_rule() {
             Rule::record_field => fields.push(record_field(inner)),
             Rule::spread_pattern => {
-                rest = Some(Box::new(pattern(inner.into_inner().next().unwrap())))
+                rest = Some(inner.into_inner().next().unwrap().as_str().to_string())
             }
             _ => {}
         }

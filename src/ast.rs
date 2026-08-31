@@ -128,13 +128,13 @@ pub enum PatKind {
     Tuple(Vec<Pattern>),
     /// `[a, b]` or `[a, ...rest]` — list destructuring.
     List(Vec<Pattern>),
-    /// `...rest` — spread/rest pattern. Currently valid only inside a list
-    /// pattern, where it captures the remaining suffix as a list.
-    Spread(Box<Pattern>),
+    /// `...rest` — spread/rest binder inside a list pattern, capturing the
+    /// remaining suffix as a list.
+    Spread(String),
     /// `{ x: a, y: b }` or `{ x: a, ...rest }` — record destructuring.
     Record {
         fields: Vec<RecordField>,
-        rest: Option<Box<Pattern>>,
+        rest: Option<String>,
     },
 }
 

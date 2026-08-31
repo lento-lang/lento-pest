@@ -585,11 +585,10 @@ fn collect_pattern_bindings(
                             }
                         }
                         match &items[i].kind {
-                            PatKind::Spread(rest) => collect_pattern_bindings(
-                                rest,
-                                &Value::List(values[i..].to_vec()),
-                                out,
-                            ),
+                            PatKind::Spread(name) => {
+                                out.push((name.clone(), Value::List(values[i..].to_vec())));
+                                Ok(true)
+                            }
                             _ => Ok(false),
                         }
                     }
@@ -606,7 +605,10 @@ fn collect_pattern_bindings(
             }
             _ => Ok(false),
         },
-        PatKind::Spread(inner) => collect_pattern_bindings(inner, value, out),
+        PatKind::Spread(name) => {
+            out.push((name.clone(), value.clone()));
+            Ok(true)
+        }
         PatKind::Record { fields, rest } => match value {
             Value::Record(values) => {
                 let mut remainder = values.clone();
@@ -620,9 +622,7 @@ fn collect_pattern_bindings(
                     remainder.remove(&field.name);
                 }
                 if let Some(rest) = rest {
-                    if !collect_pattern_bindings(rest, &Value::Record(remainder), out)? {
-                        return Ok(false);
-                    }
+                    out.push((rest.clone(), Value::Record(remainder)));
                 }
                 Ok(true)
             }

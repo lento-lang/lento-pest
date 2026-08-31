@@ -206,8 +206,8 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
             let body = format!("[{}]", inner.join(", "));
             render_pat_atom(out, &body, annotation);
         }
-        PatKind::Spread(inner) => {
-            let body = format!("...{}", pat_str(inner));
+        PatKind::Spread(name) => {
+            let body = format!("...{}", name);
             render_pat_atom(out, &body, annotation);
         }
         PatKind::Record { fields, rest } => {
@@ -216,7 +216,7 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
                 .map(|f| format!("{}: {}", f.name, pat_str(&f.pattern)))
                 .collect();
             if let Some(rest) = rest {
-                inner.push(format!("...{}", pat_str(rest)));
+                inner.push(format!("...{}", rest));
             }
             let body = format!("{{{}}}", inner.join(", "));
             render_pat_atom(out, &body, annotation);

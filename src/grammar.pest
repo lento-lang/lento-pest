@@ -107,7 +107,7 @@ atom_pattern    = _{ identifier | "_" | literal_pattern | list_pattern | record_
 literal_pattern = _{ boolean | number | string }
 pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
 list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "]" }
-spread_pattern  = { "..." ~ pattern }
+spread_pattern  = { "..." ~ identifier }
 record_pattern  = { "{" ~ (record_field ~ ("," ~ record_field)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "}" }
 record_field    = { identifier ~ ":" ~ pattern }
 
