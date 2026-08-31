@@ -25,6 +25,11 @@ struct Cli {
     /// For the FILE: print the pretty-printed source and stop.
     #[arg(long, requires = "file", conflicts_with = "print_ast")]
     print_code: bool,
+
+    /// Format FILE in place: parse it and, on success, write the
+    /// pretty-printed source back to the same file.
+    #[arg(long, requires = "file", conflicts_with_all = ["print_ast", "print_code"])]
+    fmt: bool,
 }
 
 fn read_line(prompt: Option<&str>) -> Option<String> {
@@ -80,6 +85,11 @@ fn main() -> Result<(), String> {
             } else if cli.print_code {
                 let ast = load(path)?;
                 print!("{}", format_program(&ast));
+                Ok(())
+            } else if cli.fmt {
+                let ast = load(path)?;
+                std::fs::write(path, format_program(&ast))
+                    .map_err(|e| format!("Error writing {}: {}", path.display(), e))?;
                 Ok(())
             } else {
                 // Default mode: interpret the program.
