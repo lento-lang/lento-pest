@@ -214,16 +214,24 @@ fn pat_alt(pair: Pair<'_, Rule>) -> Pattern {
 /// Build a `Pattern` from a `pattern_elem` pair (a tuple element that may
 /// carry its own annotation `pattern : T`).
 fn pat_elem(pair: Pair<'_, Rule>) -> Pattern {
+    let mut inner_pat: Option<Pattern> = None;
     let mut annotation = None;
-    let mut kind = PatKind::Wildcard;
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::pattern {
-            kind = pattern(inner).kind;
+            inner_pat = Some(pattern(inner));
         } else {
             annotation = Some(type_(inner));
         }
     }
-    Pattern { annotation, kind }
+    let mut pat = inner_pat.unwrap_or(Pattern {
+        annotation: None,
+        kind: PatKind::Wildcard,
+    });
+    // An element-level `pattern : T` annotation overrides the pattern's own.
+    if let Some(ty) = annotation {
+        pat.annotation = Some(ty);
+    }
+    pat
 }
 
 /// Build a `Pattern` from an atom (identifier, `_`, literal, list, record).
@@ -247,16 +255,9 @@ fn atom_pattern(pair: Pair<'_, Rule>) -> Pattern {
             annotation: None,
             kind: PatKind::Lit(Lit::Bool(pair.as_str() == "true")),
         },
-        Rule::number => match number_lit(pair.as_str()) {
-            Lit::Int(i) => Pattern {
-                annotation: None,
-                kind: PatKind::Lit(Lit::Int(i)),
-            },
-            Lit::Float(f) => Pattern {
-                annotation: None,
-                kind: PatKind::Lit(Lit::Float(f)),
-            },
-            _ => Pattern { annotation: None, kind: PatKind::Wildcard },
+        Rule::integer | Rule::float => Pattern {
+            annotation: None,
+            kind: PatKind::Lit(number_lit(pair.as_str())),
         },
         Rule::string => {
             let s = &pair.as_str()[1..pair.as_str().len() - 1];
