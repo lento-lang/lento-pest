@@ -10,10 +10,7 @@ use lento::pprint::format_program;
 #[derive(Parser, Debug)]
 #[command(name = "lento", version, about)]
 struct Cli {
-    /// Parse a Lento source file. Omitted, runs the REPL.
-    ///
-    /// A default positional: `lento foo.lt` parses the file, while `lento`
-    /// with no arguments drops into the interactive REPL.
+    /// A Lento source file. Omitted, runs the REPL.
     #[arg(value_name = "FILE")]
     file: Option<PathBuf>,
 
@@ -21,18 +18,13 @@ struct Cli {
     #[arg(short, long, conflicts_with = "file")]
     interactive: bool,
 
-    /// Pretty-print the parsed AST back to Lento source instead of the
-    /// internal AST dump.
-    #[arg(short, long)]
-    format: bool,
-}
+    /// For the FILE: print the parsed AST and stop.
+    #[arg(long, requires = "file", conflicts_with = "print_code")]
+    print_ast: bool,
 
-fn display(ast: &lento::ast::Program, format: bool) {
-    if format {
-        print!("{}", format_program(ast));
-    } else {
-        println!("{ast:#?}");
-    }
+    /// For the FILE: print the pretty-printed source and stop.
+    #[arg(long, requires = "file", conflicts_with = "print_ast")]
+    print_code: bool,
 }
 
 fn read_line(prompt: Option<&str>) -> Option<String> {
@@ -48,40 +40,52 @@ fn read_line(prompt: Option<&str>) -> Option<String> {
     }
 }
 
-fn run_repl(format: bool) {
+fn run_repl() {
     while let Some(input) = read_line(Some(">>> ")) {
         match parse_program(&input) {
-            Ok(ast) => display(&ast, format),
+            Ok(ast) => println!("{ast:#?}"),
             Err(e) => println!("Error: {}", e),
         }
     }
 }
 
-fn parse_file(path: &std::path::Path, format: bool) -> Result<(), String> {
+/// Read and parse a FILE, yielding the AST.
+fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| format!("Error reading {}: {}", path.display(), e))?;
-    let ast = parse_program(&src)
-        .map_err(|e| format!("Parse error in {}:\n{}", path.display(), e))?;
-    display(&ast, format);
-    Ok(())
+    parse_program(&src).map_err(|e| format!("Parse error in {}:\n{}", path.display(), e))
 }
 
-fn main() {
+/// Evaluate a parsed program. Not yet implemented.
+fn interpret(_ast: &lento::ast::Program) -> Result<(), String> {
+    todo!("interpreter")
+}
+
+fn main() -> Result<(), String> {
     let cli = Cli::parse();
-    let result = if cli.interactive {
-        run_repl(cli.format);
-        Ok(())
-    } else {
-        match &cli.file {
-            Some(path) => parse_file(path, cli.format),
-            None => {
-                run_repl(cli.format);
+    if cli.interactive {
+        run_repl();
+        return Ok(());
+    }
+    match &cli.file {
+        Some(path) => {
+            if cli.print_ast {
+                let ast = load(path)?;
+                println!("{ast:#?}");
                 Ok(())
+            } else if cli.print_code {
+                let ast = load(path)?;
+                print!("{}", format_program(&ast));
+                Ok(())
+            } else {
+                // Default mode: interpret the program.
+                let ast = load(path)?;
+                interpret(&ast)
             }
         }
-    };
-    if let Err(e) = result {
-        eprintln!("{e}");
-        std::process::exit(1);
+        None => {
+            run_repl();
+            Ok(())
+        }
     }
 }
