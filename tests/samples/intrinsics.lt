@@ -8,5 +8,9 @@ let pair_len = len pair
 let s_len = len s
 
 assert true
-print xs_len
+print "xs len = "
+println xs_len
+print "pair len = "
+println pair_len
+print "s len = "
 println s_len

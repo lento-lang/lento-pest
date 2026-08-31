@@ -68,7 +68,9 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
     let desugared = lento::ast::desugar_program(ast);
     let value = lento::eval::eval_program(&desugared)?;
-    if matches!(desugared.statements.last(), Some(lento::ast::Stmt::Expr(_))) {
+    if matches!(desugared.statements.last(), Some(lento::ast::Stmt::Expr(_)))
+        && !matches!(value, lento::eval::Value::Unit)
+    {
         println!("{value}");
     }
     Ok(())
