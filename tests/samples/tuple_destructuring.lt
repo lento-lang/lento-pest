@@ -1,3 +1,11 @@
 fn dot (a : Int, b : Int) = a + b
 
 fn swap (a, b) = b
+
+let pt = (2, 3)
+
+assert (dot pt == 5)
+assert (swap pt == 3)
+println (dot pt)
+print "swap of (2, 3) = "
+println (swap pt)

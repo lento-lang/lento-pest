@@ -16,3 +16,21 @@ let classify = n => match n {
 }
 
 let hello_len = len "hello"
+
+assert (flag true == 1)
+assert (flag false == 0)
+assert (name "hello" == 1)
+assert (classify 42 == "answer")
+assert (classify 7 == "other")
+assert (hello_len == 5)
+
+println (flag true)
+println (flag false)
+print "name hello = "
+println (name "hello")
+print "classify 42 = "
+println (classify 42)
+print "classify 7 = "
+println (classify 7)
+print "length of hello = "
+println hello_len

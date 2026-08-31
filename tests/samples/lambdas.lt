@@ -1,2 +1,9 @@
 let increment = x => x + 1
 let double = (x: int) => x * 2
+
+assert (increment 5 == 6)
+assert (double 21 == 42)
+println (increment 5)
+println (double 21)
+print "double (increment 10) = "
+println (double (increment 10))

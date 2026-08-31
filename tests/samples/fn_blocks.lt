@@ -4,4 +4,5 @@ fn add a b {
 }
 
 let result = add 2 3
+assert (result == 5)
 println result

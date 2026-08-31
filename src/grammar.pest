@@ -126,7 +126,7 @@ lambda_pattern = { pattern }
 
 binop_expr     = { applicative ~ (infix_op ~ applicative)* }
 match_scrutinee = { match_applicative ~ (infix_op ~ match_applicative)* }
-infix_op       = @{ ("==" | "!=" | "<=" | ">=" | "&&" | "||" | "::" | "+" | "-" | "*" | "/" | "%" | "<" | ">") }
+infix_op       = @{ ("==" | "!=" | "<=" | ">=" | "&&" | "||" | "+" | "-" | "*" | "/" | "%" | "<" | ">") }
 
 applicative    = _{ postfix+ }
 match_applicative = _{ match_postfix+ }

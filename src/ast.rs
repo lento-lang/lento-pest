@@ -259,7 +259,6 @@ pub enum BinaryOp {
     Ge,
     And,
     Or,
-    Cons,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -268,14 +267,15 @@ pub struct TupleExpr {
 }
 
 /// A list is represented in the AST as nested cons cells, mirroring the
-/// `::`/`[a]` structure. An empty list is `None`.
+/// `[a]` syntax. An empty list is `None`. (Lists are extended at runtime with
+/// the `concat` intrinsic; there is no cons operator.)
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListExpr {
     Empty,
     Cells(Box<ListCons>),
 }
 
-/// `head :: tail`
+/// `head :: tail` — one link of the list-literal spine.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ListCons {
     pub head: Box<Expr>,

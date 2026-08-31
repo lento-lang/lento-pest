@@ -3,3 +3,7 @@ spec len:
     [a] -> usize
 
 fn len xs = xs.len
+
+assert (len [5, 6, 7] == 3)
+print "len [5, 6, 7] = "
+println (len [5, 6, 7])

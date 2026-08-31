@@ -12,3 +12,19 @@ let first = xs => match xs {
 let pair_with = v => match (v, v) {
     (x, y) => x + y
 }
+
+let origin = (0, 0)
+let pt = (3, 4)
+let triple = (10, 20, 30)
+
+assert (sum origin == 0)
+assert (sum pt == 7)
+assert (first triple == 10)
+assert (pair_with 21 == 42)
+
+println (sum origin)
+println (sum pt)
+print "first of (10, 20, 30) = "
+println (first triple)
+print "pair_with 21 = "
+println (pair_with 21)

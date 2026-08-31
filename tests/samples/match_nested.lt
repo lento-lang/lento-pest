@@ -15,3 +15,24 @@ let describe = pair => match pair {
     (0, 0) => ("origin", 0)
     (a, b) => ("point", a + b)
 }
+
+let inc = x => x + 1
+let apply_args = (inc, 41)
+let origin = (0, 0)
+let point = (3, 4)
+
+assert (classify 0 == "zero")
+assert (classify 5 == "small")
+assert (classify 30 == "big")
+assert (apply apply_args == 42)
+assert (describe point == ("point", 7))
+
+println (classify 0)
+println (classify 5)
+println (classify 30)
+print "apply inc 41 = "
+println (apply apply_args)
+print "describe origin = "
+println (describe origin)
+print "describe point = "
+println (describe point)

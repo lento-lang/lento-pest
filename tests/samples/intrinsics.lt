@@ -7,7 +7,11 @@ let xs_len = len xs
 let pair_len = len pair
 let s_len = len s
 
+assert (xs_len == 3)
+assert (pair_len == 2)
+assert (s_len == 3)
 assert true
+
 print "xs len = "
 println xs_len
 print "pair len = "

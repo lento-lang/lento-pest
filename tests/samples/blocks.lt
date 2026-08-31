@@ -5,4 +5,5 @@ let result = {
     base + bump
 }
 
+assert (result == 3)
 println result

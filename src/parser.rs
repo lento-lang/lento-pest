@@ -495,7 +495,6 @@ fn infix_op(s: &str) -> BinaryOp {
         ">=" => BinaryOp::Ge,
         "&&" => BinaryOp::And,
         "||" => BinaryOp::Or,
-        "::" => BinaryOp::Cons,
         _ => BinaryOp::Add,
     }
 }

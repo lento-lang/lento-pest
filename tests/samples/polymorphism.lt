@@ -3,3 +3,13 @@ spec map:
     (a -> b) -> [a] -> [b]
 
 fn map f [] = []
+fn map f [x, ...xs] = {
+    let one = [f x]
+    let rest = map f xs
+    concat one rest
+}
+
+assert (map (x => x * 2) [1, 2, 3] == [2, 4, 6])
+println (map (x => x * 2) [1, 2, 3])
+print "map over strings length = "
+println (len (map (s => len s) ["a", "bb", "ccc"]))

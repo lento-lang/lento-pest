@@ -5,3 +5,9 @@ spec divide:
         r * y <= x
 
 fn divide x y = x / y
+
+assert (divide 20 4 == 5)
+print "divide 20 4 = "
+println (divide 20 4)
+print "remainder check: r * y <= x = "
+println (divide 20 4 * 4 <= 20)

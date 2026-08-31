@@ -20,3 +20,23 @@ fn zip [x, ...xs] [y, ...ys] = {
     let rest = zip xs ys
     concat pair rest
 }
+
+let five = 5
+let seven_neg = 0 - 7
+
+assert (factorial 5 == 120)
+assert (factorial 6 == 720)
+assert (sign five > 0)
+assert (sign seven_neg < 0)
+assert (len [10, 20, 30] == 3)
+
+println (factorial 5)
+println (factorial 6)
+print "sign of -7 = "
+println (sign seven_neg)
+print "factorial 5 > 100 = "
+println (factorial 5 > 100)
+print "len [10, 20, 30] = "
+println (len [10, 20, 30])
+print "zip [1, 2] [3, 4] = "
+println (zip [1, 2] [3, 4])

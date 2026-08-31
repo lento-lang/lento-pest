@@ -1,5 +1,6 @@
 let x = 42
 let mut counter = 0
 counter = counter + 1
-assert true
+assert (counter == 1)
+assert (x == 42)
 println counter

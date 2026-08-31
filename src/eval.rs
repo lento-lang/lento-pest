@@ -354,17 +354,6 @@ fn eval_binary(op: &BinaryOp, lhs: &Expr, rhs: &Expr, env: &mut Env) -> Result<V
             },
             _ => Err("|| expects boolean operands".into()),
         },
-        BinaryOp::Cons => {
-            let head = eval_expr(lhs, env)?;
-            let tail = eval_expr(rhs, env)?;
-            match tail {
-                Value::List(mut items) => {
-                    items.insert(0, head);
-                    Ok(Value::List(items))
-                }
-                _ => Err(":: expects a list on the right-hand side".into()),
-            }
-        }
         _ => {
             let left = eval_expr(lhs, env)?;
             let right = eval_expr(rhs, env)?;
@@ -412,7 +401,7 @@ fn eval_binary_values(op: &BinaryOp, left: Value, right: Value) -> Result<Value,
         BinaryOp::Gt => cmp_values(left, right, |o| o > 0),
         BinaryOp::Le => cmp_values(left, right, |o| o <= 0),
         BinaryOp::Ge => cmp_values(left, right, |o| o >= 0),
-        BinaryOp::And | BinaryOp::Or | BinaryOp::Cons => unreachable!(),
+        BinaryOp::And | BinaryOp::Or => unreachable!(),
     }
 }
 

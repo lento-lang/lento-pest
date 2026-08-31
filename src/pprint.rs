@@ -254,7 +254,6 @@ enum Prec {
     Or,
     And,
     Cmp,
-    Cons,
     Add,
     Mul,
     Atom, // atomic operand: never needs parens
@@ -270,7 +269,6 @@ fn binary_prec(op: &BinaryOp) -> Prec {
         | BinaryOp::Gt
         | BinaryOp::Le
         | BinaryOp::Ge => Prec::Cmp,
-        BinaryOp::Cons => Prec::Cons,
         BinaryOp::Add | BinaryOp::Sub => Prec::Add,
         BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => Prec::Mul,
     }
@@ -291,7 +289,6 @@ fn op_symbol(op: &BinaryOp) -> &'static str {
         BinaryOp::Ge => ">=",
         BinaryOp::And => "&&",
         BinaryOp::Or => "||",
-        BinaryOp::Cons => "::",
     }
 }
 
@@ -441,8 +438,7 @@ fn next_tighter(p: Prec) -> Prec {
         Prec::Top => Prec::Top,
         Prec::Or => Prec::And,
         Prec::And => Prec::Cmp,
-        Prec::Cmp => Prec::Cons,
-        Prec::Cons => Prec::Add,
+        Prec::Cmp => Prec::Add,
         Prec::Add => Prec::Mul,
         Prec::Mul => Prec::Atom,
         Prec::Atom => Prec::Atom,
