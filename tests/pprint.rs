@@ -60,6 +60,27 @@ let f = if_x != y
 }
 
 #[test]
+fn multiline_comma_where_and_all_parse() {
+    // Conditions/list vars are comma-separated but a comma may trail at
+    // end-of-line with the next item on the following line. These must parse
+    // and round-trip (the printer normalizes them to one line).
+    let src = "spec divide:
+    (x: int) -> (y: int) -> (r: int)
+    where
+        y != 0,
+        r * y <= x
+
+spec map:
+    all a,
+        b.
+    (a -> b) -> [a] -> [b]
+
+fn divide x y = x / y
+";
+    assert!(roundtrip_ok(src));
+}
+
+#[test]
 fn formatted_value_is_valid_lento() {
     let src = "spec map:
     all a, b.

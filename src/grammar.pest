@@ -65,15 +65,17 @@ function_pattern  = { pattern }
 
 spec_type  = _{ NEWLINE* ~ (quantifier* ~ arrow_type ~ where_clause?) }
 
-quantifier   = { "all" ~ type_var ~ ("," ~ type_var)* ~ constraints? ~ "." ~ NEWLINE* }
+quantifier   = { "all" ~ type_var ~ ("," ~ NEWLINE* ~ type_var)* ~ constraints? ~ "." ~ NEWLINE* }
 type_var     = @{ ASCII_ALPHA_LOWER ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
 constraints  = { "::" ~ constraint ~ ("," ~ constraint)* }
 constraint   = { identifier ~ type_atom* }
 
 // Conditions are comma-separated and terminated by the newline: a `where`
-// clause never reaches across a line break, so it cannot absorb a following
-// declaration (e.g. `fn divide ...` on the next line).
-where_clause  = { NEWLINE* ~ "where" ~ NEWLINE* ~ expression ~ ("," ~ expression)* }
+// clause never reaches across a line break (a newline without a preceding
+// comma ends the clause), so it cannot absorb a following declaration
+// (e.g. `fn divide ...` on the next line). A comma may sit at end-of-line
+// with the next condition starting on the following line.
+where_clause  = { NEWLINE* ~ "where" ~ NEWLINE* ~ expression ~ ("," ~ NEWLINE* ~ expression)* }
 
 // Types are right-associative function arrows.
 ltype        = _{ arrow_type }
