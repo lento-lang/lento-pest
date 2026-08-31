@@ -1,0 +1,3 @@
+let x = 42
+let mut counter = 0
+counter = counter + 1

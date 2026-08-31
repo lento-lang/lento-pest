@@ -1,0 +1,4 @@
+spec factorial: int -> int
+
+fn factorial 0 = 1
+fn factorial n = n * factorial(n - 1)

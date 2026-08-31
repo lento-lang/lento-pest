@@ -1,0 +1,2 @@
+let increment = x => x + 1
+let double = (x: int) => x * 2

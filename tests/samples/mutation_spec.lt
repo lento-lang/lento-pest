@@ -1,0 +1,5 @@
+spec increment:
+    (x: mut int)
+    -> ()
+
+fn increment x = x = x + 1

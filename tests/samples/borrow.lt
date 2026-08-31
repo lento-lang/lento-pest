@@ -1,0 +1,5 @@
+spec len:
+    all a.
+    [a] -> usize
+
+fn len xs = xs.len

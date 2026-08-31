@@ -1,0 +1,3 @@
+fn dot (a : Int, b : Int) = a + b
+
+fn swap (a, b) = b
