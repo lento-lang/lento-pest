@@ -5,6 +5,13 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[lib]
+name = "lento"
+path = "src/lib.rs"
+
 [dependencies]
-lento = { path = "lento" }
+clap = { version = "4", features = ["derive"] }
 colorful = "0.2.2"
+pest = "2.5.2"
+pest_derive = "2.4.0"
+pest_ascii_tree = "0.1.0"
