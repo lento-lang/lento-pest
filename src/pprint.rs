@@ -67,6 +67,24 @@ fn format_decl(out: &mut String, decl: &Decl) {
             format_expr(out, &l.value, Prec::Top);
             out.push('\n');
         }
+        // `fn` prints in its source form, one clause per declaration. The
+        // evaluator desugars it (see `desugar_program`), but the printer is
+        // faithful to what the user wrote so files round-trip.
+        Decl::Fn(f) => {
+            let _ = write!(out, "fn {} ", f.name);
+            for p in &f.params {
+                format_pattern(out, p);
+                out.push(' ');
+            }
+            if let Some(ty) = &f.ret {
+                let _ = write!(out, "-> ");
+                format_type(out, ty);
+                out.push(' ');
+            }
+            let _ = write!(out, "= ");
+            format_expr(out, &f.body, Prec::Top);
+            out.push('\n');
+        }
     }
 }
 
@@ -190,12 +208,13 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
             let body = format!("{{{}}}", inner.join(", "));
             render_pat_atom(out, &body, annotation);
         }
-        // `head :: tail`, right-associative: the head is printed as its own
-        // atom (tuples/lists self-delimit), the tail recurses.
+        // `head :: tail`, right-associative. Parenthesized so a cons is
+        // self-delimiting: bare `x :: xs y :: ys` would otherwise depend on
+        // parser backtracking to split function parameters.
         PatKind::Cons { head, tail } => {
             let head = pat_str(head);
             let tail = pat_str(tail);
-            render_pat_atom(out, &format!("{head} :: {tail}"), annotation);
+            render_pat_atom(out, &format!("({head} :: {tail})"), annotation);
         }
     }
 }

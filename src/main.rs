@@ -57,7 +57,11 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
 }
 
 /// Evaluate a parsed program. Not yet implemented.
-fn interpret(_ast: &lento::ast::Program) -> Result<(), String> {
+///
+/// `fn` clauses are desugared into `let` bindings first, so the interpreter
+/// never has to handle an `FnDecl`.
+fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
+    let _desugared = lento::ast::desugar_program(ast);
     todo!("interpreter")
 }
 

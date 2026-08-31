@@ -28,6 +28,10 @@ pub enum Decl {
     Type(TypeDecl),
     /// `let [mut] pattern [: type] = expression` — binds an expression.
     Let(LetDecl),
+    /// `fn name function_pattern* [-> type] = expression` — one clause of a
+    /// function definition. Kept as its own node so `fn` source round-trips
+    /// through the pretty printer (see the evaluator note below).
+    Fn(FnDecl),
 }
 
 /// `spec name : <spec_type>`
@@ -51,6 +55,18 @@ pub struct LetDecl {
     pub pattern: Pattern,
     pub annotation: Option<Ty>,
     pub value: Expr,
+}
+
+/// `fn name function_pattern* [-> type] = expression` — a single clause of a
+/// function definition. `fn` is sugar over `let` + lambda + (for grouped
+/// clauses) pattern matching: the evaluator desugars before interpreting, and
+/// the pretty printer keeps the `fn` source form intact.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FnDecl {
+    pub name: String,
+    pub params: Vec<Pattern>,
+    pub ret: Option<Ty>,
+    pub body: Expr,
 }
 
 /// A spec type: optional quantifiers, a function type, and an optional
@@ -284,42 +300,171 @@ pub struct MatchArm {
     pub body: Box<Expr>,
 }
 
-/// Desugar a function clause `fn f p1 p2 ... pn = body` into a `let`
-/// binding whose value is a curried chain of lambdas:
+impl FnDecl {
+    /// Desugar one function clause `fn f p1 p2 ... pn = body` into a `let`
+    /// binding whose value is a curried chain of lambdas:
+    ///
+    /// `let f = p1 => (p2 => (... (pn => body)))`.
+    ///
+    /// Each parameter is a `Pattern` and becomes one lambda parameter; a
+    /// destructuring parameter (tuple/list/record) unpacks its argument.
+    pub fn desugar(self) -> LetDecl {
+        let param_tys: Vec<Option<Ty>> = self.params.iter().map(param_type).collect();
+        let mut value = self.body;
+        for p in self.params.into_iter().rev() {
+            value = Expr::Lambda(LambdaExpr {
+                params: vec![p],
+                body: Box::new(value),
+            });
+        }
+        let annotation = match self.ret {
+            Some(ret) if param_tys.iter().all(Option::is_some) => {
+                let mut t = ret;
+                for pt in param_tys.into_iter().rev().flatten() {
+                    t = Ty::Arrow {
+                        from: Box::new(pt),
+                        to: Box::new(t),
+                    };
+                }
+                Some(t)
+            }
+            _ => None,
+        };
+        LetDecl {
+            mutable: false,
+            pattern: Pattern {
+                annotation: None,
+                kind: PatKind::Var(self.name.clone()),
+            },
+            annotation,
+            value,
+        }
+    }
+}
+
+/// Desugar every `fn` clause in a program into the `let` bindings the
+/// evaluator expects, so that interpreting never sees an `FnDecl`.
 ///
-/// `let f = p1 => (p2 => (... (pn => body)))`.
+/// Consecutive `fn` clauses of the same name and arity are grouped into a
+/// single `let f = v1 => v2 => ... => match (v1, ..., vk) { ... }` (a lone
+/// clause desugars to plain curried lambdas). Statements that are not `fn`
+/// pass through unchanged.
+pub fn desugar_program(program: &Program) -> Program {
+    let stmts = &program.statements;
+    let mut out = Vec::with_capacity(stmts.len());
+    let mut i = 0;
+    while i < stmts.len() {
+        // Only top-level `fn` clauses are considered for grouping.
+        match &stmts[i] {
+            Stmt::Decl(Decl::Fn(f)) => {
+                let name = f.name.clone();
+                let arity = f.params.len();
+                let mut clauses = vec![(f.params.clone(), f.ret.clone(), f.body.clone())];
+                let mut j = i + 1;
+                while j < stmts.len() {
+                    if let Stmt::Decl(Decl::Fn(g)) = &stmts[j] {
+                        if g.name == name && g.params.len() == arity {
+                            clauses.push((g.params.clone(), g.ret.clone(), g.body.clone()));
+                            j += 1;
+                            continue;
+                        }
+                    }
+                    break;
+                }
+                let letdecl = if clauses.len() == 1 {
+                    let (params, ret, body) = clauses.remove(0);
+                    FnDecl {
+                        name,
+                        params,
+                        ret,
+                        body,
+                    }
+                    .desugar()
+                } else {
+                    grouped_fn(name, clauses)
+                };
+                out.push(Stmt::Decl(Decl::Let(letdecl)));
+                i = j;
+            }
+            _ => {
+                out.push(stmts[i].clone());
+                i += 1;
+            }
+        }
+    }
+    Program { statements: out }
+}
+
+/// Group multiple `fn` clauses of the same name and arity into a single
+/// `let f = v1 => v2 => ... => match (v1, ..., vk) { pat1 => body1, ... }`.
 ///
-/// Each parameter is a `Pattern` and becomes one lambda parameter; a
-/// destructuring parameter (tuple/list/record) unpacks its argument.
-pub fn desugar_fn(name: String, params: Vec<Pattern>, ret: Option<Ty>, body: Expr) -> LetDecl {
-    let param_tys: Vec<Option<Ty>> = params.iter().map(param_type).collect();
-    let mut value = body;
-    for p in params.into_iter().rev() {
+/// Each clause becomes one arm of the match; a k-parameter clause (k >= 2)
+/// matches on a tuple of its parameters, and a single parameter is matched
+/// directly (following the design doc's `n => match n { ... }`).
+fn grouped_fn(name: String, clauses: Vec<(Vec<Pattern>, Option<Ty>, Expr)>) -> LetDecl {
+    let k = clauses[0].0.len();
+    // Reuse the first clause's plain-Var parameter names when available; fall
+    // back to generated names otherwise.
+    let bind: Vec<String> = (0..k)
+        .map(|i| match clauses[0].0[i].kind {
+            PatKind::Var(ref n) => n.clone(),
+            _ => format!("__l{name}{i}"),
+        })
+        .collect();
+
+    let scrutinee = if k == 1 {
+        Expr::Var(VarExpr {
+            name: bind[0].clone(),
+        })
+    } else {
+        Expr::Tuple(TupleExpr {
+            items: bind
+                .iter()
+                .map(|f| Expr::Var(VarExpr { name: f.clone() }))
+                .collect(),
+        })
+    };
+
+    let arms = clauses
+        .into_iter()
+        .map(|(params, _, body)| {
+            let pattern = if params.len() == 1 {
+                params.into_iter().next().unwrap()
+            } else {
+                Pattern {
+                    annotation: None,
+                    kind: PatKind::Tuple(params),
+                }
+            };
+            MatchArm {
+                pattern,
+                guard: None,
+                body: Box::new(body),
+            }
+        })
+        .collect();
+
+    let mut value = Expr::Match(MatchExpr {
+        scrutinee: Box::new(scrutinee),
+        arms,
+    });
+    for f in bind.iter().rev() {
         value = Expr::Lambda(LambdaExpr {
-            params: vec![p],
+            params: vec![Pattern {
+                annotation: None,
+                kind: PatKind::Var(f.clone()),
+            }],
             body: Box::new(value),
         });
     }
-    let annotation = match ret {
-        Some(ret) if param_tys.iter().all(Option::is_some) => {
-            let mut t = ret;
-            for pt in param_tys.into_iter().rev().flatten() {
-                t = Ty::Arrow {
-                    from: Box::new(pt),
-                    to: Box::new(t),
-                };
-            }
-            Some(t)
-        }
-        _ => None,
-    };
+
     LetDecl {
         mutable: false,
         pattern: Pattern {
             annotation: None,
             kind: PatKind::Var(name.clone()),
         },
-        annotation,
+        annotation: None,
         value,
     }
 }
