@@ -1,0 +1,8 @@
+// Multi-statement block expressions with an inner declaration and final value.
+let result = {
+    let base = 1
+    let bump = 2
+    base + bump
+}
+
+println result

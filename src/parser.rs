@@ -340,6 +340,7 @@ fn expression(pair: Pair<'_, Rule>) -> Expr {
         Rule::assignment => assignment(pair),
         Rule::lambda_expr => lambda_expr(pair),
         Rule::binop_expr => binop_expr(pair),
+        Rule::match_scrutinee => binop_expr(pair),
         Rule::boolean => Expr::Lit(LitExpr {
             value: Lit::Bool(pair.as_str() == "true"),
         }),
@@ -362,6 +363,7 @@ fn expression(pair: Pair<'_, Rule>) -> Expr {
             name: pair.as_str().to_string(),
         }),
         Rule::ref_expr => ref_expr(pair),
+        Rule::ref_match_expr => ref_expr(pair),
         Rule::match_expr => match_expr(pair),
         Rule::call => call(pair),
         Rule::tuple => tuple(pair),

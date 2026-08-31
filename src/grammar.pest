@@ -37,7 +37,7 @@ string               = { "\"" ~ string_inner ~ "\"" }
 // --------------------------------------------------------------------------
 
 program        = { SOI ~ (statement ~ statement_sep)* ~ EOI }
-body           = { (statement ~ statement_sep)? }
+body           = { NEWLINE* ~ ((statement ~ statement_sep)* ~ statement?)? ~ NEWLINE* }
 block          = { "{" ~ body ~ "}" }
 
 statement      = _{ declaration | expression }
@@ -125,22 +125,27 @@ lambda_expr    = { lambda_pattern+ ~ "=>" ~ expression }
 lambda_pattern = { pattern }
 
 binop_expr     = { applicative ~ (infix_op ~ applicative)* }
+match_scrutinee = { match_applicative ~ (infix_op ~ match_applicative)* }
 infix_op       = @{ ("==" | "!=" | "<=" | ">=" | "&&" | "||" | "::" | "+" | "-" | "*" | "/" | "%" | "<" | ">") }
 
 applicative    = _{ postfix+ }
+match_applicative = _{ match_postfix+ }
 postfix        = _{ primary ~ postfix_op* }
+match_postfix  = _{ match_primary ~ postfix_op* }
 postfix_op     = _{ member_access | index_access }
 member_access  = { "." ~ identifier }
 index_access   = { "[" ~ expression ~ "]" }
 
 primary        = _{ literal | tuple | list | block | ref_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
+match_primary  = _{ literal | tuple | list | ref_match_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
 literal        = _{ boolean | number | string }
 ref_expr       = { "ref" ~ expression }
+ref_match_expr = { "ref" ~ match_scrutinee }
 
 // `match scrutinee { pattern [if guard] => body, ... }` — arms may be
 // separated by commas, semicolons, or newlines; `=>` maps a pattern to an
 // expression exactly as lambdas do (`->` stays reserved for type-level use).
-match_expr     = { "match" ~ NEWLINE* ~ expression ~ NEWLINE* ~ "{" ~ NEWLINE* ~ match_arm ~ (match_arm_sep ~ match_arm)* ~ NEWLINE* ~ "}" }
+match_expr     = { "match" ~ NEWLINE* ~ match_scrutinee ~ NEWLINE* ~ "{" ~ NEWLINE* ~ match_arm ~ (match_arm_sep ~ match_arm)* ~ NEWLINE* ~ "}" }
 match_arm      = { pattern ~ guard? ~ "=>" ~ expression }
 guard          = { "if" ~ expression }
 match_arm_sep  = _{ (";" ~ NEWLINE*) | NEWLINE+ | "," }

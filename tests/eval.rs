@@ -36,6 +36,12 @@ fn block_scope_clones_env_but_shares_cells() {
 }
 
 #[test]
+fn multi_statement_block_returns_final_expression() {
+    let value = eval("let result = {\n    let base = 1\n    let bump = 2\n    base + bump\n}\nresult\n").unwrap();
+    assert_int(value, 3);
+}
+
+#[test]
 fn closures_capture_shared_cells() {
     let value = eval("let mut x = 1\nlet bump = _ => x = x + 1\nbump 0\nx\n").unwrap();
     assert_int(value, 2);

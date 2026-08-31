@@ -17,6 +17,7 @@ fn roundtrip_ok(src: &str) -> bool {
 }
 
 const SAMPLES: &[&str] = &[
+    "blocks",
     "borrow",
     "functions",
     "intrinsics",
