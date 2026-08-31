@@ -3,5 +3,6 @@ extern crate pest;
 extern crate pest_derive;
 
 pub mod ast;
+pub mod eval;
 pub mod parser;
 pub mod pprint;

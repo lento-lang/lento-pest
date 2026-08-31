@@ -585,8 +585,19 @@ fn list(pair: Pair<'_, Rule>) -> Expr {
 fn block(pair: Pair<'_, Rule>) -> Expr {
     let mut body = Vec::new();
     for inner in pair.into_inner() {
-        if let Some(s) = stmt(inner) {
-            body.push(s);
+        match inner.as_rule() {
+            Rule::body => {
+                for stmt_pair in inner.into_inner() {
+                    if let Some(s) = stmt(stmt_pair) {
+                        body.push(s);
+                    }
+                }
+            }
+            _ => {
+                if let Some(s) = stmt(inner) {
+                    body.push(s);
+                }
+            }
         }
     }
     Expr::Block(BlockExpr { body })
