@@ -1,8 +1,8 @@
-// Pattern matching: cons destructuring, guards, list patterns, and
+// Pattern matching: list spread destructuring, guards, list patterns, and
 // multi-clause `fn` grouping (which desugars into a lambda + `match`).
 let len = xs => match xs {
     [] => 0
-    x :: xs => 1 + len xs
+    [x, ...xs] => 1 + len xs
 }
 
 let sign = n => match n {
@@ -15,4 +15,8 @@ fn factorial 0 = 1
 fn factorial n = n * factorial (n - 1)
 
 fn zip [] [] = []
-fn zip (x :: xs) (y :: ys) = (x, y) :: zip xs ys
+fn zip [x, ...xs] [y, ...ys] = {
+    let pair = [(x, y)]
+    let rest = zip xs ys
+    concat pair rest
+}

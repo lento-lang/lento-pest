@@ -126,12 +126,13 @@ pub enum PatKind {
     Lit(Lit),
     /// `(a, b)` — tuple destructuring.
     Tuple(Vec<Pattern>),
-    /// `[a, b]` — list destructuring.
+    /// `[a, b]` or `[a, ...rest]` — list destructuring.
     List(Vec<Pattern>),
+    /// `...rest` — spread/rest pattern. Currently valid only inside a list
+    /// pattern, where it captures the remaining suffix as a list.
+    Spread(Box<Pattern>),
     /// `{ x: a, y: b }` — record destructuring.
     Record(Vec<RecordField>),
-    /// `head :: tail` — cons destructuring (right-associative).
-    Cons { head: Box<Pattern>, tail: Box<Pattern> },
 }
 
 /// One field of a record pattern `{ x: pat }`.
@@ -486,12 +487,12 @@ pub fn param_type(p: &Pattern) -> Option<Ty> {
             }
             Some(Ty::Tuple(tys))
         }
-        // Literals, wildcards, lists, records and cons do not carry
+        // Literals, wildcards, lists, spread and records do not carry
         // recoverable element types without more type inference.
         PatKind::Lit(_)
         | PatKind::Wildcard
         | PatKind::List(_)
-        | PatKind::Record(_)
-        | PatKind::Cons { .. } => None,
+        | PatKind::Spread(_)
+        | PatKind::Record(_) => None,
     }
 }

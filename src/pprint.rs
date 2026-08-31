@@ -202,6 +202,10 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
             let body = format!("[{}]", inner.join(", "));
             render_pat_atom(out, &body, annotation);
         }
+        PatKind::Spread(inner) => {
+            let body = format!("...{}", pat_str(inner));
+            render_pat_atom(out, &body, annotation);
+        }
         PatKind::Record(fields) => {
             let inner: Vec<String> = fields
                 .iter()
@@ -209,14 +213,6 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
                 .collect();
             let body = format!("{{{}}}", inner.join(", "));
             render_pat_atom(out, &body, annotation);
-        }
-        // `head :: tail`, right-associative. Parenthesized so a cons is
-        // self-delimiting: bare `x :: xs y :: ys` would otherwise depend on
-        // parser backtracking to split function parameters.
-        PatKind::Cons { head, tail } => {
-            let head = pat_str(head);
-            let tail = pat_str(tail);
-            render_pat_atom(out, &format!("({head} :: {tail})"), annotation);
         }
     }
 }

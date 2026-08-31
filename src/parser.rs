@@ -183,43 +183,9 @@ fn fn_clause_parts(pair: Pair<'_, Rule>) -> (String, Vec<Pattern>, Option<Ty>, E
 // Patterns
 // --------------------------------------------------------------------------
 
-/// Build a `Pattern` from a `pattern` pair (`pattern = { cons_pattern | pattern_alt }`).
+/// Build a `Pattern` from a `pattern` pair.
 fn pattern(pair: Pair<'_, Rule>) -> Pattern {
-    let kid = pair.into_inner().next().unwrap();
-    match kid.as_rule() {
-        Rule::cons_pattern => cons_pattern(kid),
-        _ => pat_alt(kid),
-    }
-}
-
-/// Build a `Pattern` from a `cons_pattern` pair (`pattern_alt :: pattern`).
-fn cons_pattern(pair: Pair<'_, Rule>) -> Pattern {
-    let kids: Vec<Pair<'_, Rule>> = pair.into_inner().collect();
-    // Children are `pattern_alt` (the head) and `pattern` (the tail/rest).
-    let mut head = None;
-    let mut tail = None;
-    for k in kids {
-        match k.as_rule() {
-            Rule::pattern_alt => head = Some(pat_alt(k)),
-            Rule::pattern => tail = Some(pattern(k)),
-            _ => {}
-        }
-    }
-    let head = head.unwrap_or(Pattern {
-        annotation: None,
-        kind: PatKind::Wildcard,
-    });
-    let tail = tail.unwrap_or(Pattern {
-        annotation: None,
-        kind: PatKind::Wildcard,
-    });
-    Pattern {
-        annotation: None,
-        kind: PatKind::Cons {
-            head: Box::new(head),
-            tail: Box::new(tail),
-        },
-    }
+    pat_alt(pair.into_inner().next().unwrap())
 }
 
 /// Build a `Pattern` from the single `pattern_alt` pair inside a `pattern`.
@@ -288,9 +254,10 @@ fn atom_pattern(pair: Pair<'_, Rule>) -> Pattern {
             annotation: None,
             kind: PatKind::Var(pair.as_str().to_string()),
         },
-        Rule::list_pattern => Pattern {
+        Rule::list_pattern => list_pattern(pair),
+        Rule::spread_pattern => Pattern {
             annotation: None,
-            kind: PatKind::List(pair.into_inner().map(pattern).collect()),
+            kind: PatKind::Spread(Box::new(pattern(pair.into_inner().next().unwrap()))),
         },
         Rule::record_pattern => Pattern {
             annotation: None,
@@ -314,6 +281,24 @@ fn atom_pattern(pair: Pair<'_, Rule>) -> Pattern {
             }
         }
         _ => Pattern { annotation: None, kind: PatKind::Wildcard },
+    }
+}
+
+fn list_pattern(pair: Pair<'_, Rule>) -> Pattern {
+    let mut items = Vec::new();
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::pattern => items.push(pattern(inner)),
+            Rule::spread_pattern => items.push(Pattern {
+                annotation: None,
+                kind: PatKind::Spread(Box::new(pattern(inner.into_inner().next().unwrap()))),
+            }),
+            _ => {}
+        }
+    }
+    Pattern {
+        annotation: None,
+        kind: PatKind::List(items),
     }
 }
 

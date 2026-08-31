@@ -95,19 +95,18 @@ type_args    = { "<" ~ type_atom ~ ("," ~ type_atom)* ~ ">" }
 // may carry optional type annotations `(x : Int)`.
 // --------------------------------------------------------------------------
 
-pattern         = { cons_pattern | pattern_alt }
+pattern         = { pattern_alt }
 pattern_alt     = {
       "(" ~ pattern_elem ~ ("," ~ pattern_elem)+ ~ ")"   // tuple destructure: (a, b)
     | "(" ~ pattern ~ ":" ~ ltype ~ ")"                  // single annotated: (x : Int)
     | atom_pattern
     | "(" ~ pattern ~ ")"                                // grouped: (a)
 }
-// Right-associative cons destructure: `x :: xs`, `[a] :: rest`.
-cons_pattern    = { pattern_alt ~ "::" ~ pattern }
 atom_pattern    = _{ identifier | "_" | literal_pattern | list_pattern | record_pattern }
 literal_pattern = _{ boolean | number | string }
 pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
-list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)*)? ~ "]" }
+list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "]" }
+spread_pattern  = { "..." ~ pattern }
 record_pattern  = { "{" ~ (record_field ~ ("," ~ record_field)*)? ~ "}" }
 record_field    = { identifier ~ ":" ~ pattern }
 

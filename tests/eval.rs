@@ -78,6 +78,23 @@ fn grouped_function_clauses_evaluate_via_match() {
 }
 
 #[test]
+fn list_spread_patterns_work_in_match_and_functions() {
+    let value = eval(
+        "let len = xs => match xs {\n    [] => 0\n    [x, ...xs] => 1 + len xs\n}\nfn zip [] [] = []\nfn zip [x, ...xs] [y, ...ys] = {\n    let pair = [(x, y)]\n    let rest = zip xs ys\n    concat pair rest\n}\n(len [1, 2, 3], zip [1, 2] [3, 4])\n",
+    )
+    .unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::Int(3)));
+            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Tuple(a), Value::Tuple(b)]
+                if matches!(a.as_slice(), [Value::Int(1), Value::Int(3)])
+                && matches!(b.as_slice(), [Value::Int(2), Value::Int(4)]))));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
 fn member_len_and_index_work_on_lists() {
     let value = eval("let xs = [10, 20, 30]\n(xs.len, xs[1])\n").unwrap();
     match value {
