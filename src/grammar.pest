@@ -1,0 +1,136 @@
+// Lento grammar (pest)
+//
+// Design foundation (see ../ideas/grammar_and_memory.md):
+//   - Declarations and expressions are separate grammatical contexts.
+//   - A binding is introduced once by an anchor keyword: `spec`, `let`, `fn`, `type`.
+//   - `spec` is a persistent local signature/contract; `fn` contributes function
+//     clauses; `let` binds an expression; `=` is the sole assignment/mutation op.
+//   - Function LHS is parsed as patterns (never as application). Application exists
+//     only in expression grammar.
+//   - `all a :: Ord.` quantifies type variables; `where` refines a whole signature.
+//   - Memory: `T` is logical value semantics; `ref T` shared borrow (inferred);
+//     `mut T` explicit exclusive mutable place; `ref x` materializes a borrow.
+
+WHITESPACE            = _{ " " | "\t" | "\r" }
+COMMENT               = _{ multiline_comment | singleline_comment }
+multiline_comment     = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
+singleline_comment    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI) }
+statement_sep         = _{ (";" ~ NEWLINE*) | NEWLINE+ | &EOI }
+
+// --------------------------------------------------------------------------
+// Lexical atoms
+// --------------------------------------------------------------------------
+
+identifier_char_start  = { ASCII_ALPHA | "_" }
+identifier_char        = { ASCII_ALPHA | ASCII_DIGIT | "_" }
+identifier             = @{ identifier_char_start ~ identifier_char* }
+integer                = @{ ASCII_DIGIT+ }
+float                  = @{ integer ~ "." ~ integer }
+number                 = _{ float | integer }
+boolean                = @{ "true" | "false" }
+escaped_char           = _{ "\\" ~ ("n" | "r" | "t" | "0" | "\\" | "\"" | "'") }
+string_inner           = @{ (!"\"" ~ ANY)* }
+string                 = _{ "\"" ~ string_inner ~ "\"" }
+
+// --------------------------------------------------------------------------
+// Program / declaration structure
+// --------------------------------------------------------------------------
+
+program        = { SOI ~ (statement ~ statement_sep)* ~ EOI }
+body           = { (statement ~ statement_sep)? }
+block          = { "{" ~ body ~ "}" }
+
+statement      = _{ declaration | expression }
+
+declaration    = _{ spec_decl | type_decl | let_decl | fn_clause }
+
+// `spec name : spec_type`
+spec_decl      = { "spec" ~ identifier ~ ":" ~ spec_type }
+
+// `type name  = <type>`
+type_decl      = { "type" ~ identifier ~ "=" ~ ltype }
+
+// `let [mut] pattern [: type]  = expression`
+let_decl       = { "let" ~ let_mut? ~ pattern ~ (":" ~ ltype)? ~ "=" ~ expression }
+let_mut        = { "mut" }
+
+// `fn name function_pattern* [-> type]  = expression`
+fn_clause      = { "fn" ~ identifier ~ function_pattern* ~ ("->" ~ ltype)? ~ "=" ~ expression }
+
+function_pattern  = { pattern }
+
+// --------------------------------------------------------------------------
+// Spec types
+// --------------------------------------------------------------------------
+
+spec_type  = _{ NEWLINE* ~ (quantifier* ~ arrow_type ~ where_clause?) }
+
+quantifier   = { "all" ~ type_var+ ~ constraints? ~ "." ~ NEWLINE* }
+type_var     = @{ ASCII_ALPHA_LOWER ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
+constraints  = { "::" ~ constraint ~ ("," ~ constraint)* }
+constraint   = { identifier ~ type_atom* }
+
+where_clause  = { NEWLINE* ~ "where" ~ NEWLINE* ~ expression ~ (where_sep ~ expression)* }
+where_sep     = _{ "," | NEWLINE+ | ";" ~ NEWLINE* }
+
+// Types are right-associative function arrows.
+ltype        = _{ arrow_type }
+arrow_type   = { type_domain ~ (NEWLINE* ~ "->" ~ NEWLINE* ~ arrow_type)? }
+type_domain  = _{ named_binder | type_atom }
+named_binder = { "(" ~ identifier ~ ":" ~ type_atom ~ ")" }
+
+type_atom    = _{ ty_ref | ty_mut | type_base }
+ty_ref       = { "ref" ~ type_atom }
+ty_mut       = { "mut" ~ type_atom }
+type_base    = { identifier ~ type_args? | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")" | "[" ~ type_atom ~ "]" }
+type_args    = { "<" ~ type_atom ~ ("," ~ type_atom)* ~ ">" }
+
+// --------------------------------------------------------------------------
+// Patterns (left-value shapes: used in `let`, function params, lambda params,
+// and match arms). A pattern is a single atom or a destructuring whose parts
+// may carry optional type annotations `(x : Int)`.
+// --------------------------------------------------------------------------
+
+pattern         = { pattern_alt }
+pattern_alt     = {
+      "(" ~ pattern_elem ~ ("," ~ pattern_elem)+ ~ ")"   // tuple destructure: (a, b)
+    | "(" ~ pattern ~ ":" ~ ltype ~ ")"                  // single annotated: (x : Int)
+    | atom_pattern
+    | "(" ~ pattern ~ ")"                                // grouped: (a)
+}
+atom_pattern    = _{ identifier | "_" | literal_pattern | list_pattern | record_pattern }
+literal_pattern = _{ boolean | number | string }
+pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
+list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)*)? ~ "]" }
+record_pattern  = { "{" ~ (record_field ~ ("," ~ record_field)*)? ~ "}" }
+record_field    = { identifier ~ ":" ~ pattern }
+
+// --------------------------------------------------------------------------
+// Expressions (application only here; `fn` LHS is never parsed as application)
+// --------------------------------------------------------------------------
+
+expression     = _{ assignment | lambda_expr | binop_expr }
+
+// `=` mutation: place := value
+assignment     = { place_expr ~ "=" ~ expression }
+place_expr     = { applicative }
+
+lambda_expr    = { lambda_pattern+ ~ "=>" ~ expression }
+lambda_pattern = { pattern }
+
+binop_expr     = { applicative ~ (infix_op ~ applicative)* }
+infix_op       = @{ ("==" | "!=" | "<=" | ">=" | "&&" | "||" | "::" | "+" | "-" | "*" | "/" | "%" | "<" | ">") }
+
+applicative    = _{ postfix+ }
+postfix        = _{ primary ~ postfix_op* }
+postfix_op     = _{ member_access | index_access }
+member_access  = { "." ~ identifier }
+index_access   = { "[" ~ expression ~ "]" }
+
+primary        = _{ literal | call | tuple | list | block | ref_expr | identifier | "(" ~ expression ~ ")" }
+literal        = _{ boolean | number | string }
+ref_expr       = { "ref" ~ expression }
+
+call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+tuple          = { "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+list           = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
