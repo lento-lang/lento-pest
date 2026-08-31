@@ -143,3 +143,160 @@ fn print_intrinsics_return_unit() {
     assert!(matches!(eval("print \"x\"\n").unwrap(), Value::Unit));
     assert!(matches!(eval("println \"x\"\n").unwrap(), Value::Unit));
 }
+
+#[test]
+fn list_intrinsics_work() {
+    let value = eval(
+        "let xs = [1, 2]\nlet ys = [3, 4]\nlet empty = []\n(concat xs ys, head ys, tail xs, is_empty empty, is_empty xs)\n",
+    )
+    .unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert_eq!(items.len(), 5);
+            assert!(matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])));
+            assert!(matches!(&items[1], Value::Int(3)));
+            assert!(matches!(&items[2], Value::List(v) if matches!(v.as_slice(), [Value::Int(2)])));
+            assert!(matches!(&items[3], Value::Bool(true)));
+            assert!(matches!(&items[4], Value::Bool(false)));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn concat_is_curried() {
+    let value = eval("let join = concat [1, 2]\njoin [3, 4]\n").unwrap();
+    assert!(matches!(value, Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])));
+}
+
+#[test]
+fn head_and_tail_error_on_empty_list() {
+    let head_err = eval("head []\n").unwrap_err();
+    assert!(head_err.contains("head expects a non-empty list"));
+
+    let tail_err = eval("tail []\n").unwrap_err();
+    assert!(tail_err.contains("tail expects a non-empty list"));
+}
+
+#[test]
+fn numeric_intrinsics_work() {
+    let value = eval(
+        "let neg = 0 - 5\nlet negf = 0.0 - 1.5\nlet a = abs neg\nlet b = abs negf\nlet c = min 3 8\nlet d = max 3.5 2\n(a, b, c, d)\n",
+    )
+    .unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::Int(5)));
+            assert!(matches!(&items[1], Value::Float(v) if (*v - 1.5).abs() < 1e-9));
+            assert!(matches!(&items[2], Value::Int(3)));
+            assert!(matches!(&items[3], Value::Float(v) if (*v - 3.5).abs() < 1e-9));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn string_intrinsics_work() {
+    let value = eval(
+        "let joined = concat \"foo\" \"bar\"\nlet has = contains joined \"oba\"\nlet s = to_string 42\nlet n = parse_int \"42\"\nlet lo = min \"aa\" \"ab\"\nlet hi = max \"aa\" \"ab\"\n(joined, has, s, n, lo, hi)\n",
+    )
+    .unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::Str(v) if v == "foobar"));
+            assert!(matches!(&items[1], Value::Bool(true)));
+            assert!(matches!(&items[2], Value::Str(v) if v == "42"));
+            assert!(matches!(&items[3], Value::Int(42)));
+            assert!(matches!(&items[4], Value::Str(v) if v == "aa"));
+            assert!(matches!(&items[5], Value::Str(v) if v == "ab"));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn parse_int_and_contains_type_errors_are_reported() {
+    let parse_err = eval("parse_int \"nope\"\n").unwrap_err();
+    assert!(parse_err.contains("parse_int could not parse 'nope'"));
+
+    let contains_err = eval("contains 1 2\n").unwrap_err();
+    assert!(contains_err.contains("contains expects (string, string) or (list, value)"));
+}
+
+#[test]
+fn take_drop_reverse_and_slice_work() {
+    let value = eval(
+        "let xs = [1, 2, 3, 4]\nlet s = \"abcd\"\n(take 2 xs, drop 2 xs, reverse xs, slice 1 2 xs, take 2 s, drop 2 s, reverse s, slice 1 2 s)\n",
+    )
+    .unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2)])));
+            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Int(3), Value::Int(4)])));
+            assert!(matches!(&items[2], Value::List(v) if matches!(v.as_slice(), [Value::Int(4), Value::Int(3), Value::Int(2), Value::Int(1)])));
+            assert!(matches!(&items[3], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(3)])));
+            assert!(matches!(&items[4], Value::Str(v) if v == "ab"));
+            assert!(matches!(&items[5], Value::Str(v) if v == "cd"));
+            assert!(matches!(&items[6], Value::Str(v) if v == "dcba"));
+            assert!(matches!(&items[7], Value::Str(v) if v == "bc"));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn join_and_split_work() {
+    let value = eval(
+        "let parts = [\"a\", \"b\", \"c\"]\nlet joined = join \"-\" parts\nlet split_back = split \"-\" joined\n(joined, split_back)\n",
+    )
+    .unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::Str(v) if v == "a-b-c"));
+            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Str(a), Value::Str(b), Value::Str(c)] if a == "a" && b == "b" && c == "c")));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn slice_like_intrinsics_report_bad_indices() {
+    let err = eval("take (0 - 1) [1, 2]\n").unwrap_err();
+    assert!(err.contains("take expects a non-negative integer index/count"));
+}
+
+#[test]
+fn join_requires_strings() {
+    let err = eval("join \",\" [1, 2]\n").unwrap_err();
+    assert!(err.contains("join expects a list of strings"));
+}
+
+#[test]
+fn higher_order_list_intrinsics_work() {
+    let value = eval(
+        "let xs = range 1 6\nlet doubled = map (x => x * 2) xs\nlet evens = filter (x => x % 2 == 0) xs\nlet total = foldl (acc => x => acc + x) 0 xs\nlet has_big = any (x => x > 4) xs\nlet all_small = all (x => x < 6) xs\n(doubled, evens, total, has_big, all_small)\n",
+    )
+    .unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8), Value::Int(10)])));
+            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(4)])));
+            assert!(matches!(&items[2], Value::Int(15)));
+            assert!(matches!(&items[3], Value::Bool(true)));
+            assert!(matches!(&items[4], Value::Bool(true)));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn range_descends_when_start_is_greater() {
+    let value = eval("range 5 2\n").unwrap();
+    assert!(matches!(value, Value::List(v) if matches!(v.as_slice(), [Value::Int(5), Value::Int(4), Value::Int(3)])));
+}
+
+#[test]
+fn higher_order_intrinsics_report_predicate_errors() {
+    let err = eval("any (x => x + 1) [1, 2]\n").unwrap_err();
+    assert!(err.contains("any predicate must return bool"));
+}
