@@ -259,12 +259,7 @@ fn atom_pattern(pair: Pair<'_, Rule>) -> Pattern {
             annotation: None,
             kind: PatKind::Spread(Box::new(pattern(pair.into_inner().next().unwrap()))),
         },
-        Rule::record_pattern => Pattern {
-            annotation: None,
-            kind: PatKind::Record(
-                pair.into_inner().map(record_field).collect(),
-            ),
-        },
+        Rule::record_pattern => record_pattern(pair),
         Rule::boolean => Pattern {
             annotation: None,
             kind: PatKind::Lit(Lit::Bool(pair.as_str() == "true")),
@@ -299,6 +294,24 @@ fn list_pattern(pair: Pair<'_, Rule>) -> Pattern {
     Pattern {
         annotation: None,
         kind: PatKind::List(items),
+    }
+}
+
+fn record_pattern(pair: Pair<'_, Rule>) -> Pattern {
+    let mut fields = Vec::new();
+    let mut rest = None;
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::record_field => fields.push(record_field(inner)),
+            Rule::spread_pattern => {
+                rest = Some(Box::new(pattern(inner.into_inner().next().unwrap())))
+            }
+            _ => {}
+        }
+    }
+    Pattern {
+        annotation: None,
+        kind: PatKind::Record { fields, rest },
     }
 }
 

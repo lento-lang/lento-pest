@@ -131,8 +131,11 @@ pub enum PatKind {
     /// `...rest` — spread/rest pattern. Currently valid only inside a list
     /// pattern, where it captures the remaining suffix as a list.
     Spread(Box<Pattern>),
-    /// `{ x: a, y: b }` — record destructuring.
-    Record(Vec<RecordField>),
+    /// `{ x: a, y: b }` or `{ x: a, ...rest }` — record destructuring.
+    Record {
+        fields: Vec<RecordField>,
+        rest: Option<Box<Pattern>>,
+    },
 }
 
 /// One field of a record pattern `{ x: pat }`.
@@ -493,6 +496,6 @@ pub fn param_type(p: &Pattern) -> Option<Ty> {
         | PatKind::Wildcard
         | PatKind::List(_)
         | PatKind::Spread(_)
-        | PatKind::Record(_) => None,
+        | PatKind::Record { .. } => None,
     }
 }

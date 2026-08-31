@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use lento::ast::desugar_program;
 use lento::eval::{Binding, Env, Value};
 use lento::parser::parse_program;
@@ -14,6 +16,12 @@ fn eval_with_env(src: &str) -> Result<(Value, Env), String> {
     let mut env = lento::eval::initial_env();
     let value = lento::eval::eval_program_in_env(&desugared, &mut env)?;
     Ok((value, env))
+}
+
+fn eval_in_existing_env(src: &str, env: &mut Env) -> Result<Value, String> {
+    let ast = parse_program(src).map_err(|e| e.to_string())?;
+    let desugared = desugar_program(&ast);
+    lento::eval::eval_program_in_env(&desugared, env)
 }
 
 fn assert_int(value: Value, expected: i64) {
@@ -89,6 +97,63 @@ fn list_spread_patterns_work_in_match_and_functions() {
             assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Tuple(a), Value::Tuple(b)]
                 if matches!(a.as_slice(), [Value::Int(1), Value::Int(3)])
                 && matches!(b.as_slice(), [Value::Int(2), Value::Int(4)]))));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn record_spread_pattern_binds_rest_record() {
+    let mut env = lento::eval::initial_env();
+    env.insert(
+        "rec".to_string(),
+        Binding::Inline(Value::Record(HashMap::from([
+            ("x".to_string(), Value::Int(1)),
+            ("y".to_string(), Value::Int(2)),
+            ("z".to_string(), Value::Int(3)),
+        ]))),
+    );
+
+    let value = eval_in_existing_env(
+        "match rec {\n    {x: x, ...rest} => (x, rest)\n}\n",
+        &mut env,
+    )
+    .unwrap();
+
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::Int(1)));
+            assert!(matches!(&items[1], Value::Record(fields)
+                if matches!(fields.get("y"), Some(Value::Int(2)))
+                && matches!(fields.get("z"), Some(Value::Int(3)))
+                && !fields.contains_key("x")));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
+fn fn_block_syntax_evaluates_and_pretty_prints_in_block_form() {
+    let src = "fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\n";
+    let ast = parse_program(src).unwrap();
+    let printed = lento::pprint::format_program(&ast);
+    assert!(printed.contains("fn pick_x {x: x, ...rest} {"));
+
+    let mut env = lento::eval::initial_env();
+    env.insert(
+        "rec".to_string(),
+        Binding::Inline(Value::Record(HashMap::from([
+            ("x".to_string(), Value::Int(7)),
+            ("y".to_string(), Value::Int(9)),
+        ]))),
+    );
+    let value = eval_in_existing_env("fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\npick_x rec\n", &mut env).unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::Int(7)));
+            assert!(matches!(&items[1], Value::Record(fields)
+                if matches!(fields.get("y"), Some(Value::Int(9)))
+                && !fields.contains_key("x")));
         }
         other => panic!("expected tuple, got {other:?}"),
     }

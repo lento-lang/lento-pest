@@ -1,0 +1,7 @@
+// Block-bodied function syntax omits `=` and pretty-prints back in that form.
+fn add a b {
+    a + b
+}
+
+let result = add 2 3
+println result

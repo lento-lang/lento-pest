@@ -81,8 +81,12 @@ fn format_decl(out: &mut String, decl: &Decl) {
                 format_type(out, ty);
                 out.push(' ');
             }
-            let _ = write!(out, "= ");
-            format_expr(out, &f.body, Prec::Top);
+            if matches!(f.body, Expr::Block(_)) {
+                format_expr(out, &f.body, Prec::Top);
+            } else {
+                let _ = write!(out, "= ");
+                format_expr(out, &f.body, Prec::Top);
+            }
             out.push('\n');
         }
     }
@@ -206,11 +210,14 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
             let body = format!("...{}", pat_str(inner));
             render_pat_atom(out, &body, annotation);
         }
-        PatKind::Record(fields) => {
-            let inner: Vec<String> = fields
+        PatKind::Record { fields, rest } => {
+            let mut inner: Vec<String> = fields
                 .iter()
                 .map(|f| format!("{}: {}", f.name, pat_str(&f.pattern)))
                 .collect();
+            if let Some(rest) = rest {
+                inner.push(format!("...{}", pat_str(rest)));
+            }
             let body = format!("{{{}}}", inner.join(", "));
             render_pat_atom(out, &body, annotation);
         }

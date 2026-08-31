@@ -607,13 +607,20 @@ fn collect_pattern_bindings(
             _ => Ok(false),
         },
         PatKind::Spread(inner) => collect_pattern_bindings(inner, value, out),
-        PatKind::Record(fields) => match value {
+        PatKind::Record { fields, rest } => match value {
             Value::Record(values) => {
+                let mut remainder = values.clone();
                 for field in fields {
                     let Some(field_value) = values.get(&field.name) else {
                         return Ok(false);
                     };
                     if !collect_pattern_bindings(&field.pattern, field_value, out)? {
+                        return Ok(false);
+                    }
+                    remainder.remove(&field.name);
+                }
+                if let Some(rest) = rest {
+                    if !collect_pattern_bindings(rest, &Value::Record(remainder), out)? {
                         return Ok(false);
                     }
                 }

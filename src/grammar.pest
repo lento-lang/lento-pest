@@ -54,8 +54,9 @@ type_decl      = { "type" ~ identifier ~ "=" ~ ltype }
 let_decl       = { "let" ~ let_mut? ~ pattern ~ (":" ~ ltype)? ~ "=" ~ expression }
 let_mut        = { "mut" }
 
-// `fn name function_pattern* [-> type]  = expression`
-fn_clause      = { "fn" ~ identifier ~ function_pattern* ~ ("->" ~ ltype)? ~ "=" ~ expression }
+// `fn name function_pattern* [-> type] = expression`
+// or `fn name function_pattern* [-> type] { ... }`
+fn_clause      = { "fn" ~ identifier ~ function_pattern* ~ ("->" ~ ltype)? ~ ("=" ~ expression | block) }
 
 function_pattern  = { pattern }
 
@@ -107,7 +108,7 @@ literal_pattern = _{ boolean | number | string }
 pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
 list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "]" }
 spread_pattern  = { "..." ~ pattern }
-record_pattern  = { "{" ~ (record_field ~ ("," ~ record_field)*)? ~ "}" }
+record_pattern  = { "{" ~ (record_field ~ ("," ~ record_field)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "}" }
 record_field    = { identifier ~ ":" ~ pattern }
 
 // --------------------------------------------------------------------------
