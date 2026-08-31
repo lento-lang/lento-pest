@@ -30,7 +30,7 @@ number                 = _{ float | integer }
 boolean                = @{ "true" | "false" }
 escaped_char           = _{ "\\" ~ ("n" | "r" | "t" | "0" | "\\" | "\"" | "'") }
 string_inner           = @{ (!"\"" ~ ANY)* }
-string                 = _{ "\"" ~ string_inner ~ "\"" }
+string               = { "\"" ~ string_inner ~ "\"" }
 
 // --------------------------------------------------------------------------
 // Program / declaration structure

@@ -1,0 +1,11 @@
+// Record patterns in match arms (the record braces delimit the pattern).
+let origin = pt => match pt {
+    { x: 0, y: 0 } => "zero"
+    { x: a, y: b } => a + b
+    _ => 0
+}
+
+let get_x = pt => match pt {
+    { x: v, y: _ } => v
+    _ => 0
+}

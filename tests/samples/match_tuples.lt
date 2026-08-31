@@ -1,0 +1,14 @@
+// Matching a tuple scrutinee with tuple destructuring patterns.
+let sum = pair => match pair {
+    (0, 0) => 0
+    (a, b) => a + b
+}
+
+let first = xs => match xs {
+    (a, b, c) => a
+    _ => 0
+}
+
+let pair_with = v => match (v, v) {
+    (x, y) => x + y
+}
