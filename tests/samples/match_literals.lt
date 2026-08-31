@@ -14,3 +14,5 @@ let classify = n => match n {
     42 => "answer"
     _ => "other"
 }
+
+let hello_len = len "hello"

@@ -1,0 +1,12 @@
+// Intrinsic functions: print, println, len, and assert.
+let xs = [1, 2, 3]
+let pair = (10, 20)
+let s = "abc"
+
+let xs_len = len xs
+let pair_len = len pair
+let s_len = len s
+
+assert true
+print xs_len
+println s_len

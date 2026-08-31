@@ -2,3 +2,6 @@ spec factorial: int -> int
 
 fn factorial 0 = 1
 fn factorial n = n * factorial(n - 1)
+
+let fact5 = factorial 5
+println fact5
