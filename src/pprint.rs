@@ -190,6 +190,13 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
             let body = format!("{{{}}}", inner.join(", "));
             render_pat_atom(out, &body, annotation);
         }
+        // `head :: tail`, right-associative: the head is printed as its own
+        // atom (tuples/lists self-delimit), the tail recurses.
+        PatKind::Cons { head, tail } => {
+            let head = pat_str(head);
+            let tail = pat_str(tail);
+            render_pat_atom(out, &format!("{head} :: {tail}"), annotation);
+        }
     }
 }
 
@@ -298,11 +305,7 @@ fn format_expr_inner(out: &mut String, expr: &Expr, ctx: Prec) {
             let _ = write!(out, "{} => ", params.join(" "));
             format_expr(out, &l.body, Prec::Top);
         }
-        Expr::Call(c) => {
-            format_expr(out, &c.callee, Prec::Atom);
-            let args: Vec<String> = c.args.iter().map(expr_str_top).collect();
-            let _ = write!(out, "({})", args.join(", "));
-        }
+        Expr::Call(c) => format_call(out, c),
         Expr::Member(m) => {
             format_expr(out, &m.obj, Prec::Atom);
             let _ = write!(out, ".{}", m.field);
@@ -344,8 +347,69 @@ fn format_expr_inner(out: &mut String, expr: &Expr, ctx: Prec) {
             }
             out.push('}');
         }
+        Expr::Match(m) => {
+            out.push_str("match ");
+            format_expr(out, &m.scrutinee, Prec::Top);
+            out.push_str(" {\n");
+            for arm in &m.arms {
+                out.push_str("    ");
+                format_pattern(out, &arm.pattern);
+                if let Some(g) = &arm.guard {
+                    out.push_str(" if ");
+                    format_expr(out, g, Prec::Top);
+                }
+                out.push_str(" => ");
+                format_expr(out, &arm.body, Prec::Top);
+                out.push('\n');
+            }
+            out.push('}');
+        }
     }
     let _ = ctx; // ctx read to force paren grouping at call sites above
+}
+
+/// Print a call as juxtaposed application, `f a b c`. Nested calls from
+/// curried application (`f x y` = `Call(Call(f, x), [y])`) are flattened so
+/// the output is the idiomatic space-separated form, which re-parses to the
+/// same tree. A non-atomic argument (binary, lambda, call) is parenthesized
+/// so application grouping is preserved.
+fn format_call(out: &mut String, call: &CallExpr) {
+    // Flatten the curried callee chain into a base and an argument list.
+    let mut args: Vec<&Expr> = call.args.iter().collect();
+    let mut base = &call.callee;
+    loop {
+        match base.as_ref() {
+            Expr::Call(inner) => {
+                let mut tmp: Vec<&Expr> = inner.args.iter().collect();
+                tmp.extend(args);
+                args = tmp;
+                base = &inner.callee;
+            }
+            _ => break,
+        }
+    }
+    format_expr(out, base, Prec::Atom);
+    for arg in args {
+        out.push(' ');
+        let atomic = matches!(
+            arg,
+            Expr::Var(_)
+                | Expr::Lit(_)
+                | Expr::Member(_)
+                | Expr::Index(_)
+                | Expr::Tuple(_)
+                | Expr::List(_)
+                | Expr::Block(_)
+                | Expr::Match(_)
+        );
+        if atomic {
+            format_expr(out, arg, Prec::Atom);
+        } else {
+            out.push('(');
+            format_expr(out, arg, Prec::Top);
+            out.push(')');
+        }
+    }
 }
 
 fn next_tighter(p: Prec) -> Prec {

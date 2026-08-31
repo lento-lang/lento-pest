@@ -91,13 +91,15 @@ type_args    = { "<" ~ type_atom ~ ("," ~ type_atom)* ~ ">" }
 // may carry optional type annotations `(x : Int)`.
 // --------------------------------------------------------------------------
 
-pattern         = { pattern_alt }
+pattern         = { cons_pattern | pattern_alt }
 pattern_alt     = {
       "(" ~ pattern_elem ~ ("," ~ pattern_elem)+ ~ ")"   // tuple destructure: (a, b)
     | "(" ~ pattern ~ ":" ~ ltype ~ ")"                  // single annotated: (x : Int)
     | atom_pattern
     | "(" ~ pattern ~ ")"                                // grouped: (a)
 }
+// Right-associative cons destructure: `x :: xs`, `[a] :: rest`.
+cons_pattern    = { pattern_alt ~ "::" ~ pattern }
 atom_pattern    = _{ identifier | "_" | literal_pattern | list_pattern | record_pattern }
 literal_pattern = _{ boolean | number | string }
 pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
@@ -127,9 +129,17 @@ postfix_op     = _{ member_access | index_access }
 member_access  = { "." ~ identifier }
 index_access   = { "[" ~ expression ~ "]" }
 
-primary        = _{ literal | call | tuple | list | block | ref_expr | identifier | "(" ~ expression ~ ")" }
+primary        = _{ literal | tuple | list | block | ref_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
 literal        = _{ boolean | number | string }
 ref_expr       = { "ref" ~ expression }
+
+// `match scrutinee { pattern [if guard] => body, ... }` — arms may be
+// separated by commas, semicolons, or newlines; `=>` maps a pattern to an
+// expression exactly as lambdas do (`->` stays reserved for type-level use).
+match_expr     = { "match" ~ NEWLINE* ~ expression ~ NEWLINE* ~ "{" ~ NEWLINE* ~ match_arm ~ (match_arm_sep ~ match_arm)* ~ NEWLINE* ~ "}" }
+match_arm      = { pattern ~ guard? ~ "=>" ~ expression }
+guard          = { "if" ~ expression }
+match_arm_sep  = _{ (";" ~ NEWLINE*) | NEWLINE+ | "," }
 
 call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 tuple          = { "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }

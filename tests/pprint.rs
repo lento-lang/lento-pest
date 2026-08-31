@@ -26,6 +26,7 @@ const SAMPLES: &[&str] = &[
     "functions",
     "lambdas",
     "let_and_mutation",
+    "match",
     "mutation_spec",
     "polymorphism",
     "tuple_destructuring",

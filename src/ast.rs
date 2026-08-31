@@ -114,6 +114,8 @@ pub enum PatKind {
     List(Vec<Pattern>),
     /// `{ x: a, y: b }` — record destructuring.
     Record(Vec<RecordField>),
+    /// `head :: tail` — cons destructuring (right-associative).
+    Cons { head: Box<Pattern>, tail: Box<Pattern> },
 }
 
 /// One field of a record pattern `{ x: pat }`.
@@ -148,6 +150,7 @@ pub enum Expr {
     Tuple(TupleExpr),
     List(ListExpr),
     Block(BlockExpr),
+    Match(MatchExpr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -265,6 +268,22 @@ pub struct BlockExpr {
     pub body: Vec<Stmt>,
 }
 
+/// `match scrutinee { pattern [if guard] => body, ... }` — a pattern match.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchExpr {
+    pub scrutinee: Box<Expr>,
+    pub arms: Vec<MatchArm>,
+}
+
+/// One arm of a `match`: a pattern (with optional guard) mapped to a body.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    /// Optional guard expression, `if guard`, checked before the body.
+    pub guard: Option<Expr>,
+    pub body: Box<Expr>,
+}
+
 /// Desugar a function clause `fn f p1 p2 ... pn = body` into a `let`
 /// binding whose value is a curried chain of lambdas:
 ///
@@ -322,8 +341,12 @@ pub fn param_type(p: &Pattern) -> Option<Ty> {
             }
             Some(Ty::Tuple(tys))
         }
-        // Literals, wildcards, lists and records do not carry recoverable
-        // element types without more type inference.
-        PatKind::Lit(_) | PatKind::Wildcard | PatKind::List(_) | PatKind::Record(_) => None,
+        // Literals, wildcards, lists, records and cons do not carry
+        // recoverable element types without more type inference.
+        PatKind::Lit(_)
+        | PatKind::Wildcard
+        | PatKind::List(_)
+        | PatKind::Record(_)
+        | PatKind::Cons { .. } => None,
     }
 }

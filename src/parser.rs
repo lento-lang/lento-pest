@@ -30,14 +30,38 @@ pub fn print_pairs(pairs: Pairs<'_, Rule>) {
 
 fn program(pairs: Pairs<'_, Rule>) -> Program {
     let mut statements = Vec::new();
+    // Buffer consecutive `fn` clauses that share a name and arity so they
+    // group into a single `let` whose value is one lambda + `match`.
+    let mut pending: Option<(String, usize, Vec<(Vec<Pattern>, Option<Ty>, Expr)>)> = None;
+    let flush = |statements: &mut Vec<Stmt>, pending: &mut Option<(String, usize, Vec<(Vec<Pattern>, Option<Ty>, Expr)>)>| {
+        if let Some((name, _, clauses)) = pending.take() {
+            statements.push(Stmt::Decl(Decl::Let(group_fn_clauses(name, clauses))));
+        }
+    };
     for pair in pairs {
         if pair.as_rule() == Rule::EOI {
             continue;
         }
-        if let Some(stmt) = stmt(pair) {
-            statements.push(stmt);
+        if pair.as_rule() == Rule::fn_clause {
+            let (name, params, ret, body) = fn_clause_parts(pair);
+            let arity = params.len();
+            match &mut pending {
+                Some((n, a, clauses)) if *n == name && *a == arity => {
+                    clauses.push((params, ret, body));
+                }
+                _ => {
+                    flush(&mut statements, &mut pending);
+                    pending = Some((name, arity, vec![(params, ret, body)]));
+                }
+            }
+        } else {
+            flush(&mut statements, &mut pending);
+            if let Some(stmt) = stmt(pair) {
+                statements.push(stmt);
+            }
         }
     }
+    flush(&mut statements, &mut pending);
     Program { statements }
 }
 
@@ -145,6 +169,13 @@ fn let_decl(pair: Pair<'_, Rule>) -> LetDecl {
 }
 
 fn fn_clause(pair: Pair<'_, Rule>) -> LetDecl {
+    let (name, params, ret, body) = fn_clause_parts(pair);
+    desugar_fn(name, params, ret, body)
+}
+
+/// Extract the ingredients of a `fn` clause without desugaring: name,
+/// parameter patterns, optional return type, and body.
+fn fn_clause_parts(pair: Pair<'_, Rule>) -> (String, Vec<Pattern>, Option<Ty>, Expr) {
     let mut name = String::new();
     let mut params = Vec::new();
     let mut ret = None;
@@ -163,19 +194,127 @@ fn fn_clause(pair: Pair<'_, Rule>) -> LetDecl {
             _ => body = expression(inner),
         }
     }
-    desugar_fn(name, params, ret, body)
+    (name, params, ret, body)
+}
+
+/// Group multiple `fn` clauses of the same name and arity into a single
+/// `let f = v1 => v2 => ... => match (v1, ..., vk) { pat1 => body1, ... }`.
+///
+/// Each clause becomes one arm of the match; a k-parameter clause (k >= 2)
+/// matches on a tuple of its parameters, and a single parameter is matched
+/// directly (following the design doc's `n => match n { ... }`).
+fn group_fn_clauses(name: String, clauses: Vec<(Vec<Pattern>, Option<Ty>, Expr)>) -> LetDecl {
+    let k = clauses[0].0.len();
+    // Reuse the first clause's plain-Var parameter names when available (the
+    // design doc's `n => match n { ... }`); fall back to generated names.
+    let bind: Vec<String> = (0..k)
+        .map(|i| match clauses[0].0[i].kind {
+            PatKind::Var(ref n) => n.clone(),
+            _ => format!("__l{name}{i}"),
+        })
+        .collect();
+
+    let scrutinee = if k == 1 {
+        Expr::Var(VarExpr {
+            name: bind[0].clone(),
+        })
+    } else {
+        Expr::Tuple(TupleExpr {
+            items: bind
+                .iter()
+                .map(|f| Expr::Var(VarExpr { name: f.clone() }))
+                .collect(),
+        })
+    };
+
+    let arms = clauses
+        .into_iter()
+        .map(|(params, _, body)| {
+            let pattern = if params.len() == 1 {
+                params.into_iter().next().unwrap()
+            } else {
+                Pattern {
+                    annotation: None,
+                    kind: PatKind::Tuple(params),
+                }
+            };
+            MatchArm {
+                pattern,
+                guard: None,
+                body: Box::new(body),
+            }
+        })
+        .collect();
+
+    let mut value = Expr::Match(MatchExpr {
+        scrutinee: Box::new(scrutinee),
+        arms,
+    });
+    for f in bind.iter().rev() {
+        value = Expr::Lambda(LambdaExpr {
+            params: vec![Pattern {
+                annotation: None,
+                kind: PatKind::Var(f.clone()),
+            }],
+            body: Box::new(value),
+        });
+    }
+
+    LetDecl {
+        mutable: false,
+        pattern: Pattern {
+            annotation: None,
+            kind: PatKind::Var(name.clone()),
+        },
+        annotation: None,
+        value,
+    }
 }
 
 // --------------------------------------------------------------------------
 // Patterns
 // --------------------------------------------------------------------------
 
-/// Build a `Pattern` from a `pattern` pair (`pattern = { pattern_alt }`).
+/// Build a `Pattern` from a `pattern` pair (`pattern = { cons_pattern | pattern_alt }`).
 fn pattern(pair: Pair<'_, Rule>) -> Pattern {
-    pat_alt(pair.into_inner().next().unwrap())
+    let kid = pair.into_inner().next().unwrap();
+    match kid.as_rule() {
+        Rule::cons_pattern => cons_pattern(kid),
+        _ => pat_alt(kid),
+    }
 }
 
-/// Build a `Pattern` from the single `pattern_alt` pair inside `pattern`.
+/// Build a `Pattern` from a `cons_pattern` pair (`pattern_alt :: pattern`).
+fn cons_pattern(pair: Pair<'_, Rule>) -> Pattern {
+    let kids: Vec<Pair<'_, Rule>> = pair.into_inner().collect();
+    // Children are `pattern_alt` (the head) and `pattern` (the tail/rest).
+    let mut head = None;
+    let mut tail = None;
+    for k in kids {
+        match k.as_rule() {
+            Rule::pattern_alt => head = Some(pat_alt(k)),
+            Rule::pattern => tail = Some(pattern(k)),
+            _ => {}
+        }
+    }
+    let head = head.unwrap_or(Pattern {
+        annotation: None,
+        kind: PatKind::Wildcard,
+    });
+    let tail = tail.unwrap_or(Pattern {
+        annotation: None,
+        kind: PatKind::Wildcard,
+    });
+    Pattern {
+        annotation: None,
+        kind: PatKind::Cons {
+            head: Box::new(head),
+            tail: Box::new(tail),
+        },
+    }
+}
+
+/// Build a `Pattern` from the single `pattern_alt` pair inside a `pattern`.
 fn pat_alt(pair: Pair<'_, Rule>) -> Pattern {
     let kids: Vec<Pair<'_, Rule>> = pair.into_inner().collect();
 
@@ -315,6 +454,7 @@ fn expression(pair: Pair<'_, Rule>) -> Expr {
             name: pair.as_str().to_string(),
         }),
         Rule::ref_expr => ref_expr(pair),
+        Rule::match_expr => match_expr(pair),
         Rule::call => call(pair),
         Rule::tuple => tuple(pair),
         Rule::list => list(pair),
@@ -367,6 +507,43 @@ fn lambda_expr(pair: Pair<'_, Rule>) -> Expr {
         params,
         body: Box::new(body),
     })
+}
+
+fn match_expr(pair: Pair<'_, Rule>) -> Expr {
+    let mut scrutinee = none_expr();
+    let mut arms = Vec::new();
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::match_arm => arms.push(match_arm(inner)),
+            // The only other meaningful child is the scrutinee expression.
+            _ => scrutinee = expression(inner),
+        }
+    }
+    Expr::Match(MatchExpr {
+        scrutinee: Box::new(scrutinee),
+        arms,
+    })
+}
+
+fn match_arm(pair: Pair<'_, Rule>) -> MatchArm {
+    let mut pat = Pattern {
+        annotation: None,
+        kind: PatKind::Wildcard,
+    };
+    let mut guard = None;
+    let mut body = none_expr();
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::pattern => pat = pattern(inner),
+            Rule::guard => guard = Some(expression(inner.into_inner().next().unwrap())),
+            _ => body = expression(inner),
+        }
+    }
+    MatchArm {
+        pattern: pat,
+        guard,
+        body: Box::new(body),
+    }
 }
 
 fn binop_expr(pair: Pair<'_, Rule>) -> Expr {
