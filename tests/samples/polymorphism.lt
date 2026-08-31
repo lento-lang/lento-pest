@@ -1,5 +1,5 @@
 spec map:
-    all a b.
+    all a, b.
     (a -> b) -> [a] -> [b]
 
 fn map f [] = []

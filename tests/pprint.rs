@@ -1,10 +1,5 @@
 // Round-trip tests for the pretty printer: parse a sample, format it, and
 // parse the result. For well-formed programs the two trees must be equal.
-//
-// `spec_where.lt` is excluded: its trailing `fn` clause is absorbed into the
-// `where` conditions by a pre-existing grammar ambiguity (no statement
-// boundary after a where block), so it is not a printer-round-trippable
-// program.
 
 use lento::parser::parse_program;
 use lento::pprint::format_program;
@@ -33,6 +28,7 @@ const SAMPLES: &[&str] = &[
     "match_tuples",
     "mutation_spec",
     "polymorphism",
+    "spec_where",
     "tuple_destructuring",
 ];
 
@@ -66,7 +62,7 @@ let f = if_x != y
 #[test]
 fn formatted_value_is_valid_lento() {
     let src = "spec map:
-    all a b.
+    all a, b.
     (a -> b) -> [a] -> [b]
 
 let double = (x: int) => x * 2
@@ -79,5 +75,5 @@ fn len xs = xs.len
     // And should contain the reconstructed forms.
     assert!(printed.contains("double"));
     assert!(printed.contains("=>"));
-    assert!(printed.contains("all a b"));
+    assert!(printed.contains("all a, b"));
 }

@@ -90,7 +90,7 @@ fn format_decl(out: &mut String, decl: &Decl) {
 
 fn format_spec_type(out: &mut String, st: &SpecType) {
     for q in &st.quantifiers {
-        let _ = write!(out, "    all {}", q.vars.join(" "),);
+        let _ = write!(out, "    all {}", q.vars.join(", "),);
         if !q.constraints.is_empty() {
             let cs: Vec<String> = q
                 .constraints
@@ -112,12 +112,14 @@ fn format_spec_type(out: &mut String, st: &SpecType) {
     format_type(out, &st.ty);
     out.push('\n');
     if let Some(conds) = &st.where_ {
-        out.push_str("    where\n");
-        for c in conds {
-            let _ = write!(out, "        ");
+        let _ = write!(out, "    where ");
+        for (i, c) in conds.iter().enumerate() {
+            if i > 0 {
+                out.push_str(", ");
+            }
             format_expr(out, c, Prec::Top);
-            out.push('\n');
         }
+        out.push('\n');
     }
 }
 
