@@ -134,10 +134,14 @@ fn record_spread_pattern_binds_rest_record() {
 
 #[test]
 fn fn_block_syntax_evaluates_and_pretty_prints_in_block_form() {
-    let src = "fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\n";
+    // Destructuring parameters are parenthesized, and the block body is
+    // introduced with `=` so the header/body boundary is unambiguous.
+    let src = "fn pick_x ({x: x, ...rest}) = {\n    (x, rest)\n}\n";
     let ast = parse_program(src).unwrap();
     let printed = lento::pprint::format_program(&ast);
-    assert!(printed.contains("fn pick_x {x: x, ...rest} {"));
+    // The printer keeps the `fn` source form; the record parameter is
+    // parenthesized so it cannot be confused with the block body.
+    assert!(printed.contains("fn pick_x ({x: x, ...rest}) = {"));
 
     let mut env = lento::eval::initial_env();
     env.insert(
@@ -147,7 +151,7 @@ fn fn_block_syntax_evaluates_and_pretty_prints_in_block_form() {
             ("y".to_string(), Value::Int(9)),
         ]))),
     );
-    let value = eval_in_existing_env("fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\npick_x rec\n", &mut env).unwrap();
+    let value = eval_in_existing_env("fn pick_x ({x: x, ...rest}) = {\n    (x, rest)\n}\npick_x rec\n", &mut env).unwrap();
     match value {
         Value::Tuple(items) => {
             assert!(matches!(&items[0], Value::Int(7)));
