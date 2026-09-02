@@ -35,11 +35,13 @@ pub struct SpecializedClause {
     pub patterns: Vec<crate::ast::Pattern>,
     /// Statement index of the source clause, for diagnostics.
     pub source_index: usize,
-    /// Whether any parameter carries an explicit type annotation. An
-    /// annotation is a deliberate specialization boundary: a clause annotated
-    /// `(x : bytes)` never merges with the un-annotated generic `x`, whereas
-    /// a *literal* pattern (`0`) is a value-shape variant that does merge.
-    pub has_annotation: bool,
+    /// The declared type restriction induced by annotations, if any: the
+    /// sequence of per-parameter annotated domains. `None` when the clause is
+    /// unannotated. Partitioning compares these SEMANTICALLY — two clauses
+    /// with the same annotated domains (`(x : int) 0` and `(x : int) n`) share
+    /// a specialization, while a redundant generic annotation (`(x : a)`)
+    /// induces no restriction and merges with the unannotated generic.
+    pub declared_domain: Vec<Option<MonoType>>,
 }
 
 /// One specialization: clauses sharing a single principal callable scheme.
@@ -49,9 +51,13 @@ pub struct Specialization {
     pub id: usize,
     /// The principal scheme every clause in this specialization refines.
     pub scheme: TypeScheme,
-    /// Whether this specialization's domain is fixed by an explicit
-    /// annotation (a deliberate specialization boundary).
-    pub annotated: bool,
+    /// The declared type restriction shared by every clause in this
+    /// specialization (one annotated domain per parameter), if any. This is
+    /// the semantic specialization boundary: clauses with DIFFERENT declared
+    /// restrictions form different specializations, and a clause with a
+    /// concrete declared restriction never merges with the unannotated
+    /// generic.
+    pub declared_domain: Vec<Option<MonoType>>,
     /// Clauses in source (pattern-dispatch) order.
     pub clauses: Vec<SpecializedClause>,
 }
@@ -163,42 +169,104 @@ fn least_generalization(
     }
 }
 
-/// Do two clause schemes belong to the same specialization, given whether
-/// each clause's domain was fixed by an explicit annotation?
+/// Extract the declared type restriction induced by a clause's parameter
+/// annotations: one `Option<MonoType>` per parameter. An annotation that
+/// lowers to a bare variable (`(x : a)`) induces NO restriction (`None`) — it
+/// is a redundant generic annotation, not a boundary.
+fn declared_domain(clause: &crate::ast::FnDecl) -> Vec<Option<MonoType>> {
+    clause
+        .params
+        .iter()
+        .map(|p| {
+            p.annotation.as_ref().and_then(|ann| {
+                // A bare lowercase unknown name (e.g. `a`) is a type variable,
+                // not a nominal restriction.
+                if let crate::ast::Ty::Named { name, args } = ann {
+                    if args.is_empty()
+                        && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                        && !is_known_type_constructor(name)
+                    {
+                        return None;
+                    }
+                }
+                let lowered = crate::types::lower_ty(ann, &BTreeMap::new());
+                // A bare type variable is not a restriction.
+                match lowered {
+                    MonoType::Var(_) => None,
+                    other => Some(other),
+                }
+            })
+        })
+        .collect()
+}
+
+/// Is `name` a known type constructor (as opposed to a type variable)?
+/// Lowercase unknown names are conventionally variables; the primitives are
+/// constructors.
+fn is_known_type_constructor(name: &str) -> bool {
+    matches!(
+        name,
+        "int" | "float" | "str" | "bool" | "bytes" | "unit" | "char"
+    )
+}
+
+/// Do two declared domains impose the same restriction? `None` (unrestricted)
+/// and a domain equal up to alpha-renaming are compatible; a concrete
+/// restriction is compatible only with the SAME concrete restriction.
+fn domains_compatible(a: &[Option<MonoType>], b: &[Option<MonoType>]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).all(|(x, y)| match (x, y) {
+        (None, None) => true,
+        // A restricted parameter is compatible only with the identical
+        // restriction; restricted-vs-unrestricted is a specialization
+        // boundary.
+        (Some(d1), Some(d2)) => {
+            let mut map = BTreeMap::new();
+            let mut next = 10_000;
+            // Same declared restriction: equal up to alpha-renaming of any
+            // variables inside. Use least-generalization reflexively: d1 and
+            // d2 must generalize to a type equal to both.
+            match least_generalization(d1, d2, &mut map, &mut next) {
+                Some(lg) => lg == *d1 && lg == *d2,
+                None => false,
+            }
+        }
+        _ => false,
+    })
+}
+
+/// Do two clause schemes belong to the same specialization, given their
+/// declared type restrictions?
 ///
+///   - the declared domains must be compatible (same semantic restriction per
+///     parameter) — a distinct declared restriction is a specialization
+///     boundary, and a concrete restriction never merges with the unannotated
+///     generic;
 ///   - alpha-equivalent schemes merge;
 ///   - value-shape variants (`[]` vs `[x, ...xs]`, or literal `0` vs var `n`)
-///     refine the same type and merge — a literal pattern is NOT a
-///     specialization boundary;
-///   - an explicit annotation (`(x : bytes)`) IS a deliberate boundary: an
-///     annotated clause never merges with a differently-typed clause, generic
-///     or otherwise;
+///     with the same declared domain refine one type and merge;
 ///   - genuinely different nominal domains have no common generalization.
 fn same_specialization(
     supply: &mut TypeVarSupply,
     a: &TypeScheme,
-    a_annotated: bool,
+    a_domain: &[Option<MonoType>],
     b: &TypeScheme,
-    b_annotated: bool,
+    b_domain: &[Option<MonoType>],
 ) -> bool {
     let _ = supply;
-    if alpha_equiv(a, b) {
-        // Same shape. Still split if exactly one side is annotated with a
-        // concrete domain — but alpha-equivalence means the domains match, so
-        // an annotated clause only merges with an identically-typed one.
-        // If one is annotated and the other is not but types are equal, the
-        // annotation is redundant; merging is fine.
-        return true;
-    }
-    // An explicit annotation is a deliberate specialization boundary: an
-    // annotated clause never merges with a clause of a different type.
-    if a_annotated || b_annotated {
+    // The semantic boundary: declared type restrictions must agree.
+    if !domains_compatible(a_domain, b_domain) {
         return false;
     }
-    // Neither annotated: merge iff they admit one common principal scheme (a
-    // least generalization exists — i.e. no incompatible nominal domains).
-    // Value-shape variants unify structurally even when neither is an
-    // HM-instance of the other.
+    if alpha_equiv(a, b) {
+        return true;
+    }
+    // Same declared domain: merge iff the schemes admit one common principal
+    // scheme (a least generalization exists — no incompatible nominal
+    // domains). Value-shape variants unify structurally even when neither is
+    // an HM-instance of the other.
     let mut map = BTreeMap::new();
     let mut next = 10_000;
     least_generalization(&a.body, &b.body, &mut map, &mut next).is_some()
@@ -223,11 +291,11 @@ pub fn partition(
 
     for (i, clause_ty) in inferred.clause_types.iter().enumerate() {
         let clause_arity = arity(clause_ty);
-        let has_annotation = group
+        let domain = group
             .raw_clauses
             .get(i)
-            .map(|c| c.params.iter().any(|p| p.annotation.is_some()))
-            .unwrap_or(false);
+            .map(declared_domain)
+            .unwrap_or_default();
         let scheme = canonicalize(&crate::types::generalize(env, clause_ty, vec![]));
 
         let mut placed = false;
@@ -236,12 +304,12 @@ pub fn partition(
                 continue; // arity is part of family identity
             }
             let mut supply = TypeVarSupply::new();
-            if same_specialization(&mut supply, &spec.scheme, spec.annotated, &scheme, has_annotation) {
+            if same_specialization(&mut supply, &spec.scheme, &spec.declared_domain, &scheme, &domain) {
                 spec.clauses.push(SpecializedClause {
                     ty: clause_ty.clone(),
                     patterns: inferred.clause_patterns[i].clone(),
                     source_index: group.source_indices.get(i).copied().unwrap_or(i),
-                    has_annotation,
+                    declared_domain: domain.clone(),
                 });
                 placed = true;
                 break;
@@ -252,12 +320,12 @@ pub fn partition(
             specializations.push(Specialization {
                 id,
                 scheme,
-                annotated: has_annotation,
+                declared_domain: domain.clone(),
                 clauses: vec![SpecializedClause {
                     ty: clause_ty.clone(),
                     patterns: inferred.clause_patterns[i].clone(),
                     source_index: group.source_indices.get(i).copied().unwrap_or(i),
-                    has_annotation,
+                    declared_domain: domain,
                 }],
             });
         }

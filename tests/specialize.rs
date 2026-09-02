@@ -90,3 +90,29 @@ fn equivalent_generic_clauses_merge() {
     assert_eq!(set.specializations.len(), 1);
     assert_eq!(set.specializations[0].clauses.len(), 2);
 }
+
+#[test]
+fn same_annotation_value_variants_merge() {
+    // `(x : int) 0` and `(x : int) n` share the SAME declared restriction, so
+    // they merge into one specialization (the literal `0` is a value-shape
+    // variant, not a boundary).
+    let set = partition_src("fn f (x : int) 0 = x\nfn f (x : int) n = x");
+    assert_eq!(set.specializations.len(), 1, "same declared restriction merges");
+    assert_eq!(set.specializations[0].clauses.len(), 2);
+}
+
+#[test]
+fn redundant_generic_annotation_does_not_split() {
+    // `(x : a)` induces no restriction (bare variable), so it merges with the
+    // unannotated generic identity.
+    let set = partition_src("fn id2 x = x\nfn id2 (x : a) = x");
+    assert_eq!(set.specializations.len(), 1, "redundant generic annotation is not a boundary");
+    assert_eq!(set.specializations[0].clauses.len(), 2);
+}
+
+#[test]
+fn distinct_declared_restrictions_split() {
+    // `(x : int)` vs `(x : str)` are distinct declared restrictions.
+    let set = partition_src("fn g (x : int) = x\nfn g (x : str) = x");
+    assert_eq!(set.specializations.len(), 2);
+}

@@ -1,60 +1,86 @@
-// Associating `spec` declarations with specializations.
+// Associating `spec` declarations with implementations.
 //
-// Each explicit `spec f : S` is a declared member of `f`'s overload set. This
-// module builds the many-to-many compatibility graph between specs and the
-// inferred specializations, and checks:
+// Corrected semantic model:
 //
-//   - every explicit spec has at least one implementing specialization
-//     (unless it is an abstract declaration with no clauses at all);
-//   - an implementing specialization's scheme is an instance of the spec's
-//     skolemized body (the implementation refines the contract);
-//   - each specialization either matches at least one explicit spec or gets a
-//     synthesized implicit spec with `SpecOrigin::Inferred` — an omitted spec
-//     never creates a weaker checking path;
-//   - a clause matching zero specs or multiple *incomparable* specs is
-//     diagnosed.
+//   - **Satisfaction is directional subsumption.** An implementation `I`
+//     satisfies a spec `S` iff `Instances(S) ⊆ Instances(I)`: the
+//     implementation is AT LEAST AS GENERAL as the contract. `fn f x = x`
+//     satisfies `spec f : int -> int`; `fn f (x : int) = x` does NOT satisfy
+//     `spec f : all a. a -> a`. See `types::satisfies`.
 //
-// Provenance is recorded per specialization: `SpecOrigin::Explicit(span)` or
-// `SpecOrigin::Inferred(clause_spans)`.
+//   - **Specs are optional obligations, implementations are not.** A function
+//     or `let` with no spec is simply unchecked-by-contract; it gets an
+//     *inferred signature* describing it, which is NOT a spec obligation.
+//     Implementations matching zero explicit specs are valid. Only an
+//     *unsatisfied spec* (no covering implementation) is an error.
+//
+//   - **One specialization covers an entire spec.** A spec is satisfied when
+//     a SINGLE specialization subsumes it. Multiple value-pattern clauses may
+//     collectively satisfy it via exhaustiveness (they live in one
+//     specialization). Multiple TYPE specializations never collectively
+//     satisfy a spec (that would require closed-world reasoning over the
+//     domain — deferred).
+//
+//   - **`let` can satisfy a spec.** A named `let` contributes one irrefutable
+//     implementation with no pattern-dispatch matrix beyond its lambda
+//     parameters. Repeated `let` bindings of one name are a duplicate binding,
+//     never an overload; a `let f` and `fn f` in one scope collide (rejected
+//     during collection).
 
 use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::ast::{Quantifier, SpecType};
-use crate::semantics::{FunctionGroup, ParsedSpec, SpecOrigin, Span};
+use crate::semantics::{FunctionGroup, ParsedSpec, Span};
 use crate::specialize::OverloadSet;
 use crate::types::{
-    is_permissive_instance, lower_constraint, lower_ty, MonoType, SchemeConstraint, TypeScheme,
+    implementation_covers_spec, lower_constraint, lower_ty, MonoType, SchemeConstraint, TypeScheme,
     TypeVarId, TypeVarSupply,
 };
 
-/// A spec lowered to the internal representation: its scheme plus provenance.
+/// Where a signature (the type ascribed to a specialization) came from.
+///
+/// An inferred signature DESCRIBES an implementation; it is not a spec
+/// obligation. A spec-assisted signature records which specs constrained the
+/// implementation's checking (via constraint propagation over its provisional
+/// principal type) — without turning the implementation into a monomorphic
+/// retype under any one spec.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignatureOrigin {
+    /// Inferred from the implementation alone; no spec constrained it.
+    Inferred,
+    /// One or more specs constrained this specialization's checking. The
+    /// implementation may satisfy several specs (a polymorphic impl can cover
+    /// both `int -> int` and `str -> str`); all of them are recorded, in
+    /// source order. Specs are obligations, not dispatch selectors.
+    SpecAssisted(Vec<usize>),
+}
+
+/// A spec lowered to the internal representation.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoweredSpec {
     pub scheme: TypeScheme,
-    pub origin: SpecOrigin,
-    /// The source spec statement index, for diagnostics.
+    /// The source spec statement index.
     pub index: usize,
+}
+
+/// The signature ascribed to one specialization.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Signature {
+    pub specialization_id: usize,
+    pub scheme: TypeScheme,
+    pub origin: SignatureOrigin,
 }
 
 /// The result of associating specs with one overload set.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecAssociation {
     pub name: String,
-    /// Every specialization paired with the spec it satisfies. A
-    /// specialization with no explicit spec carries a synthesized implicit
-    /// spec (identical checking, different provenance).
-    pub bindings: Vec<SpecBinding>,
-    /// Specs that no specialization implements (non-abstract: an error).
+    /// The signature of every specialization (declared or inferred).
+    pub signatures: Vec<Signature>,
+    /// Explicit specs with no covering specialization (each an error unless
+    /// the group is abstract — has no clauses at all).
     pub unsatisfied: Vec<LoweredSpec>,
-}
-
-/// One specialization bound to its spec.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SpecBinding {
-    pub specialization_id: usize,
-    pub spec: TypeScheme,
-    pub origin: SpecOrigin,
 }
 
 /// Errors from spec association.
@@ -65,19 +91,8 @@ pub struct SpecError {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpecErrorKind {
-    /// An explicit spec has no implementing specialization.
+    /// An explicit spec has no specialization that covers it.
     UnsatisfiedSpec { name: String, span: Span },
-    /// A specialization matches zero explicit specs and no implicit spec
-    /// could be synthesized for it (should not happen — the implicit spec is
-    /// the specialization's own scheme). Kept for forward compatibility.
-    OrphanSpecialization { name: String, specialization: usize },
-    /// A specialization matches multiple explicit specs that are mutually
-    /// incomparable (neither is an instance of the other).
-    AmbiguousSpec {
-        name: String,
-        specialization: usize,
-        specs: Vec<usize>,
-    },
 }
 
 impl fmt::Display for SpecError {
@@ -85,19 +100,7 @@ impl fmt::Display for SpecError {
         match &self.kind {
             SpecErrorKind::UnsatisfiedSpec { name, span } => write!(
                 f,
-                "spec `{name}` (statement {span:?}) has no implementing specialization"
-            ),
-            SpecErrorKind::OrphanSpecialization { name, specialization } => write!(
-                f,
-                "specialization {specialization} of `{name}` matches no spec"
-            ),
-            SpecErrorKind::AmbiguousSpec {
-                name,
-                specialization,
-                specs,
-            } => write!(
-                f,
-                "specialization {specialization} of `{name}` matches multiple incomparable specs {specs:?}"
+                "spec `{name}` (statement {span:?}) is not implemented by any specialization"
             ),
         }
     }
@@ -110,7 +113,6 @@ impl std::error::Error for SpecError {}
 /// `all a b :: Ord.` quantifiers become quantified variables (fresh ids from
 /// `supply`); constraint arguments lower through the same binder environment.
 pub fn lower_spec(supply: &mut TypeVarSupply, spec: &SpecType) -> TypeScheme {
-    // Map quantifier variable names to fresh type-variable ids.
     let mut binders: BTreeMap<String, MonoType> = BTreeMap::new();
     let mut quantified: Vec<TypeVarId> = Vec::new();
     for Quantifier { vars, .. } in &spec.quantifiers {
@@ -120,7 +122,6 @@ pub fn lower_spec(supply: &mut TypeVarSupply, spec: &SpecType) -> TypeScheme {
             quantified.push(id);
         }
     }
-    // Constraints from every quantifier clause.
     let mut constraints: Vec<SchemeConstraint> = Vec::new();
     for q in &spec.quantifiers {
         for c in &q.constraints {
@@ -135,159 +136,93 @@ pub fn lower_spec(supply: &mut TypeVarSupply, spec: &SpecType) -> TypeScheme {
     }
 }
 
-/// Associate every explicit spec of a function group with the group's
-/// specializations, synthesizing implicit specs where none apply.
+/// Associate a group's explicit specs with its specializations.
 ///
-/// `set` is the partitioned overload set for `group`. Matching is by
-/// subsumption: a specialization implements a spec when the specialization's
-/// scheme is an instance of the spec's (skolemized) scheme — i.e. the
-/// implementation is at least as specific as the contract.
+/// For each specialization, record EVERY declared spec it covers (directional
+/// subsumption: the implementation is at least as general as the spec). A
+/// specialization may cover several specs — that is not ambiguous, because
+/// specs are obligations, not dispatch selectors. A specialization covering no
+/// spec simply carries an inferred signature (specs are optional).
+///
+/// Each explicit spec must be covered by AT LEAST ONE specialization; an
+/// uncovered spec is an error unless the group is abstract (no clauses).
 pub fn associate_specs(
     supply: &mut TypeVarSupply,
     group: &FunctionGroup,
     set: &OverloadSet,
 ) -> Result<SpecAssociation, SpecError> {
-    // Lower every explicit spec.
     let lowered: Vec<LoweredSpec> = group
         .explicit_specs
         .iter()
         .map(|ParsedSpec { decl, index }| LoweredSpec {
             scheme: lower_spec(supply, &decl.ty),
-            origin: SpecOrigin::Explicit((group.source_span.0, *index)),
             index: *index,
         })
         .collect();
 
-    let mut bindings: Vec<SpecBinding> = Vec::new();
-    let mut satisfied: Vec<bool> = vec![false; lowered.len()];
+    let mut signatures = Vec::new();
+    let mut covered = vec![false; lowered.len()];
 
     for spec in &set.specializations {
-        // Which explicit specs does this specialization implement?
-        let mut matching: Vec<usize> = Vec::new();
+        // Collect every spec this implementation covers. Covering several
+        // specs is fine (a polymorphic impl covers both `int -> int` and
+        // `str -> str`); it does not split the implementation.
+        let mut matched: Vec<usize> = Vec::new();
         for (i, ls) in lowered.iter().enumerate() {
             let mut probe = TypeVarSupply::new();
-            if is_permissive_instance(&mut probe, &ls.scheme, &spec.scheme) {
-                matching.push(i);
+            if implementation_covers_spec(&mut probe, &spec.scheme, &ls.scheme) {
+                covered[i] = true;
+                matched.push(i);
             }
         }
-
-        match matching.as_slice() {
-            [] => {
-                // No explicit spec applies: synthesize an implicit spec from
-                // the specialization's own principal scheme. The checking path
-                // is identical; only the provenance differs. Generalize the
-                // scheme's free variables so the implicit spec is quantified
-                // exactly like an explicit one.
-                let spans: Vec<Span> = spec
-                    .clauses
-                    .iter()
-                    .map(|c| (c.source_index, c.source_index))
-                    .collect();
-                let implicit = TypeScheme {
-                    quantified: spec.scheme.body.free_vars(),
-                    constraints: spec.scheme.constraints.clone(),
-                    body: spec.scheme.body.clone(),
-                };
-                bindings.push(SpecBinding {
-                    specialization_id: spec.id,
-                    spec: implicit,
-                    origin: SpecOrigin::Inferred(spans),
-                });
-            }
-            [single] => {
-                satisfied[*single] = true;
-                bindings.push(SpecBinding {
-                    specialization_id: spec.id,
-                    spec: lowered[*single].scheme.clone(),
-                    origin: lowered[*single].origin.clone(),
-                });
-            }
-            many => {
-                // Multiple specs match: they must be comparable (one dominates).
-                // If any two are incomparable, the binding is ambiguous.
-                if !all_comparable(supply, many.iter().map(|i| &lowered[*i].scheme)) {
-                    return Err(SpecError {
-                        kind: SpecErrorKind::AmbiguousSpec {
-                            name: group.name.clone(),
-                            specialization: spec.id,
-                            specs: many.to_vec(),
-                        },
-                    });
-                }
-                // Comparable: bind to the most specific spec (the one all
-                // others are instances of).
-                let most = most_specific(supply, many, &lowered);
-                satisfied[most] = true;
-                bindings.push(SpecBinding {
-                    specialization_id: spec.id,
-                    spec: lowered[most].scheme.clone(),
-                    origin: lowered[most].origin.clone(),
-                });
-            }
+        if matched.is_empty() {
+            // Inferred signature: the specialization's own scheme,
+            // generalized over its free variables. Not an obligation.
+            let inferred = TypeScheme {
+                quantified: spec.scheme.body.free_vars(),
+                constraints: spec.scheme.constraints.clone(),
+                body: spec.scheme.body.clone(),
+            };
+            signatures.push(Signature {
+                specialization_id: spec.id,
+                scheme: inferred,
+                origin: SignatureOrigin::Inferred,
+            });
+        } else {
+            // The signature keeps the implementation's OWN (possibly more
+            // general) principal scheme — spec assistance propagates expected
+            // types but does not constrain the final scheme to any one spec.
+            let indices: Vec<usize> = matched.iter().map(|&i| lowered[i].index).collect();
+            signatures.push(Signature {
+                specialization_id: spec.id,
+                scheme: spec.scheme.clone(),
+                origin: SignatureOrigin::SpecAssisted(indices),
+            });
         }
     }
 
-    // Every non-abstract explicit spec needs at least one implementation.
-    // A spec-only group (no clauses at all) is an abstract declaration and is
-    // allowed to have unsatisfied specs.
+    // A spec must be covered by ONE specialization (collective type-domain
+    // coverage is deferred). Spec-only (abstract) groups are exempt.
     let mut unsatisfied = Vec::new();
-    if !set.specializations.is_empty() {
+    if !group.raw_clauses.is_empty() {
         for (i, ls) in lowered.iter().enumerate() {
-            if !satisfied[i] {
+            if !covered[i] {
                 unsatisfied.push(ls.clone());
             }
         }
-    }
-    // Hard error on the first unsatisfied spec when the group has clauses.
-    if !unsatisfied.is_empty() && !group.raw_clauses.is_empty() {
-        let first = &unsatisfied[0];
-        return Err(SpecError {
-            kind: SpecErrorKind::UnsatisfiedSpec {
-                name: group.name.clone(),
-                span: (first.index, first.index),
-            },
-        });
+        if let Some(first) = unsatisfied.first() {
+            return Err(SpecError {
+                kind: SpecErrorKind::UnsatisfiedSpec {
+                    name: group.name.clone(),
+                    span: (first.index, first.index),
+                },
+            });
+        }
     }
 
     Ok(SpecAssociation {
         name: group.name.clone(),
-        bindings,
+        signatures,
         unsatisfied,
     })
-}
-
-/// Are all schemes mutually comparable (for every pair, one is an instance of
-/// the other)?
-fn all_comparable<'a>(
-    supply: &mut TypeVarSupply,
-    schemes: impl Iterator<Item = &'a TypeScheme>,
-) -> bool {
-    let schemes: Vec<&TypeScheme> = schemes.collect();
-    for i in 0..schemes.len() {
-        for j in (i + 1)..schemes.len() {
-            let ij = is_permissive_instance(supply, schemes[i], schemes[j]);
-            let ji = is_permissive_instance(supply, schemes[j], schemes[i]);
-            if !ij && !ji {
-                return false;
-            }
-        }
-    }
-    true
-}
-
-/// The index of the most specific spec among `candidates`: the one that is an
-/// instance of all the others.
-fn most_specific(
-    supply: &mut TypeVarSupply,
-    candidates: &[usize],
-    lowered: &[LoweredSpec],
-) -> usize {
-    for &c in candidates {
-        if candidates.iter().all(|&other| {
-            c == other || is_permissive_instance(supply, &lowered[other].scheme, &lowered[c].scheme)
-        }) {
-            return c;
-        }
-    }
-    candidates[0]
 }

@@ -619,7 +619,11 @@ pub fn is_instance(supply: &mut TypeVarSupply, general: &TypeScheme, instance: &
 /// `general` is allowed by `instance`? Unlike `is_instance`, `instance`'s own
 /// quantified variables are flexible (a MORE-general implementation may
 /// satisfy a more-specific contract: the polymorphic identity satisfies
-/// `int -> int`). Used for spec satisfaction.
+/// `int -> int`).
+///
+/// Prefer `implementation_covers_spec` for spec satisfaction: it is skolem-
+/// based and constraint-aware. This unification-based check is retained for
+/// comparability probes where both sides are flexible.
 pub fn is_permissive_instance(
     supply: &mut TypeVarSupply,
     general: &TypeScheme,
@@ -686,4 +690,56 @@ fn matches(
 /// `b` is not an instance of `a`.
 pub fn dominates(supply: &mut TypeVarSupply, a: &TypeScheme, b: &TypeScheme) -> bool {
     is_instance(supply, b, a) && !is_instance(supply, a, b)
+}
+
+/// Directional spec satisfaction: does the implementation scheme `imp` cover
+/// the required spec `spec`?
+///
+/// ```text
+/// imp ⊧ spec   ⟺   Instances(spec) ⊆ Instances(imp)
+/// ```
+///
+/// The implementation must be AT LEAST AS GENERAL as the spec: every type the
+/// spec allows must be a valid use of the implementation. Equality is valid
+/// (reflexive). So:
+///
+///   - `fn f x = x` (∀a. a -> a) covers `spec f : int -> int` — the
+///     polymorphic implementation covers the required concrete use.
+///   - `fn f (x : int) = x` (int -> int) does NOT cover
+///     `spec f : all a. a -> a` — an int implementation does not implement
+///     the universally quantified contract.
+///
+/// Operationally:
+///   1. Skolemize the SPEC (its quantified variables are rigid requirements).
+///   2. Instantiate the IMPLEMENTATION with flexible metavariables.
+///   3. One-way match the instantiated implementation against the rigid spec,
+///      binding only the implementation's variables; a rigid spec skolem may
+///      only match itself (rejecting escaping skolems falls out of `matches`).
+///   4. Constraint check: every constraint the IMPLEMENTATION requires must be
+///      provided by the spec — the implementation's constraints may not be
+///      stronger than the spec's. (`∀a. Ord a => a -> a` does not cover the
+///      unconstrained `∀a. a -> a`.)
+pub fn implementation_covers_spec(
+    supply: &mut TypeVarSupply,
+    imp: &TypeScheme,
+    spec: &TypeScheme,
+) -> bool {
+    // (4) Constraint check first: each constraint the implementation needs
+    // must be among those the spec provides (by name, over the implementation's
+    // own variables). A spec that provides fewer constraints cannot cover an
+    // implementation that needs more.
+    if !imp
+        .constraints
+        .iter()
+        .all(|need| spec.constraints.iter().any(|have| have.name == need.name))
+    {
+        return false;
+    }
+    // (1)-(3): skolemize spec, instantiate impl, one-way match impl against
+    // the rigid spec.
+    let (spec_body, _) = skolemize(supply, spec);
+    let (imp_body, renaming) = instantiate_fresh(supply, imp);
+    let matchable: BTreeSet<TypeVarId> = renaming.values().copied().collect();
+    let mut subst = Substitution::new();
+    matches(&imp_body, &spec_body, &matchable, &mut subst)
 }

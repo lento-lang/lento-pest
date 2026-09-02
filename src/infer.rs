@@ -153,17 +153,19 @@ pub struct InferredClause {
 
 /// A base environment with the primitive types of the intrinsics and
 /// operators, so inference has something to start from. Names match
-/// `intrinsics.rs`. Built from its own throwaway supply so the caller's
-/// clause variables still start at 0 (keeps inferred ids deterministic).
+/// `intrinsics.rs`.
+///
+/// Intrinsic type-variable ids start at `1_000_000` so they never collide with
+/// a caller's clause variables (which start at 0). This keeps inferred clause
+/// schemes quantifying their own low ids deterministically.
 pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
-    let mut supply = TypeVarSupply::new();
-    let supply = &mut supply;
+    // Fixed high ids for intrinsic type variables.
+    let a = 1_000_000u32;
+    let b = 1_000_001u32;
     let mut env = TypeEnv::new();
     let mono = |t: MonoType| TypeScheme::mono(t);
     // A couple of representative polymorphic intrinsics; the full table grows
     // as the evaluator's intrinsics are typed.
-    let a = supply.fresh_id();
-    let b = supply.fresh_id();
     env.insert(
         "concat".to_string(),
         TypeScheme {
