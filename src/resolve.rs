@@ -20,7 +20,7 @@ use std::fmt;
 
 use crate::specialize::OverloadSet;
 use crate::types::{
-    dominates, instantiate, unify, MonoType, Substitution, TypeScheme, TypeVarSupply,
+    instantiate, unify, MonoType, Substitution, TypeScheme, TypeVarSupply,
 };
 
 /// Why a candidate specialization was rejected at a call site.
@@ -145,7 +145,8 @@ pub fn resolve_call(
         // 3c. Expected result type can eliminate candidates where sound.
         if rejected.is_none() {
             if let Some(expected) = expected_result {
-                if unify(&mut subst, &subst.apply(&result), expected).is_err() {
+                let resolved_result = subst.apply(&result);
+                if unify(&mut subst, &resolved_result, expected).is_err() {
                     rejected = Some(RejectionReason::Unification {
                         detail: "result type does not match expected type".to_string(),
                     });
@@ -165,14 +166,102 @@ pub fn resolve_call(
         1 => Resolution::Selected(survivors[0].0),
         _ => {
             // A survivor is undominated if NO other survivor strictly
-            // dominates it.
+            // dominates it. Specificity includes constraints: a candidate that
+            // is more specific on the type but more constrained is not
+            // automatically preferred.
             let undominated: Vec<usize> = survivors
                 .iter()
                 .filter(|(id, scheme)| {
                     !survivors.iter().any(|(other_id, other_scheme)| {
                         other_id != id && {
                             let mut probe = TypeVarSupply::new();
-                            dominates(&mut probe, other_scheme, scheme)
+                            crate::types::dominates_constrained(
+                                &mut probe,
+                                other_scheme,
+                                scheme,
+                            )
+                        }
+                    })
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            match undominated.len() {
+                1 => Resolution::Selected(undominated[0]),
+                _ => Resolution::Ambiguous {
+                    candidates: undominated,
+                },
+            }
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
+// Deferred overload resolution
+// --------------------------------------------------------------------------
+//
+// A curried call may not provide enough information to select a specialization
+// at the point the callee is named (`let p = parse`, or `x => convert x`).
+// Rather than forcing immediate resolution, inference records an
+// `OverloadRef`: a deferred obligation to resolve `name` against an expected
+// type once more information arrives (more arguments, or an expected result
+// type). The obligation must be discharged before generalization/lowering;
+// if it is still ambiguous at a `let` boundary, an annotation is requested.
+
+/// A deferred obligation to resolve an overloaded name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverloadRef {
+    /// The overloaded function name.
+    pub name: String,
+    /// The type variable the resolved value must have. As arguments or an
+    /// expected type constrain this variable, the set of viable
+    /// specializations shrinks.
+    pub expected: MonoType,
+    /// The specializations still viable when the ref was created (their ids).
+    pub candidates: Vec<usize>,
+}
+
+/// The result of forcing a deferred `OverloadRef` once `expected` is known.
+pub fn resolve_deferred(
+    supply: &mut TypeVarSupply,
+    set: &OverloadSet,
+    over: &OverloadRef,
+    final_expected: &MonoType,
+) -> Resolution {
+    // Re-resolve the still-viable candidates against the final expected type.
+    // The expected type is the FULL curried type of the (possibly partially
+    // applied) reference, so we unify it against each candidate's whole body
+    // rather than peeling arguments.
+    let mut survivors: Vec<(usize, TypeScheme)> = Vec::new();
+    let mut rejections = Vec::new();
+    for &id in &over.candidates {
+        let spec = &set.specializations[id];
+        let (body, _) = instantiate(supply, &spec.scheme);
+        let mut subst = Substitution::new();
+        match unify(&mut subst, &body, final_expected) {
+            Ok(()) => survivors.push((id, spec.scheme.clone())),
+            Err(e) => rejections.push((
+                id,
+                RejectionReason::Unification {
+                    detail: format!("{e}"),
+                },
+            )),
+        }
+    }
+    match survivors.len() {
+        0 => Resolution::NoMatch { rejections },
+        1 => Resolution::Selected(survivors[0].0),
+        _ => {
+            let undominated: Vec<usize> = survivors
+                .iter()
+                .filter(|(id, scheme)| {
+                    !survivors.iter().any(|(other_id, other_scheme)| {
+                        other_id != id && {
+                            let mut probe = TypeVarSupply::new();
+                            crate::types::dominates_constrained(
+                                &mut probe,
+                                other_scheme,
+                                scheme,
+                            )
                         }
                     })
                 })

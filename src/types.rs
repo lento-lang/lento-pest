@@ -692,6 +692,28 @@ pub fn dominates(supply: &mut TypeVarSupply, a: &TypeScheme, b: &TypeScheme) -> 
     is_instance(supply, b, a) && !is_instance(supply, a, b)
 }
 
+/// Strict specificity INCLUDING constraints: `a` dominates `b` iff
+/// `dominates(a, b)` holds on the bodies AND `a`'s constraint set is a subset
+/// of `b`'s (a more-constrained candidate is more specific only when it is
+/// also more specific on the underlying type). Constraints participate in the
+/// comparison: `∀a. Ord a => a -> a` and `∀a. a -> a` are incomparable unless
+/// one genuinely refines the other including its constraint context.
+pub fn dominates_constrained(
+    supply: &mut TypeVarSupply,
+    a: &TypeScheme,
+    b: &TypeScheme,
+) -> bool {
+    if !dominates(supply, a, b) {
+        return false;
+    }
+    // a's constraints must be a subset of b's (a is no MORE constrained than
+    // b in a way that would make it reject inputs b accepts). Compare by
+    // constraint name (a coarse but sound approximation for now).
+    a.constraints
+        .iter()
+        .all(|ca| b.constraints.iter().any(|cb| cb.name == ca.name))
+}
+
 /// Directional spec satisfaction: does the implementation scheme `imp` cover
 /// the required spec `spec`?
 ///

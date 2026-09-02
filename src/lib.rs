@@ -8,6 +8,7 @@ pub mod infer;
 mod intrinsics;
 pub mod parser;
 pub mod pprint;
+pub mod resolve;
 pub mod semantics;
 pub mod specialize;
 pub mod specs;
