@@ -368,6 +368,11 @@ impl FnDecl {
 /// single `let f = v1 => v2 => ... => match (v1, ..., vk) { ... }` (a lone
 /// clause desugars to plain curried lambdas). Statements that are not `fn`
 /// pass through unchanged.
+///
+/// NOTE: This adjacency-based desugaring is superseded by the semantic
+/// declaration-collection phase in `semantics` (which groups by lexical scope
+/// and name, independent of adjacency). It remains the evaluator's input path
+/// until type checking and typed-IR lowering land.
 pub fn desugar_program(program: &Program) -> Program {
     let stmts = &program.statements;
     let mut out = Vec::with_capacity(stmts.len());
