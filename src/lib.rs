@@ -7,6 +7,7 @@ pub mod eval;
 pub mod infer;
 mod intrinsics;
 pub mod parser;
+pub mod patterns;
 pub mod pprint;
 pub mod resolve;
 pub mod semantics;
