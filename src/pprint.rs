@@ -73,7 +73,7 @@ fn format_decl(out: &mut String, decl: &Decl) {
         Decl::Fn(f) => {
             let _ = write!(out, "fn {} ", f.name);
             for p in &f.params {
-                format_pattern(out, p);
+                format_fn_param(out, p);
                 out.push(' ');
             }
             if let Some(ty) = &f.ret {
@@ -81,12 +81,11 @@ fn format_decl(out: &mut String, decl: &Decl) {
                 format_type(out, ty);
                 out.push(' ');
             }
-            if matches!(f.body, Expr::Block(_)) {
-                format_expr(out, &f.body, Prec::Top);
-            } else {
-                let _ = write!(out, "= ");
-                format_expr(out, &f.body, Prec::Top);
-            }
+            // A block body still takes `=`: the header/body boundary must
+            // stay unambiguous (`fn f {` would misparse `{` as a record
+            // parameter).
+            let _ = write!(out, "= ");
+            format_expr(out, &f.body, Prec::Top);
             out.push('\n');
         }
     }
@@ -183,6 +182,19 @@ fn arrow_domain_str(t: &Ty) -> String {
 
 fn format_pattern(out: &mut String, pat: &Pattern) {
     format_pat_kind(out, &pat.kind, pat.annotation.as_ref());
+}
+
+/// A `fn` parameter: record/list destructuring is parenthesized so it can
+/// never be confused with the block body (e.g. `fn f ({x: a}) = ...`).
+fn format_fn_param(out: &mut String, pat: &Pattern) {
+    match &pat.kind {
+        PatKind::Record { .. } | PatKind::List(_) if pat.annotation.is_none() => {
+            out.push('(');
+            format_pattern(out, pat);
+            out.push(')');
+        }
+        _ => format_pattern(out, pat),
+    }
 }
 
 fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
@@ -413,6 +425,9 @@ fn format_call(out: &mut String, call: &CallExpr) {
     format_expr(out, base, Prec::Atom);
     for arg in args {
         out.push(' ');
+        // Records and blocks cannot be bare space-application arguments
+        // (the grammar reserves `f { ... }` so a `match`/`fn` brace body is
+        // unambiguous), so they are parenthesized like other compound args.
         let atomic = matches!(
             arg,
             Expr::Var(_)
@@ -421,8 +436,6 @@ fn format_call(out: &mut String, call: &CallExpr) {
                 | Expr::Index(_)
                 | Expr::Tuple(_)
                 | Expr::List(_)
-                | Expr::Record(_)
-                | Expr::Block(_)
                 | Expr::Match(_)
         );
         if atomic {
