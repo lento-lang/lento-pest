@@ -269,9 +269,10 @@ pub enum SpecOrigin {
     Inferred(Vec<Span>),
 }
 
-/// A callable type scheme. Quantified variable names are retained for
-/// canonicalization and diagnostics; a proper `MonoType`/`TypeScheme`
-/// representation replaces `Ty` bodies when inference lands.
+/// A callable type scheme. Quantified variables are `TypeVarId`s over a
+/// `MonoType` body (the internal inference representation from `types`);
+/// the legacy `ast::Ty`-bodied `TypeScheme` below is retained only until the
+/// inference pipeline switches the typed IR over.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeScheme {
     pub quantified: Vec<String>,
