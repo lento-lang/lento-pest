@@ -1,0 +1,303 @@
+// Partitioning a function group's clauses into specializations.
+//
+// For each `FunctionGroup`:
+//
+//   1. Every clause's principal type scheme is inferred (see `infer`).
+//   2. Schemes are canonicalized by alpha-renaming quantified variables.
+//   3. Clauses land in the same specialization when their schemes are
+//      *compatible*: they admit one shared principal scheme (a common
+//      generalization that both refine). Clauses whose annotations impose
+//      genuinely different nominal domains form different specializations.
+//   4. Different arity normally forms different specializations.
+//   5. `a -> Ast` and `bytes -> Ast` are NEVER merged merely because they
+//      unify: one is a deliberate strict specialization of the other.
+//   6. Value-shape variants that refine the SAME type stay together: `[]`
+//      and `[x, ...xs]` both refine `[a]`, so they share one specialization.
+//
+// The result is an `OverloadSet` of `Specialization`s, each with one
+// principal scheme and the clauses (in source order) that implement it.
+
+use std::collections::BTreeMap;
+use std::fmt;
+
+use crate::infer::{infer_function_group, InferCtx};
+use crate::semantics::FunctionGroup;
+use crate::types::{
+    alpha_equiv, canonicalize, MonoType, TypeEnv, TypeScheme, TypeVarSupply,
+};
+
+/// One clause assigned to a specialization, with its inferred type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpecializedClause {
+    /// The clause's own inferred type (ungeneralized, resolved).
+    pub ty: MonoType,
+    /// The clause's parameter patterns (value dispatch), in source order.
+    pub patterns: Vec<crate::ast::Pattern>,
+    /// Statement index of the source clause, for diagnostics.
+    pub source_index: usize,
+    /// Whether any parameter carries an explicit type annotation. An
+    /// annotation is a deliberate specialization boundary: a clause annotated
+    /// `(x : bytes)` never merges with the un-annotated generic `x`, whereas
+    /// a *literal* pattern (`0`) is a value-shape variant that does merge.
+    pub has_annotation: bool,
+}
+
+/// One specialization: clauses sharing a single principal callable scheme.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Specialization {
+    /// Stable identity within the overload set (its index).
+    pub id: usize,
+    /// The principal scheme every clause in this specialization refines.
+    pub scheme: TypeScheme,
+    /// Whether this specialization's domain is fixed by an explicit
+    /// annotation (a deliberate specialization boundary).
+    pub annotated: bool,
+    /// Clauses in source (pattern-dispatch) order.
+    pub clauses: Vec<SpecializedClause>,
+}
+
+/// All specializations of one function name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OverloadSet {
+    pub name: String,
+    pub specializations: Vec<Specialization>,
+}
+
+/// A clause whose scheme is incompatible with every other clause in the
+/// group is fine (it is its own specialization). Partitioning only fails when
+/// two clauses in the SAME tentative specialization cannot share a principal
+/// scheme — but that cannot happen by construction here, so partitioning is
+/// total. Diagnostics about unreachable patterns / non-exhaustiveness live in
+/// the pattern phase, not here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PartitionError {
+    pub message: String,
+}
+
+impl fmt::Display for PartitionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for PartitionError {}
+
+/// The arity of a curried function type: the number of leading `->`s.
+fn arity(ty: &MonoType) -> usize {
+    match ty {
+        MonoType::Function(_, to) => 1 + arity(to),
+        _ => 0,
+    }
+}
+
+/// The least generalization (anti-unification) of two monotypes: the most
+/// specific type that has BOTH as instances. Correlation is tracked so that
+/// the SAME pair of variables collapses to one generalization variable
+/// (preserving `a -> a` structure) while DISTINCT pairs stay distinct.
+/// Returns `None` for genuinely incompatible nominal/structural domains.
+fn least_generalization(
+    a: &MonoType,
+    b: &MonoType,
+    map: &mut BTreeMap<(u32, u32), u32>,
+    next: &mut u32,
+) -> Option<MonoType> {
+    match (a, b) {
+        // Two variables: correlated by the ordered pair of their ids.
+        (MonoType::Var(x), MonoType::Var(y)) => {
+            let id = *map.entry((*x, *y)).or_insert_with(|| {
+                let id = *next;
+                *next += 1;
+                id
+            });
+            Some(MonoType::Var(id))
+        }
+        // A variable vs a concrete type: the concrete side is a refinement of
+        // the variable, so the generalization is a fresh variable. Correlated
+        // on the variable's id so the same var stays one variable.
+        (MonoType::Var(x), other) | (other, MonoType::Var(x)) => {
+            let other_key = match other {
+                MonoType::Var(v) => *v,
+                _ => u32::MAX, // any non-var refines to a fresh var keyed by `x`
+            };
+            let id = *map.entry((*x, other_key)).or_insert_with(|| {
+                let id = *next;
+                *next += 1;
+                id
+            });
+            Some(MonoType::Var(id))
+        }
+        (MonoType::Constructor(n1, a1), MonoType::Constructor(n2, a2)) => {
+            if n1 != n2 || a1.len() != a2.len() {
+                return None;
+            }
+            let mut args = Vec::with_capacity(a1.len());
+            for (x, y) in a1.iter().zip(a2.iter()) {
+                args.push(least_generalization(x, y, map, next)?);
+            }
+            Some(MonoType::Constructor(n1.clone(), args))
+        }
+        (MonoType::Function(f1, t1), MonoType::Function(f2, t2)) => Some(MonoType::Function(
+            Box::new(least_generalization(f1, f2, map, next)?),
+            Box::new(least_generalization(t1, t2, map, next)?),
+        )),
+        (MonoType::Tuple(x), MonoType::Tuple(y)) => {
+            if x.len() != y.len() {
+                return None;
+            }
+            let mut items = Vec::with_capacity(x.len());
+            for (a, b) in x.iter().zip(y.iter()) {
+                items.push(least_generalization(a, b, map, next)?);
+            }
+            Some(MonoType::Tuple(items))
+        }
+        (MonoType::List(x), MonoType::List(y)) => {
+            Some(MonoType::List(Box::new(least_generalization(x, y, map, next)?)))
+        }
+        (MonoType::Ref(x), MonoType::Ref(y)) => {
+            Some(MonoType::Ref(Box::new(least_generalization(x, y, map, next)?)))
+        }
+        (MonoType::Mut(x), MonoType::Mut(y)) => {
+            Some(MonoType::Mut(Box::new(least_generalization(x, y, map, next)?)))
+        }
+        _ => None,
+    }
+}
+
+/// Does `strict` strictly refine `general` at a *top-level parameter domain*:
+/// a leading parameter is a concrete nominal constructor where `general` has
+/// a bare variable? This detects a deliberate type specialization like
+/// `bytes -> Ast` over `a -> Ast` or `(x : int)` over `x`, while ignoring
+/// constructors nested inside a list/tuple/return (value-shape variants such
+/// as the literal `0` refining `[a]`'s element).
+fn is_strict_refinement(strict: &MonoType, general: &MonoType) -> bool {
+    // Walk the curried parameter spine (the `from` of each leading `->`).
+    fn domain(s: &MonoType, g: &MonoType) -> bool {
+        match (s, g) {
+            // Top-level domain: concrete vs variable => strict refinement.
+            (MonoType::Constructor(_, _), MonoType::Var(_)) => true,
+            (MonoType::Function(sf, st), MonoType::Function(gf, gt)) => {
+                domain(sf, gf) || domain(st, gt)
+            }
+            _ => false,
+        }
+    }
+    domain(strict, general)
+}
+
+/// Do two clause schemes belong to the same specialization?
+///
+/// They share a specialization iff they refine ONE common principal scheme
+/// without either being a *strict nominal* specialization of the other:
+///
+///   - alpha-equivalent schemes merge;
+///   - value-shape variants that refine the same type merge (`[]` and
+///     `[x, ...xs]` both refine `[a]`);
+///   - a strict nominal specialization (`bytes -> Ast` over `a -> Ast`, or
+///     `(x : int)` over `x`) is its OWN specialization — never merged;
+///   - genuinely different nominal domains (`int` vs `str`) have no common
+///     generalization and stay distinct.
+/// Do two clause schemes belong to the same specialization, given whether
+/// each clause's domain was fixed by an explicit annotation?
+///
+///   - alpha-equivalent schemes merge;
+///   - value-shape variants (`[]` vs `[x, ...xs]`, or literal `0` vs var `n`)
+///     refine the same type and merge — a literal pattern is NOT a
+///     specialization boundary;
+///   - an explicit annotation (`(x : bytes)`) IS a deliberate boundary: an
+///     annotated clause never merges with a differently-typed clause, generic
+///     or otherwise;
+///   - genuinely different nominal domains have no common generalization.
+fn same_specialization(
+    supply: &mut TypeVarSupply,
+    a: &TypeScheme,
+    a_annotated: bool,
+    b: &TypeScheme,
+    b_annotated: bool,
+) -> bool {
+    let _ = supply;
+    if alpha_equiv(a, b) {
+        // Same shape. Still split if exactly one side is annotated with a
+        // concrete domain — but alpha-equivalence means the domains match, so
+        // an annotated clause only merges with an identically-typed one.
+        // If one is annotated and the other is not but types are equal, the
+        // annotation is redundant; merging is fine.
+        return true;
+    }
+    // An explicit annotation is a deliberate specialization boundary: an
+    // annotated clause never merges with a clause of a different type.
+    if a_annotated || b_annotated {
+        return false;
+    }
+    // Neither annotated: merge iff they admit one common principal scheme (a
+    // least generalization exists — i.e. no incompatible nominal domains).
+    // Value-shape variants unify structurally even when neither is an
+    // HM-instance of the other.
+    let mut map = BTreeMap::new();
+    let mut next = 10_000;
+    least_generalization(&a.body, &b.body, &mut map, &mut next).is_some()
+}
+
+/// Partition a function group's clauses into specializations.
+///
+/// Clauses are processed in source order; each joins the first
+/// specialization whose scheme it is compatible with, else opens a new one.
+/// Arity is part of family identity: clauses of different arity never share
+/// a specialization.
+pub fn partition(
+    ctx: &mut InferCtx,
+    group: &FunctionGroup,
+    env: &TypeEnv,
+) -> Result<OverloadSet, PartitionError> {
+    let inferred = infer_function_group(ctx, group, env).map_err(|e| PartitionError {
+        message: format!("type error in `{}`: {e}", group.name),
+    })?;
+
+    let mut specializations: Vec<Specialization> = Vec::new();
+
+    for (i, clause_ty) in inferred.clause_types.iter().enumerate() {
+        let clause_arity = arity(clause_ty);
+        let has_annotation = group
+            .raw_clauses
+            .get(i)
+            .map(|c| c.params.iter().any(|p| p.annotation.is_some()))
+            .unwrap_or(false);
+        let scheme = canonicalize(&crate::types::generalize(env, clause_ty, vec![]));
+
+        let mut placed = false;
+        for spec in specializations.iter_mut() {
+            if arity(&spec.scheme.body) != clause_arity {
+                continue; // arity is part of family identity
+            }
+            let mut supply = TypeVarSupply::new();
+            if same_specialization(&mut supply, &spec.scheme, spec.annotated, &scheme, has_annotation) {
+                spec.clauses.push(SpecializedClause {
+                    ty: clause_ty.clone(),
+                    patterns: inferred.clause_patterns[i].clone(),
+                    source_index: group.source_indices.get(i).copied().unwrap_or(i),
+                    has_annotation,
+                });
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            let id = specializations.len();
+            specializations.push(Specialization {
+                id,
+                scheme,
+                annotated: has_annotation,
+                clauses: vec![SpecializedClause {
+                    ty: clause_ty.clone(),
+                    patterns: inferred.clause_patterns[i].clone(),
+                    source_index: group.source_indices.get(i).copied().unwrap_or(i),
+                    has_annotation,
+                }],
+            });
+        }
+    }
+
+    Ok(OverloadSet {
+        name: group.name.clone(),
+        specializations,
+    })
+}

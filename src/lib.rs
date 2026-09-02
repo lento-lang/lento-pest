@@ -9,4 +9,5 @@ mod intrinsics;
 pub mod parser;
 pub mod pprint;
 pub mod semantics;
+pub mod specialize;
 pub mod types;
