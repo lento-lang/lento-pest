@@ -163,39 +163,6 @@ fn least_generalization(
     }
 }
 
-/// Does `strict` strictly refine `general` at a *top-level parameter domain*:
-/// a leading parameter is a concrete nominal constructor where `general` has
-/// a bare variable? This detects a deliberate type specialization like
-/// `bytes -> Ast` over `a -> Ast` or `(x : int)` over `x`, while ignoring
-/// constructors nested inside a list/tuple/return (value-shape variants such
-/// as the literal `0` refining `[a]`'s element).
-fn is_strict_refinement(strict: &MonoType, general: &MonoType) -> bool {
-    // Walk the curried parameter spine (the `from` of each leading `->`).
-    fn domain(s: &MonoType, g: &MonoType) -> bool {
-        match (s, g) {
-            // Top-level domain: concrete vs variable => strict refinement.
-            (MonoType::Constructor(_, _), MonoType::Var(_)) => true,
-            (MonoType::Function(sf, st), MonoType::Function(gf, gt)) => {
-                domain(sf, gf) || domain(st, gt)
-            }
-            _ => false,
-        }
-    }
-    domain(strict, general)
-}
-
-/// Do two clause schemes belong to the same specialization?
-///
-/// They share a specialization iff they refine ONE common principal scheme
-/// without either being a *strict nominal* specialization of the other:
-///
-///   - alpha-equivalent schemes merge;
-///   - value-shape variants that refine the same type merge (`[]` and
-///     `[x, ...xs]` both refine `[a]`);
-///   - a strict nominal specialization (`bytes -> Ast` over `a -> Ast`, or
-///     `(x : int)` over `x`) is its OWN specialization — never merged;
-///   - genuinely different nominal domains (`int` vs `str`) have no common
-///     generalization and stay distinct.
 /// Do two clause schemes belong to the same specialization, given whether
 /// each clause's domain was fixed by an explicit annotation?
 ///

@@ -615,6 +615,23 @@ pub fn is_instance(supply: &mut TypeVarSupply, general: &TypeScheme, instance: &
     matches(&general_body, &instance_body, &matchable, &mut subst)
 }
 
+/// Is `instance` a *permissive* instance of `general`: every use allowed by
+/// `general` is allowed by `instance`? Unlike `is_instance`, `instance`'s own
+/// quantified variables are flexible (a MORE-general implementation may
+/// satisfy a more-specific contract: the polymorphic identity satisfies
+/// `int -> int`). Used for spec satisfaction.
+pub fn is_permissive_instance(
+    supply: &mut TypeVarSupply,
+    general: &TypeScheme,
+    instance: &TypeScheme,
+) -> bool {
+    // Both sides instantiated with fresh flexible variables; unify.
+    let (instance_body, _) = instantiate(supply, instance);
+    let (general_body, _) = instantiate(supply, general);
+    let mut subst = Substitution::new();
+    unify(&mut subst, &general_body, &instance_body).is_ok()
+}
+
 /// One-way matching: bind `left`'s matchable variables (via `subst`) so that
 /// `left` becomes structurally equal to the rigid `right`. Only variables in
 /// `matchable` may be bound; all other variables are rigid constants and are
