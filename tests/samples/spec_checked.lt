@@ -1,0 +1,18 @@
+spec double:
+    all a.
+    a -> a
+
+fn double x = x + x
+
+assert (double 21 == 42)
+assert (double 1.5 == 3.0)
+spec identity:
+    all a.
+    a -> a
+
+fn identity x = x
+
+assert (identity 5 == 5)
+assert (identity "x" == "x")
+println (double 21)
+println (identity "checked")

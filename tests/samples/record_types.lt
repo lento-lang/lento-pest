@@ -1,0 +1,21 @@
+type Point = {x: int, y: int}
+
+let origin : Point = {x: 0, y: 0}
+
+let moved : Point = {...origin, x: 5}
+
+fn getx r = r.x
+
+fn manhattan p = p.x + p.y
+
+assert (getx moved == 5)
+assert (manhattan moved == 5)
+assert (manhattan {x: 1, y: 2} == 3)
+fn swap (p : Point) = {x: p.y, y: p.x}
+
+let flipped = swap moved
+
+assert (flipped.x == 0)
+assert (flipped.y == 5)
+assert (origin.x == 0)
+println (manhattan flipped)

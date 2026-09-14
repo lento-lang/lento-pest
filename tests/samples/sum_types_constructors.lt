@@ -1,0 +1,33 @@
+// Sum types with named constructors: `type Option a = Some a | None`.
+type Option a = Some a | None
+
+fn safe_head xs = match xs {
+    [] => None
+    [x, ...rest] => Some x
+}
+
+let first = safe_head [10, 20]
+
+let empty = safe_head []
+
+fn describe opt = match opt {
+    Some v => concat "some: " (to_string v)
+    None => "none"
+}
+
+fn from_option opt default = match opt {
+    Some v => v
+    None => default
+}
+
+assert (describe first == "some: 10")
+assert (describe empty == "none")
+assert (from_option first 0 == 10)
+assert (from_option empty 0 == 0)
+
+// Type application is juxtaposed: `Option int`, not `Option<int>`.
+let annotated : Option int = Some 3
+assert (from_option annotated 0 == 3)
+
+println (describe first)
+println (describe empty)

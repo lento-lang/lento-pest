@@ -3,8 +3,8 @@ let point = { x: 3, y: 4 }
 
 let describe = pt => match pt {
     { x: 0, y: 0 } => "zero"
-    { x: a, y: b } => a + b
-    _ => 0
+    { x: a, y: b } => to_string (a + b)
+    _ => "other"
 }
 
 let get_x = pt => match pt {
@@ -18,7 +18,7 @@ let rest_keys = pt => match pt {
 }
 
 assert (describe origin == "zero")
-assert (describe point == 7)
+assert (describe point == "7")
 assert (get_x point == 3)
 assert (rest_keys point == 1)
 
