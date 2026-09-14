@@ -4,9 +4,21 @@
 // expression. Expressions are an enum whose variants are small struct types.
 
 /// A parsed Lento program: an ordered list of statements.
+///
+/// `spans` holds one source position per statement (line, col, both 1-based),
+/// aligned with `statements`. It is used by the type checker for error
+/// locations; `desugar_program` preserves the alignment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub statements: Vec<Stmt>,
+    pub spans: Vec<Span>,
+}
+
+/// A 1-based source position.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Span {
+    pub line: usize,
+    pub col: usize,
 }
 
 /// A top-level statement: either a declaration or a bare expression.
@@ -41,10 +53,12 @@ pub struct SpecDecl {
     pub ty: SpecType,
 }
 
-/// `type name = <type>`
+/// `type name params* = <type>`
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypeDecl {
     pub name: String,
+    /// Type parameters bound on the left-hand side (`type Option a = ...`).
+    pub params: Vec<String>,
     pub ty: Ty,
 }
 
@@ -104,6 +118,21 @@ pub enum Ty {
     Ref(Box<Ty>),
     Mut(Box<Ty>),
     NamedBinder { name: String, ty: Box<Ty> },
+    /// `[int | str]` or `[Some a | None]` — a sum type declaration body.
+    Sum(Vec<SumAlt>),
+    /// `{ a: int, b: bool }` — a record type.
+    RecordType(Vec<(String, Ty)>),
+}
+
+/// One alternative of a sum type: an uppercase constructor with an optional
+/// payload type (`Some a`, `None`) or a bare member type (`int`, `str`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SumAlt {
+    Ctor {
+        name: String,
+        payload: Option<Ty>,
+    },
+    Bare(Ty),
 }
 
 /// A left-value pattern: a shape that a value is matched or bound against.
@@ -135,6 +164,13 @@ pub enum PatKind {
     Record {
         fields: Vec<RecordField>,
         rest: Option<String>,
+    },
+    /// `Some x` — an uppercase constructor pattern with a payload pattern.
+    /// Bare uppercase names (`None`) are parsed as `Var` and resolved to
+    /// constructor matches by the checker/evaluator.
+    Constructor {
+        name: String,
+        payload: Option<Box<Pattern>>,
     },
 }
 
@@ -371,11 +407,13 @@ impl FnDecl {
 pub fn desugar_program(program: &Program) -> Program {
     let stmts = &program.statements;
     let mut out = Vec::with_capacity(stmts.len());
+    let mut spans = Vec::with_capacity(program.spans.len());
     let mut i = 0;
     while i < stmts.len() {
         // Only top-level `fn` clauses are considered for grouping.
         match &stmts[i] {
             Stmt::Decl(Decl::Fn(f)) => {
+                let span = program.spans.get(i).copied().unwrap_or(Span { line: 0, col: 0 });
                 let name = f.name.clone();
                 let arity = f.params.len();
                 let mut clauses = vec![(f.params.clone(), f.ret.clone(), f.body.clone())];
@@ -403,15 +441,17 @@ pub fn desugar_program(program: &Program) -> Program {
                     grouped_fn(name, clauses)
                 };
                 out.push(Stmt::Decl(Decl::Let(letdecl)));
+                spans.push(span);
                 i = j;
             }
             _ => {
                 out.push(stmts[i].clone());
+                spans.push(program.spans.get(i).copied().unwrap_or(Span { line: 0, col: 0 }));
                 i += 1;
             }
         }
     }
-    Program { statements: out }
+    Program { statements: out, spans }
 }
 
 /// Group multiple `fn` clauses of the same name and arity into a single
@@ -505,12 +545,13 @@ pub fn param_type(p: &Pattern) -> Option<Ty> {
             }
             Some(Ty::Tuple(tys))
         }
-        // Literals, wildcards, lists, spread and records do not carry
-        // recoverable element types without more type inference.
-        PatKind::Lit(_)
-        | PatKind::Wildcard
-        | PatKind::List(_)
-        | PatKind::Spread(_)
-        | PatKind::Record { .. } => None,
-    }
+    // Literals, wildcards, lists, spread, records and constructors do not
+    // carry recoverable element types without more type inference.
+    PatKind::Lit(_)
+    | PatKind::Wildcard
+    | PatKind::List(_)
+    | PatKind::Spread(_)
+    | PatKind::Record { .. }
+    | PatKind::Constructor { .. } => None,
+}
 }

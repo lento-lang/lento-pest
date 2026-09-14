@@ -13,10 +13,9 @@
 // 1. The parser folds all binary expressions flat and left-associative with
 //    no operator precedence. A mixed-precedence expression such as
 //    `1 + 2 * 3` binds as `(1 + 2) * 3`; the printer restores grouping with
-//    parentheses, but Lento has no transparent single-expression parens
-//    (a bare `(expr)` is a 1-tuple), so such a recovered tree cannot be
-//    re-encoded losslessly. Same-precedence and unambiguous programs
-//    round-trip exactly.
+//    parentheses, and since a single parenthesized expression `(e)` is a
+//    grouped expression (not a 1-tuple), such trees re-encode losslessly.
+//    Same-precedence and unambiguous programs round-trip exactly.
 // 2. A `fn` clause following a spec's `where` block is absorbed into the
 //    where conditions (no statement boundary after a where block), so such
 //    a program is not printer-round-trippable either.
@@ -49,7 +48,11 @@ fn format_decl(out: &mut String, decl: &Decl) {
             format_spec_type(out, &spec.ty);
         }
         Decl::Type(t) => {
-            let _ = write!(out, "type {} = ", t.name);
+            let _ = write!(out, "type {}", t.name);
+            for param in &t.params {
+                let _ = write!(out, " {param}");
+            }
+            let _ = write!(out, " = ");
             format_type(out, &t.ty);
             out.push('\n');
         }
@@ -170,6 +173,26 @@ fn format_type(out: &mut String, ty: &Ty) {
             format_type(out, ty);
             out.push(')');
         }
+        Ty::Sum(alts) => {
+            let parts: Vec<String> = alts
+                .iter()
+                .map(|alt| match alt {
+                    SumAlt::Ctor { name, payload } => match payload {
+                        Some(p) => format!("{name} {}", type_str(p)),
+                        None => name.clone(),
+                    },
+                    SumAlt::Bare(ty) => type_str(ty),
+                })
+                .collect();
+            let _ = write!(out, "[{}]", parts.join(" | "));
+        }
+        Ty::RecordType(fields) => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(name, ty)| format!("{name}: {}", type_str(ty)))
+                .collect();
+            let _ = write!(out, "{{{}}}", parts.join(", "));
+        }
     }
 }
 
@@ -221,6 +244,13 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
             let body = format!("{{{}}}", inner.join(", "));
             render_pat_atom(out, &body, annotation);
         }
+        PatKind::Constructor { name, payload } => match payload {
+            Some(p) => {
+                let body = format!("{name} {}", pat_str(p));
+                render_pat_atom(out, &body, annotation);
+            }
+            None => render_pat_atom(out, name, annotation),
+        },
     }
 }
 
@@ -486,7 +516,8 @@ fn format_lit(lit: &Lit) -> String {
     match lit {
         Lit::Bool(b) => b.to_string(),
         Lit::Int(i) => i.to_string(),
-        Lit::Float(f) => f.to_string(),
+        // Debug formatting keeps a trailing `.0` so floats round-trip.
+        Lit::Float(f) => format!("{f:?}"),
         Lit::Str(s) => format!("\"{}\"", s),
     }
 }

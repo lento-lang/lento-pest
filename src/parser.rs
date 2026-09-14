@@ -12,7 +12,25 @@ pub struct LentoParser;
 pub fn parse_program(source: &str) -> Result<Program, pest::error::Error<Rule>> {
     let pairs = LentoParser::parse(Rule::program, source)?;
     let root = pairs.into_iter().next().unwrap(); // the root `program` pair
-    Ok(program(root.into_inner()))
+    Ok(program(root.into_inner(), source))
+}
+
+/// Convert a byte offset into a 1-based line/column position.
+fn span_at(source: &str, offset: usize) -> Span {
+    let mut line = 1;
+    let mut col = 1;
+    for (i, ch) in source.char_indices() {
+        if i >= offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+    }
+    Span { line, col }
 }
 
 /// Parse into raw pest pairs (useful for debugging the grammar).
@@ -28,17 +46,20 @@ pub fn print_pairs(pairs: Pairs<'_, Rule>) {
 // Top level
 // --------------------------------------------------------------------------
 
-fn program(pairs: Pairs<'_, Rule>) -> Program {
+fn program(pairs: Pairs<'_, Rule>, source: &str) -> Program {
     let mut statements = Vec::new();
+    let mut spans = Vec::new();
     for pair in pairs {
         if pair.as_rule() == Rule::EOI {
             continue;
         }
-        if let Some(stmt) = stmt(pair) {
+        if let Some(stmt) = stmt(pair.clone()) {
+            let pos = pair.as_span().start();
+            spans.push(span_at(source, pos));
             statements.push(stmt);
         }
     }
-    Program { statements }
+    Program { statements, spans }
 }
 
 fn stmt(pair: Pair<'_, Rule>) -> Option<Stmt> {
@@ -87,6 +108,11 @@ fn quantifier(pair: Pair<'_, Rule>) -> Quantifier {
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::type_var => vars.push(inner.as_str().to_string()),
+            Rule::constraints => {
+                for c in inner.into_inner() {
+                    constraints.push(constraint(c));
+                }
+            }
             Rule::constraint => constraints.push(constraint(inner)),
             _ => {}
         }
@@ -112,14 +138,62 @@ fn where_clause(pair: Pair<'_, Rule>) -> Vec<Expr> {
 
 fn type_decl(pair: Pair<'_, Rule>) -> TypeDecl {
     let mut name = String::new();
-    let mut ty = Ty::Tuple(Vec::new());
+    let mut params = Vec::new();
+    let mut ty: Option<Ty> = None;
+    let mut extra_alts: Vec<Ty> = Vec::new();
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::identifier => name = inner.as_str().to_string(),
-            _ => ty = type_(inner),
+            Rule::type_param => params.push(inner.as_str().to_string()),
+            Rule::ty_alt => {
+                let alt = type_(inner.into_inner().next().unwrap());
+                extra_alts.push(alt);
+            }
+            _ => {
+                if ty.is_none() {
+                    ty = Some(type_(inner));
+                }
+            }
         }
     }
-    TypeDecl { name, ty }
+    // Unbracketed alternation (`int | str`, `Some a | None`): more than one
+    // right-hand side means a sum type. Uppercase alternatives are
+    // constructors; anything else is a bare member type.
+    let ty = match ty {
+        Some(ty) if extra_alts.is_empty() => ty,
+        Some(ty) => {
+            let mut alts = vec![alternative_from_ty(ty)];
+            for alt in extra_alts {
+                alts.push(alternative_from_ty(alt));
+            }
+            Ty::Sum(alts)
+        }
+        None => Ty::Tuple(Vec::new()),
+    };
+    TypeDecl { name, params, ty }
+}
+
+/// Convert one right-hand-side type of an unbracketed alternation into a sum
+/// alternative: `Some`, `Some a` are constructors; `int` is a bare member.
+fn alternative_from_ty(ty: Ty) -> SumAlt {
+    match ty {
+        Ty::Named { name, args }
+            if name.starts_with(|c: char| c.is_ascii_uppercase()) =>
+        {
+            match args.len() {
+                0 => SumAlt::Ctor { name, payload: None },
+                1 => SumAlt::Ctor {
+                    name,
+                    payload: Some(args.into_iter().next().unwrap()),
+                },
+                _ => SumAlt::Ctor {
+                    name,
+                    payload: Some(Ty::Tuple(args)),
+                },
+            }
+        }
+        other => SumAlt::Bare(other),
+    }
 }
 
 fn let_decl(pair: Pair<'_, Rule>) -> LetDecl {
@@ -247,9 +321,19 @@ fn pat_elem(pair: Pair<'_, Rule>) -> Pattern {
     pat
 }
 
-/// Build a `Pattern` from an atom (identifier, `_`, literal, list, record).
+/// Build a `Pattern` from an atom (constructor, identifier, `_`, literal,
+/// list, record).
 fn atom_pattern(pair: Pair<'_, Rule>) -> Pattern {
     match pair.as_rule() {
+        Rule::constructor_pattern => {
+            let mut inner = pair.into_inner();
+            let name = inner.next().unwrap().as_str().to_string();
+            let payload = inner.next().map(|p| Box::new(pattern(p)));
+            Pattern {
+                annotation: None,
+                kind: PatKind::Constructor { name, payload },
+            }
+        }
         Rule::identifier => Pattern {
             annotation: None,
             kind: PatKind::Var(pair.as_str().to_string()),
@@ -686,17 +770,29 @@ fn named_binder(pair: Pair<'_, Rule>) -> Ty {
 
 fn type_base(pair: Pair<'_, Rule>) -> Ty {
     let kids: Vec<Pair<'_, Rule>> = pair.into_inner().collect();
-    if kids.is_empty() {
-        return Ty::Tuple(Vec::new()); // unit `()`
-    }
-    let first = &kids[0];
+    let first = match kids.first() {
+        Some(first) => first,
+        None => return Ty::Tuple(Vec::new()), // unit `()` — `type_base` with no kids
+    };
     match first.as_rule() {
+        Rule::ty_sum => ty_sum(first.clone()),
+        Rule::ty_record => ty_record(first.clone()),
         Rule::identifier => {
             let name = first.as_str().to_string();
             let mut args = Vec::new();
             for k in kids.iter().skip(1) {
-                for arg in k.clone().into_inner() {
-                    args.push(type_(arg));
+                match k.as_rule() {
+                    Rule::type_args => {
+                        for arg in k.clone().into_inner() {
+                            args.push(type_(arg));
+                        }
+                    }
+                    Rule::ty_app_args => {
+                        for arg in k.clone().into_inner() {
+                            args.push(type_(arg));
+                        }
+                    }
+                    _ => {}
                 }
             }
             Ty::Named { name, args }
@@ -705,4 +801,44 @@ fn type_base(pair: Pair<'_, Rule>) -> Ty {
         Rule::named_binder => named_binder(first.clone()), // `(x: T)`
         _ => Ty::List(Box::new(type_(first.clone()))), // `[T]`
     }
+}
+
+/// `[int | str]`, `[Some a | None]` — alternatives separated by `|`.
+///
+/// A bare uppercase identifier cannot be distinguished from a nullary
+/// constructor by the grammar, so uppercase alternatives are always
+/// constructors (`None`), and bare member types are lowercase/builtin names.
+fn ty_sum(pair: Pair<'_, Rule>) -> Ty {
+    let alts = pair
+        .into_inner()
+        .map(|alt| match alt.as_rule() {
+            Rule::sum_ctor_alt => {
+                let mut inner = alt.into_inner();
+                let name = inner.next().unwrap().as_str().to_string();
+                let payload = inner.next().map(type_);
+                SumAlt::Ctor { name, payload }
+            }
+            _ => match type_(alt) {
+                Ty::Named { name, args } if name.starts_with(|c: char| c.is_ascii_uppercase()) && args.is_empty() => {
+                    SumAlt::Ctor { name, payload: None }
+                }
+                bare => SumAlt::Bare(bare),
+            },
+        })
+        .collect();
+    Ty::Sum(alts)
+}
+
+/// `{ a: int, b: bool }` — a record type.
+fn ty_record(pair: Pair<'_, Rule>) -> Ty {
+    let fields = pair
+        .into_inner()
+        .map(|field| {
+            let mut inner = field.into_inner();
+            let name = inner.next().unwrap().as_str().to_string();
+            let ty = type_(inner.next().unwrap());
+            (name, ty)
+        })
+        .collect();
+    Ty::RecordType(fields)
 }

@@ -11,7 +11,9 @@ fn roundtrip_ok(src: &str) -> bool {
     };
     let printed = format_program(&ast1);
     match parse_program(&printed) {
-        Ok(ast2) => ast1 == ast2,
+        // Compare statements only: spans record source positions and differ
+        // between the original and the normalized formatting.
+        Ok(ast2) => ast1.statements == ast2.statements,
         Err(_) => false,
     }
 }
@@ -35,6 +37,11 @@ const SAMPLES: &[&str] = &[
     "records",
     "spec_where",
     "tuple_destructuring",
+    "sum_types_constructors",
+    "sum_types_bare",
+    "record_types",
+    "type_synonyms",
+    "spec_checked",
 ];
 
 #[test]

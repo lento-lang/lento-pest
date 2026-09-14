@@ -47,8 +47,14 @@ declaration    = _{ spec_decl | type_decl | let_decl | fn_clause }
 // `spec name : spec_type`
 spec_decl      = { "spec" ~ identifier ~ ":" ~ spec_type }
 
-// `type name  = <type>`
-type_decl      = { "type" ~ identifier ~ "=" ~ ltype }
+// `type name params* = <type>` — the right-hand side is either a plain type
+// (a synonym), a `[alt | alt]` sum, or an unbracketed alternation
+// `alt | alt` (general sums: `int | str`; constructor sums: `Some a | None`).
+// In unbracketed alternations an uppercase identifier is always a
+// constructor; use the bracketed form for applied types as alternatives.
+type_decl      = { "type" ~ identifier ~ type_param* ~ "=" ~ ltype ~ ty_alt* }
+ty_alt         = { "|" ~ NEWLINE* ~ ltype }
+type_param     = @{ type_var }
 
 // `let [mut] pattern [: type]  = expression`
 let_decl       = { "let" ~ let_mut? ~ pattern ~ (":" ~ ltype)? ~ "=" ~ expression }
@@ -87,8 +93,30 @@ named_binder = { "(" ~ identifier ~ ":" ~ type_atom ~ ")" }
 type_atom    = _{ ty_ref | ty_mut | type_base }
 ty_ref       = { "ref" ~ type_atom }
 ty_mut       = { "mut" ~ type_atom }
-type_base    = { identifier ~ type_args? | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")" | "[" ~ type_atom ~ "]" }
+// Sum types `[int | str]` require at least one `|`, so `[T]` stays a list
+// type. A sum alternative is either an uppercase constructor `Name payload`
+// or a bare type. Record types `{ a: int, b: bool }` list named fields.
+type_base    = {
+      ty_sum
+    | identifier ~ type_args? ~ ty_app_args?
+    | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
+    | "[" ~ type_atom ~ "]"
+    | ty_record
+}
 type_args    = { "<" ~ type_atom ~ ("," ~ type_atom)* ~ ">" }
+ty_app_args  = { type_atom+ }
+ty_sum       = {
+    "[" ~ NEWLINE* ~ sum_alternative
+        ~ (NEWLINE* ~ "|" ~ NEWLINE* ~ sum_alternative)+
+        ~ NEWLINE* ~ "]"
+}
+sum_alternative = _{ sum_ctor_alt | type_atom }
+sum_ctor_alt    = { constructor_name ~ type_atom }
+constructor_name = @{ 'A'..'Z' ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
+ty_record       = {
+    "{" ~ NEWLINE* ~ (ty_record_field ~ ("," ~ NEWLINE* ~ ty_record_field)*)? ~ NEWLINE* ~ "}"
+}
+ty_record_field = { identifier ~ ":" ~ type_atom }
 
 // --------------------------------------------------------------------------
 // Patterns (left-value shapes: used in `let`, function params, lambda params,
@@ -103,7 +131,14 @@ pattern_alt     = {
     | atom_pattern
     | "(" ~ pattern ~ ")"                                // grouped: (a)
 }
-atom_pattern    = _{ identifier | "_" | literal_pattern | list_pattern | record_pattern }
+// `boolean` must precede `identifier`: otherwise `true`/`false` parse as
+// variable patterns and the first literal arm always wins.
+atom_pattern    = _{ constructor_pattern | literal_pattern | identifier | "_" | list_pattern | record_pattern }
+// `Some x` — an uppercase constructor applied to one payload pattern. Bare
+// uppercase names (`None`) stay identifier patterns and are resolved against
+// the constructor table at check/eval time.
+constructor_pattern = { constructor_name ~ ctor_payload }
+ctor_payload        = _{ pattern }
 literal_pattern = _{ boolean | number | string }
 pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
 list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "]" }
@@ -150,8 +185,11 @@ match_arm      = { pattern ~ guard? ~ "=>" ~ expression }
 guard          = { "if" ~ expression }
 match_arm_sep  = _{ (";" ~ NEWLINE*) | NEWLINE+ | "," }
 
+// `()` is the empty tuple (unit-ish); tuples need at least one comma, so a
+// single parenthesized expression `(e)` is a grouped expression, which lets
+// calls be passed as juxtaposed arguments: `concat "a" (to_string 1)`.
 call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
-tuple          = { "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+tuple          = { "(" ~ ")" | "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 list           = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
 
 // `{ a: 1, ...r, b: 2 }` — record value literal. A bare `{}` is a block

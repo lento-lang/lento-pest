@@ -4,8 +4,8 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::{
-    BinaryOp, BlockExpr, Decl, Expr, LetDecl, Lit, MatchArm, PatKind, Pattern, Program,
-    RecordValueExpr, Stmt, UnaryOp,
+    BinaryOp, BlockExpr, Decl, Expr, LetDecl, Lit, MatchArm, PatKind, Pattern, Program, SumAlt,
+    RecordValueExpr, Stmt, Ty, UnaryOp,
 };
 use crate::intrinsics::{apply_intrinsic, install_intrinsics, Intrinsic};
 
@@ -16,6 +16,11 @@ pub type Env = HashMap<String, Binding>;
 pub enum Binding {
     Inline(Value),
     Cell { value: CellRef, mutable: bool },
+    /// A nullary or unary constructor introduced by a `type ... = [Name t | ...]`
+    /// declaration. `has_payload` distinguishes `Some` from `None`.
+    Constructor { tag: String, has_payload: bool },
+    /// A `type` declaration usable at runtime for typed-pattern checks.
+    TypeDef { params: Vec<String>, ty: Ty },
 }
 
 #[derive(Debug, Clone)]
@@ -28,6 +33,9 @@ pub enum Value {
     Tuple(Vec<Value>),
     List(Vec<Value>),
     Record(HashMap<String, Value>),
+    /// A constructor-tagged sum value: `Some 5` -> tag "Some", payload `5`.
+    /// Bare sum alternatives (`type X = [int | str]`) stay untagged.
+    Sum { tag: String, payload: Rc<Value> },
     Closure(Rc<Closure>),
     Intrinsic(Intrinsic),
     Ref(CellRef),
@@ -80,6 +88,13 @@ impl fmt::Display for Value {
                 }
                 write!(f, "}}")
             }
+            Value::Sum { tag, payload } => {
+                if matches!(**payload, Value::Unit) {
+                    write!(f, "{tag}")
+                } else {
+                    write!(f, "{tag}({payload})")
+                }
+            }
             Value::Closure(_) => write!(f, "<closure>"),
             Value::Intrinsic(intrinsic) => write!(f, "<intrinsic:{}>", intrinsic.name),
             Value::Ref(_) => write!(f, "<ref>"),
@@ -115,10 +130,40 @@ fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Value, String> {
 
 fn eval_decl(decl: &Decl, env: &mut Env) -> Result<Value, String> {
     match decl {
-        Decl::Spec(_) | Decl::Type(_) => Ok(Value::Unit),
+        Decl::Spec(_) => Ok(Value::Unit),
+        Decl::Type(t) => {
+            install_type_decl(t, env);
+            Ok(Value::Unit)
+        }
         Decl::Fn(_) => Err("unexpected fn declaration at evaluation time; desugar first".into()),
         Decl::Let(let_decl) => eval_let_decl(let_decl, env),
     }
+}
+
+/// Install the runtime artifacts of a `type` declaration: constructor
+/// bindings for each uppercase alternative and a `TypeDef` used by typed
+/// patterns for runtime type tests.
+fn install_type_decl(t: &crate::ast::TypeDecl, env: &mut Env) {
+    if let Ty::Sum(alts) = &t.ty {
+        for alt in alts {
+            if let SumAlt::Ctor { name, payload } = alt {
+                env.insert(
+                    name.clone(),
+                    Binding::Constructor {
+                        tag: name.clone(),
+                        has_payload: payload.is_some(),
+                    },
+                );
+            }
+        }
+    }
+    env.insert(
+        t.name.clone(),
+        Binding::TypeDef {
+            params: t.params.clone(),
+            ty: t.ty.clone(),
+        },
+    );
 }
 
 fn eval_let_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
@@ -159,6 +204,15 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
             env: env.clone(),
         }))),
         Expr::Call(call) => {
+            // Constructor application: `Some 5` parses as a call whose callee
+            // is a variable bound to a constructor.
+            if let Expr::Var(var) = call.callee.as_ref() {
+                if let Some(Binding::Constructor { tag, has_payload }) = env.get(&var.name) {
+                    let tag = tag.clone();
+                    let has_payload = *has_payload;
+                    return eval_ctor_call(&tag, has_payload, &call.args, env);
+                }
+            }
             let callee = eval_expr(&call.callee, env)?;
             let mut args = Vec::with_capacity(call.args.len());
             for arg in &call.args {
@@ -197,6 +251,29 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
     }
 }
 
+fn eval_ctor_call(
+    tag: &str,
+    has_payload: bool,
+    args: &[Expr],
+    env: &mut Env,
+) -> Result<Value, String> {
+    match (has_payload, args.len()) {
+        (false, 0) => Ok(Value::Sum {
+            tag: tag.to_string(),
+            payload: Rc::new(Value::Unit),
+        }),
+        (true, 1) => {
+            let payload = eval_expr(&args[0], env)?;
+            Ok(Value::Sum {
+                tag: tag.to_string(),
+                payload: Rc::new(payload),
+            })
+        }
+        (false, _) => Err(format!("constructor '{tag}' takes no arguments")),
+        (true, n) => Err(format!("constructor '{tag}' expects 1 argument, got {n}")),
+    }
+}
+
 fn eval_lit(lit: &Lit) -> Value {
     match lit {
         Lit::Bool(v) => Value::Bool(*v),
@@ -215,6 +292,7 @@ fn eval_ref(expr: &Expr, env: &mut Env) -> Result<Value, String> {
                 var.name
             )),
             None => Err(format!("undefined variable '{}'", var.name)),
+            _ => Err(format!("'{}' is not a mutable binding", var.name)),
         },
         _ => Err("ref currently supports only variable places".into()),
     }
@@ -235,6 +313,7 @@ fn eval_assign(place: &Expr, value_expr: &Expr, env: &mut Env) -> Result<Value, 
                 Err(format!("cannot assign to immutable binding '{}'", var.name))
             }
             None => Err(format!("undefined variable '{}'", var.name)),
+            _ => Err(format!("cannot assign to '{}'", var.name)),
         },
         _ => Err("assignment currently supports only variable places".into()),
     }
@@ -245,7 +324,7 @@ fn apply_call(callee: Value, args: Vec<Value>) -> Result<Value, String> {
         Value::Closure(closure) if closure.params.len() == args.len() => {
             let mut local_env = closure.env.clone();
             for (param, arg) in closure.params.iter().zip(args.into_iter()) {
-                bind_pattern(param, arg, false, &mut local_env)?;
+                bind_pattern(param, arg, true, &mut local_env)?;
             }
             eval_expr(&closure.body, &mut local_env)
         }
@@ -263,7 +342,7 @@ pub(crate) fn apply_one(callee: Value, arg: Value) -> Result<Value, String> {
     match callee {
         Value::Closure(closure) => {
             let mut local_env = closure.env.clone();
-            bind_pattern(&closure.params[0], arg, false, &mut local_env)?;
+            bind_pattern(&closure.params[0], arg, true, &mut local_env)?;
             if closure.params.len() == 1 {
                 eval_expr(&closure.body, &mut local_env)
             } else {
@@ -533,9 +612,14 @@ fn eval_match(scrutinee: Value, arms: &[MatchArm], env: &mut Env) -> Result<Valu
     Err("non-exhaustive match".into())
 }
 
-fn bind_pattern(pattern: &Pattern, value: Value, mutable: bool, env: &mut Env) -> Result<(), String> {
+fn bind_pattern(
+    pattern: &Pattern,
+    value: Value,
+    mutable: bool,
+    env: &mut Env,
+) -> Result<(), String> {
     let mut binds = Vec::new();
-    collect_pattern_bindings(pattern, &value, &mut binds)?;
+    collect_pattern_bindings(pattern, &value, env, &mut binds)?;
     for (name, bound) in binds {
         env.insert(name, make_binding(bound, mutable));
     }
@@ -544,7 +628,7 @@ fn bind_pattern(pattern: &Pattern, value: Value, mutable: bool, env: &mut Env) -
 
 fn pattern_matches(pattern: &Pattern, value: &Value, env: &mut Env) -> Result<bool, String> {
     let mut binds = Vec::new();
-    if !collect_pattern_bindings(pattern, value, &mut binds)? {
+    if !collect_pattern_bindings(pattern, value, env, &mut binds)? {
         return Ok(false);
     }
     for (name, bound) in binds {
@@ -571,19 +655,39 @@ fn binding_needs_cell(expr: &Expr) -> bool {
 fn collect_pattern_bindings(
     pattern: &Pattern,
     value: &Value,
+    env: &Env,
     out: &mut Vec<(String, Value)>,
 ) -> Result<bool, String> {
+    // A typed pattern `(n : int)` performs a runtime type test before its
+    // own shape matches; bare type sum alternatives are matched this way.
+    if let Some(ty) = &pattern.annotation {
+        if !value_matches_ty(value, ty, env) {
+            return Ok(false);
+        }
+    }
     match &pattern.kind {
         PatKind::Var(name) => {
+            // A bare uppercase identifier may name a nullary constructor
+            // (`None`); in that case it matches instead of binding.
+            if let Some(Binding::Constructor { tag, has_payload: false }) = env.get(name) {
+                return Ok(matches!(value, Value::Sum { tag: vtag, .. } if vtag == tag));
+            }
             out.push((name.clone(), value.clone()));
             Ok(true)
         }
         PatKind::Wildcard => Ok(true),
         PatKind::Lit(lit) => Ok(value_eq(value, &eval_lit(lit))),
+        PatKind::Constructor { name, payload } => match value {
+            Value::Sum { tag, payload: sum_payload } if tag == name => match payload {
+                Some(pat) => collect_pattern_bindings(pat, sum_payload, env, out),
+                None => Ok(matches!(**sum_payload, Value::Unit)),
+            },
+            _ => Ok(false),
+        },
         PatKind::Tuple(items) => match value {
             Value::Tuple(values) if values.len() == items.len() => {
                 for (pattern, value) in items.iter().zip(values.iter()) {
-                    if !collect_pattern_bindings(pattern, value, out)? {
+                    if !collect_pattern_bindings(pattern, value, env, out)? {
                         return Ok(false);
                     }
                 }
@@ -603,7 +707,7 @@ fn collect_pattern_bindings(
                             return Ok(false);
                         }
                         for (pattern, value) in items[..i].iter().zip(values[..i].iter()) {
-                            if !collect_pattern_bindings(pattern, value, out)? {
+                            if !collect_pattern_bindings(pattern, value, env, out)? {
                                 return Ok(false);
                             }
                         }
@@ -617,7 +721,7 @@ fn collect_pattern_bindings(
                     }
                     None if values.len() == items.len() => {
                         for (pattern, value) in items.iter().zip(values.iter()) {
-                            if !collect_pattern_bindings(pattern, value, out)? {
+                            if !collect_pattern_bindings(pattern, value, env, out)? {
                                 return Ok(false);
                             }
                         }
@@ -639,7 +743,7 @@ fn collect_pattern_bindings(
                     let Some(field_value) = values.get(&field.name) else {
                         return Ok(false);
                     };
-                    if !collect_pattern_bindings(&field.pattern, field_value, out)? {
+                    if !collect_pattern_bindings(&field.pattern, field_value, env, out)? {
                         return Ok(false);
                     }
                     remainder.remove(&field.name);
@@ -655,12 +759,126 @@ fn collect_pattern_bindings(
 }
 
 fn lookup_var(env: &Env, name: &str) -> Result<Value, String> {
-    env.get(name)
-        .map(|binding| match binding {
-            Binding::Inline(value) => value.clone(),
-            Binding::Cell { value, .. } => value.borrow().clone(),
-        })
-        .ok_or_else(|| format!("undefined variable '{name}'"))
+    match env.get(name) {
+        Some(Binding::Inline(value)) => Ok(value.clone()),
+        Some(Binding::Cell { value, .. }) => Ok(value.borrow().clone()),
+        Some(Binding::Constructor { tag, has_payload: false }) => Ok(Value::Sum {
+            tag: tag.clone(),
+            payload: Rc::new(Value::Unit),
+        }),
+        Some(Binding::Constructor { tag, has_payload: true }) => Err(format!(
+            "constructor '{tag}' expects one argument; use '{tag} value'"
+        )),
+        Some(Binding::TypeDef { .. }) => Err(format!("'{name}' is a type, not a value")),
+        None => Err(format!("undefined variable '{name}'")),
+    }
+}
+
+/// Runtime type test for typed patterns `(n : int)` / `(x : Option)`.
+/// Builtin names check the value's shape; a user type name checks constructor
+/// tag membership (for sums) or the declared record/list/tuple shape.
+/// Unresolvable names (type variables) impose no runtime restriction.
+fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
+    match ty {
+        Ty::Named { name, args } => match name.as_str() {
+            "int" => matches!(value, Value::Int(_)),
+            "float" => matches!(value, Value::Float(_)),
+            "bool" => matches!(value, Value::Bool(_)),
+            "str" | "string" => matches!(value, Value::Str(_)),
+            "unit" => matches!(value, Value::Unit),
+            _ => match env.get(name) {
+                Some(Binding::TypeDef { params, ty: decl }) => {
+                    // A type parameter matches anything at runtime.
+                    if params.contains(name) {
+                        return true;
+                    }
+                    match decl {
+                        Ty::Sum(alts) => match value {
+                            Value::Sum { tag, .. } => alts.iter().any(|alt| {
+                                matches!(alt, SumAlt::Ctor { name, .. } if name == tag)
+                            }),
+                            other => alts.iter().any(|alt| {
+                                matches!(alt, SumAlt::Bare(t) if value_matches_ty(other, t, env))
+                            }),
+                        },
+                        other => {
+                            if args.len() != params.len() {
+                                return true; // cannot substitute params at runtime
+                            }
+                            value_matches_ty_open(other, value, params, args, env)
+                        }
+                    }
+                }
+                _ => true, // unknown name: no runtime check
+            },
+        },
+        Ty::List(elem) => match value {
+            Value::List(items) => items.iter().all(|item| value_matches_ty(item, elem, env)),
+            _ => false,
+        },
+        Ty::Tuple(elems) => match value {
+            Value::Tuple(items) => {
+                items.len() == elems.len()
+                    && items.iter().zip(elems.iter()).all(|(v, t)| value_matches_ty(v, t, env))
+            }
+            _ => false,
+        },
+        Ty::RecordType(fields) => match value {
+            Value::Record(fs) => fields.iter().all(|(name, t)| {
+                fs.get(name).map(|v| value_matches_ty(v, t, env)).unwrap_or(false)
+            }),
+            _ => false,
+        },
+        Ty::Ref(inner) | Ty::Mut(inner) => match value {
+            Value::Ref(cell) => value_matches_ty(&cell.borrow(), inner, env),
+            _ => false,
+        },
+        Ty::NamedBinder { ty, .. } => value_matches_ty(value, ty, env),
+        // Arrow/sum shapes carry no runtime info to test against.
+        Ty::Arrow { .. } | Ty::Sum(_) => true,
+    }
+}
+
+/// Like `value_matches_ty` but substitutes type parameters by position, so a
+/// declared `type Pair a = { fst: a, snd: a }` can be tested as `Pair<int>`.
+fn value_matches_ty_open(ty: &Ty, value: &Value, params: &[String], args: &[Ty], env: &Env) -> bool {
+    if let Ty::Named { name, .. } = ty {
+        if let Some(i) = params.iter().position(|p| p == name) {
+            return args.get(i).map(|a| value_matches_ty(value, a, env)).unwrap_or(true);
+        }
+    }
+    match ty {
+        Ty::List(elem) => match value {
+            Value::List(items) => items
+                .iter()
+                .all(|item| value_matches_ty_open(elem, item, params, args, env)),
+            _ => false,
+        },
+        Ty::Tuple(elems) => match value {
+            Value::Tuple(items) => {
+                items.len() == elems.len()
+                    && items
+                        .iter()
+                        .zip(elems.iter())
+                        .all(|(v, t)| value_matches_ty_open(t, v, params, args, env))
+            }
+            _ => false,
+        },
+        Ty::RecordType(fields) => match value {
+            Value::Record(fs) => fields.iter().all(|(name, t)| {
+                fs.get(name)
+                    .map(|v| value_matches_ty_open(t, v, params, args, env))
+                    .unwrap_or(false)
+            }),
+            _ => false,
+        },
+        Ty::NamedBinder { ty, .. } => value_matches_ty_open(ty, value, params, args, env),
+        Ty::Ref(inner) | Ty::Mut(inner) => match value {
+            Value::Ref(cell) => value_matches_ty_open(inner, &cell.borrow(), params, args, env),
+            _ => false,
+        },
+        _ => true,
+    }
 }
 
 pub(crate) fn value_eq(left: &Value, right: &Value) -> bool {
@@ -683,6 +901,9 @@ pub(crate) fn value_eq(left: &Value, right: &Value) -> bool {
         }
         (Value::Intrinsic(a), Value::Intrinsic(b)) => a.name == b.name && a.args.len() == b.args.len(),
         (Value::Ref(a), Value::Ref(b)) => Rc::ptr_eq(a, b),
+        (Value::Sum { tag: ta, payload: pa }, Value::Sum { tag: tb, payload: pb }) => {
+            ta == tb && value_eq(pa, pb)
+        }
         _ => false,
     }
 }
