@@ -61,12 +61,15 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
     parse_program(&src).map_err(|e| format!("Parse error in {}:\n{}", path.display(), e))
 }
 
-/// Evaluate a parsed program. Not yet implemented.
+/// Interpret a parsed program: desugar, type-check, then evaluate.
 ///
-/// `fn` clauses are desugared into `let` bindings first, so the interpreter
-/// never has to handle an `FnDecl`.
+/// `fn` clauses are desugared into `let` bindings first, so the type checker
+/// and the interpreter never see an `FnDecl`. Type checking is always on.
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
     let desugared = lento::ast::desugar_program(ast);
+    if let Err(err) = lento::typecheck::check_program(&desugared) {
+        return Err(err);
+    }
     let value = lento::eval::eval_program(&desugared)?;
     if matches!(desugared.statements.last(), Some(lento::ast::Stmt::Expr(_)))
         && !matches!(value, lento::eval::Value::Unit)
