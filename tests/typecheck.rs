@@ -92,6 +92,22 @@ fn assignment_checks_value_against_binding_type() {
 }
 
 #[test]
+fn annotation_forces_pending_constraint_solving() {
+    // The annotation binds the Num constraint's variable to str after
+    // solve_pending runs; the constraint must still be verified.
+    check_err(
+        "let f : str -> str = x => x * x\n",
+        "no Num instance",
+    );
+    // Re-annotating a generalized value: the pending Num constraint must
+    // not survive unverified either.
+    let g = "let g = x => x * x\nlet h : str -> str = g\n";
+    check_err(g, "no Num instance");
+    // Concrete-but-valid constraints stay fine.
+    check_ok("let f : int -> int = x => x * x\nassert (f 3 == 9)\n");
+}
+
+#[test]
 fn rejects_unsolved_constraints_on_concrete_types() {
     check_err("abs [1, 2]\n", "no Num instance");
     check_err("concat 1 2\n", "no Concat instance");

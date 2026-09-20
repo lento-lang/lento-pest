@@ -311,6 +311,12 @@ impl Checker {
             }
         };
 
+        // The annotation (or recursive) unifies above may have bound the last
+        // free variable of a pending constraint. Solve those now; otherwise
+        // `generalize` sees a fully-concrete constraint with no free vars and
+        // silently drops it unverified.
+        self.solve_pending()?;
+
         if let Some(n) = &name {
             let generalized = !let_decl.mutable && is_value(&let_decl.value);
             if generalized {
