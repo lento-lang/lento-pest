@@ -19,8 +19,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    BinaryOp, Decl, Expr, Lit, PatKind, Pattern, Program, Stmt, SumAlt, Ty, UnaryOp, VarExpr,
+    BinaryOp, Decl, Expr, Lit, PatKind, Pattern, Program, Stmt, SumAlt, Ty, UnaryOp,
 };
+use crate::exhaustive::{CoverPat, CoverRow};
 use crate::ty::{
     Class, Con, Constraint, RecordType, Scheme, SolveResult, Subst, SumType, Type, TypeAlt, VarId,
 };
@@ -1319,7 +1320,9 @@ impl Checker {
                 None => result = Some(body_ty),
             }
         }
-        result.ok_or_else(|| self.err("match must have at least one arm"))
+        let result = result.ok_or_else(|| self.err("match must have at least one arm"))?;
+        self.check_exhaustive(match_expr, &scrutinee_ty)?;
+        Ok(result)
     }
 
     /// Relate an arm pattern's type to the scrutinee type. A concrete
@@ -1813,5 +1816,130 @@ fn ty_var_name(ty: &Ty) -> String {
     match ty {
         Ty::Named { name, .. } => name.clone(),
         _ => String::new(),
+    }
+}
+
+
+// -- match exhaustiveness ----------------------------------------------------
+//
+// Translation from arm patterns to the binding-erased coverage IR lives
+// here (it needs `resolve_ty` and the constructor table); the analysis
+// itself is pure and lives in src/exhaustive.rs. See its module docs for
+// the mirrored runtime semantics and the closed-world note.
+
+impl Checker {
+    /// Erase bindings from an arm pattern for coverage analysis.
+    fn translate_pattern(&mut self, pattern: &Pattern) -> TypeResult<CoverPat> {
+        let mut pat = match &pattern.kind {
+            PatKind::Var(name) => {
+                if name.starts_with(|c: char| c.is_ascii_uppercase())
+                    && self.ctors.contains_key(name)
+                {
+                    CoverPat::Ctor {
+                        name: name.clone(),
+                        payload: None,
+                    }
+                } else {
+                    CoverPat::CatchAll
+                }
+            }
+            PatKind::Wildcard | PatKind::Spread(_) => CoverPat::CatchAll,
+            PatKind::Lit(lit) => CoverPat::Lit(lit.clone()),
+            PatKind::Tuple(items) => {
+                let mut ps = Vec::with_capacity(items.len());
+                for item in items {
+                    ps.push(self.translate_pattern(item)?);
+                }
+                CoverPat::Tuple(ps)
+            }
+            PatKind::List(items) => {
+                // The evaluator only honors a trailing spread; anything else
+                // fixes the length.
+                let mut prefix = Vec::new();
+                let mut rest = false;
+                for (i, item) in items.iter().enumerate() {
+                    if matches!(item.kind, PatKind::Spread(_)) {
+                        rest = i + 1 == items.len();
+                    } else {
+                        prefix.push(self.translate_pattern(item)?);
+                    }
+                }
+                CoverPat::List { prefix, rest }
+            }
+            PatKind::Record { fields, rest: _ } => {
+                // `rest` binds the remainder, which always matches; it adds
+                // no coverage column.
+                let mut fs = Vec::with_capacity(fields.len());
+                for field in fields {
+                    fs.push((field.name.clone(), self.translate_pattern(&field.pattern)?));
+                }
+                CoverPat::Record { fields: fs }
+            }
+            PatKind::Constructor { name, payload } => CoverPat::Ctor {
+                name: name.clone(),
+                payload: match payload {
+                    Some(p) => Some(Box::new(self.translate_pattern(p)?)),
+                    None => None,
+                },
+            },
+        };
+        if let Some(ann) = &pattern.annotation {
+            let ann_ty = self.resolve_ty(ann)?;
+            pat = match pat {
+                CoverPat::CatchAll => CoverPat::Typed(ann_ty),
+                // A type test followed by a refutable shape is itself
+                // refutable; do not let it claim coverage of the type.
+                _ => CoverPat::Refutable,
+            };
+        }
+        Ok(pat)
+    }
+
+    /// Reject non-exhaustive matches.
+    fn check_exhaustive(
+        &mut self,
+        match_expr: &crate::ast::MatchExpr,
+        scrutinee: &Type,
+    ) -> TypeResult<()> {
+        // A scrutinee that is literally a constructor application pins the
+        // tag: completeness reduces to requiring one unguarded arm that
+        // matches that tag (or is a catch-all).
+        if let Some(tag) = scrutinee_ctor_tag(&match_expr.scrutinee, &self.ctors) {
+            for arm in &match_expr.arms {
+                if arm.guard.is_some() {
+                    continue; // conditional matches cover nothing
+                }
+                let covers = match &arm.pattern.kind {
+                    PatKind::Wildcard => true,
+                    PatKind::Var(name) => {
+                        // Catch-all binder, or the tag's nullary constructor.
+                        !name.starts_with(|c: char| c.is_ascii_uppercase()) || name == &tag
+                    }
+                    PatKind::Constructor { name, .. } => name == &tag,
+                    _ => false,
+                };
+                if covers {
+                    return Ok(());
+                }
+            }
+            return Err(self.err(format!(
+                "match is not exhaustive: missing constructor '{tag}'"
+            )));
+        }
+        let ty = self.subst.prune(scrutinee);
+        // A fresh variable for columns whose type is undetermined; a real
+        // id keeps it distinct from every pattern-annotation type.
+        let unknown = Type::Var(self.fresh());
+        let mut rows = Vec::new();
+        for arm in &match_expr.arms {
+            if arm.guard.is_some() {
+                continue; // conditional matches cover nothing
+            }
+            rows.push(CoverRow(vec![self.translate_pattern(&arm.pattern)?]));
+        }
+        if let Some(missing) = crate::exhaustive::analyze(&[ty], rows, unknown) {
+            return Err(self.err(format!("match is not exhaustive: missing {missing}")));
+        }
+        Ok(())
     }
 }

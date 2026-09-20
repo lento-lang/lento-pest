@@ -458,7 +458,7 @@ fn intrinsic_signatures_are_polymorphic() {
 #[test]
 fn empty_list_and_match_types_unify() {
     check_ok(
-        "fn len xs = match xs {\n    [] => 0\n    [x, ...rest] => 1 + len rest\n}\n\
+        "fn len xs = match xs {\n    [] => 0,\n    [x, ...rest] => 1 + len rest\n}\n\
          assert (len [1, 2, 3] == 3)\n",
     );
 }
@@ -526,4 +526,141 @@ fn where_unsupported_parameter_type_rejected() {
         "spec f:\n    (x: str) -> str\n    where\n        x != \"\"\n\nfn f x = x\n",
         "not int/float/bool",
     );
+}
+
+// -- match exhaustiveness ----------------------------------------------------
+
+const OPTION_DECL: &str = "type Option a = Some a | None\n";
+
+#[test]
+fn exhaustive_constructor_sums_pass() {
+    check_ok(&format!(
+        "{OPTION_DECL}fn get o = match o {{ Some x => x, None => 0 }}\nassert (get (Some 3) == 3)\n"
+    ));    check_ok(&format!(
+        "{OPTION_DECL}fn f o = match o {{ None => 0, other => 1 }}\n"
+    ));
+    // An irrefutable typed pattern on the sum covers everything.
+    check_ok(&format!(
+        "{OPTION_DECL}fn f o = match o {{ (v: Option<int>) => 1 }}\n"
+    ));
+}
+
+#[test]
+fn exhaustive_hybrid_sums_pass() {
+    check_ok(
+        "type Id = int | str\nfn f x = match x { (n: int) => n, (s: str) => 0 }\n",
+    );
+    // The sum's own type as a typed pattern is irrefutable.
+    check_ok("type Id = int | str\nfn f x = match x { (v: Id) => 1 }\n");
+}
+
+#[test]
+fn exhaustive_bool_and_list_and_record_pass() {
+    check_ok("fn f b = match b { true => 1, false => 0 }\n");
+    check_ok("fn f xs = match xs { [] => 0, [x, ...rest] => x }\n");
+    check_ok(
+        "type Point = { x: int, y: int }\nfn f p = match p { { x: a, y: b } => a + b }\n",
+    );
+    // A record pattern only names the fields it needs (at-least semantics).
+    check_ok("type Point = { x: int, y: int }\nfn f p = match p { { x: a } => a }\n");
+}
+
+#[test]
+fn exhaustive_tuple_products_pass() {
+    // Annotated scrutinee over a record of sums: the columns are known
+    // sums, so the product must be covered cell by cell.
+    check_ok(&format!(
+        "{OPTION_DECL}type Pair = {{ a: Option int, b: Option int }}\n\
+         fn f (p: Pair) = match p {{\n\
+         \x20   {{ a: Some x, b: Some y }} => x + y,\n\
+         \x20   {{ a: Some x, b: None }} => x,\n\
+         \x20   {{ a: None, b: Some y }} => y,\n\
+         \x20   {{ a: None, b: None }} => 0\n\
+         }}\nassert (f {{ a: Some 1, b: None }} == 1)\n"
+    ));
+}
+
+#[test]
+fn nonexhaustive_matches_are_rejected() {
+    // Missing nullary constructor.
+    check_err(&format!("{OPTION_DECL}fn f o = match o {{ Some x => x }}\n"), "not exhaustive");
+    // Missing constructor with payload: None alone does not cover Some.
+    check_err(&format!("{OPTION_DECL}fn f o = match o {{ None => 0 }}\n"), "not exhaustive");
+    // Missing bare alternative. The scrutinee must be pinned to the sum
+    // (annotation); on an unannotated param the deferred Member constraint
+    // would legitimately pin it to int.
+    check_err(
+        "type Id = int | str\nlet x : Id = 42\nmatch x { (n: int) => n }\n",
+        "not exhaustive",
+    );
+    // Half of a bool.
+    check_err("fn f b = match b { true => 1 }\n", "not exhaustive");
+    // Missing empty list.
+    check_err("fn f xs = match xs { [x, ...rest] => x }\n", "not exhaustive");
+    // Missing non-empty lists.
+    check_err("fn f xs = match xs { [] => 0 }\n", "not exhaustive");
+    // Infinite type needs a catch-all.
+    check_err("fn f n = match n { 0 => 0, 1 => 1 }\n", "not exhaustive");
+    check_err("fn f s = match s { \"a\" => 0 }\n", "not exhaustive");
+}
+
+#[test]
+fn guarded_arms_do_not_cover() {
+    check_err(
+        &format!("{OPTION_DECL}fn f o = match o {{ Some x if x > 0 => x, None => 0 }}\n"),
+        "not exhaustive",
+    );
+}
+
+#[test]
+fn nested_payload_coverage_is_checked() {
+    // Payload is an int: a literal does not cover it.
+    check_err(
+        &format!("{OPTION_DECL}fn f o = match o {{ Some 1 => 1, None => 0 }}\n"),
+        "not exhaustive",
+    );
+    // Missing one cell of the product (record columns are known sums).
+    check_err(
+        &format!(
+            "{OPTION_DECL}type Pair = {{ a: Option int, b: Option int }}\n\
+             fn f (p: Pair) = match p {{\n\
+             \x20   {{ a: Some x, b: Some y }} => x + y,\n\
+             \x20   {{ a: Some x, b: None }} => x,\n\
+             \x20   {{ a: None, b: Some y }} => y\n\
+             }}\n"
+        ),
+        "not exhaustive",
+    );
+}
+
+#[test]
+fn known_tag_scrutinee_skips_exhaustiveness() {
+    // A literal constructor application pins the tag; other arms cannot
+    // occur and the matching arm is checked by tag instead.
+    check_ok(&format!("{OPTION_DECL}assert (match Some 5 {{ Some x => x, None => 0 }} == 5)\n"));
+}
+
+#[test]
+fn spread_only_list_arm_is_exhaustive() {
+    check_ok("fn f (xs: [int]) = match xs { [...r] => 1 }\nassert (f [1, 2] == 1)\n");
+}
+
+#[test]
+fn known_tag_scrutinee_requires_unguarded_matching_arm() {
+    check_err(
+        "type O = Some int | None\nlet x = match Some 5 { Some y if y > 10 => 1 }\n",
+        "not exhaustive",
+    );
+    check_ok(
+        "type O = Some int | None\nlet x = match Some 5 { Some y if y > 10 => 1, Some y => y }\n",
+    );
+}
+
+#[test]
+fn exhaustiveness_error_names_the_missing_case() {
+    check_err(
+        &format!("{OPTION_DECL}fn f o = match o {{ Some x => x }}\n"),
+        "missing constructor 'None'",
+    );
+    check_err("fn f xs = match xs { [x, ...rest] => x }\n", "missing an empty list");
 }
