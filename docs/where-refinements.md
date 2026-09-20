@@ -76,7 +76,7 @@ spec divide:
 ```
 
 Note this postcondition is *false* for truncated division: `x = -1, y = 2`
-gives `r = 0` and `0 * 2 = 0 > -1`. The sample in `tests/samples/spec_where.lt`
+gives `r = 0` and `0 * 2 = 0 > -1`. The sample in `tests/samples/specs/spec_where.lt`
 therefore also requires `x >= 0`. Weakening or strengthening clauses is the
 author's responsibility; the checker only reports definite violations.
 
@@ -105,8 +105,11 @@ where r == x * x`) verify instantly.
 - Unsupported feature → compile error. The following cannot be encoded in v1
   and make any clause (or postcondition body) that needs them fail checking:
   strings, lists, tuples, records, sums/constructors, `ref`/`mut` operations,
-  higher-order or intrinsic calls outside the arithmetic/comparison/logic
-  subset below.
+  direct or higher-order function calls, or intrinsic calls outside the
+  arithmetic/comparison/logic subset below. Contract composition through a
+  nested call is therefore not yet supported; the ignored regression test
+  `chained_postcondition_proves_next_precondition` records the intended
+  future behavior.
 
 ### Encodable expression subset
 

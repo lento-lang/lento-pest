@@ -16,7 +16,7 @@ fn is_match(e: &Expr) -> bool {
 
 #[test]
 fn desugar_leaves_no_fn_decls() {
-    let src = std::fs::read_to_string("tests/samples/match.lt").unwrap();
+    let src = std::fs::read_to_string("tests/samples/matching/match.lt").unwrap();
     let ast = parse_program(&src).unwrap();
     let out = desugar_program(&ast);
 
@@ -32,7 +32,7 @@ fn desugar_leaves_no_fn_decls() {
 fn same_name_arity_clauses_group_into_single_let() {
     // `factorial` and `zip` each have two same-name clauses; each group must
     // collapse to exactly one `let` whose value ends in a `match`.
-    let src = std::fs::read_to_string("tests/samples/match.lt").unwrap();
+    let src = std::fs::read_to_string("tests/samples/matching/match.lt").unwrap();
     let ast = parse_program(&src).unwrap();
     let out = desugar_program(&ast);
 

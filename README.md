@@ -91,6 +91,6 @@ println doubled
 cargo test
 ```
 
-The suite runs every `tests/samples/*.lt` through the full pipeline
+The suite runs every `tests/samples/**/*.lt` through the full pipeline
 (parse → type-check → evaluate) plus targeted positive/negative type-checker
 tests in `tests/typecheck.rs`. See `SUM_TYPES_PLAN.md` for the design notes.
