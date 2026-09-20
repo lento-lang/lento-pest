@@ -84,6 +84,18 @@ pub fn check_program(program: &Program) -> TypeResult<()> {
         checker.check_stmt(stmt)?;
     }
     checker.solve_pending()?;
+    // Orphan-spec sweep: `check_specs_for` only fires when the definition's
+    // let is processed, so a spec declared after its definition would never
+    // be verified, and a spec with no matching definition would pass
+    // silently. Verify every recorded spec here.
+    let spec_names: Vec<String> = checker.specs.keys().cloned().collect();
+    for name in spec_names {
+        if !checker.vars.contains_key(&name) {
+            return Err(checker
+                .err(format!("spec for '{name}' has no matching definition")));
+        }
+        checker.check_specs_for(&name)?;
+    }
     Ok(())
 }
 

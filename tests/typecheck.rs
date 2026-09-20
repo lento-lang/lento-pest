@@ -394,6 +394,29 @@ fn spec_constraint_coverage_is_required() {
 }
 
 #[test]
+fn spec_after_definition_is_checked() {
+    // A spec declared after its definition used to be recorded but never
+    // verified, because check_specs_for only fires when the definition's
+    // let is processed.
+    check_ok(
+        "fn identity x = x\nspec identity:\n    all a.\n    a -> a\n",
+    );
+    check_err(
+        "fn broken x = x + 1\nspec broken:\n    all a.\n    a -> a\n",
+        "does not match its spec",
+    );
+}
+
+#[test]
+fn spec_without_definition_is_rejected() {
+    // A spec naming a binding that never exists used to pass silently.
+    check_err(
+        "spec ghost:\n    all a.\n    a -> a\n",
+        "has no matching definition",
+    );
+}
+
+#[test]
 fn duplicate_declarations_are_rejected() {
     check_err("type A = int\ntype A = str\n", "duplicate type declaration");
     check_err(
