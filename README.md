@@ -77,8 +77,11 @@ println doubled
   (int/float/bool arithmetic, comparisons, logic); clauses needing strings,
   lists, records, or reasoning beyond the solver's bounded budget are
   compile errors, not silent acceptances. See `docs/where-refinements.md`.
-- Match exhaustiveness is not analyzed (a non-matching scrutinee is a
-  runtime error).
+- Match exhaustiveness is checked statically (usefulness analysis over
+  constructors, typed alternatives, bool literals, lists, tuples, and
+  records; guarded arms cover nothing). For a scrutinee whose type is not
+  yet determined, completeness is judged against the shapes the arms
+  themselves admit.
 - Constructor names share one global namespace per scope; redeclaration at the
   top level is an error, nested blocks may shadow.
 

@@ -8,7 +8,7 @@ let num_id : Id = 42
 let text_id : Id = "hello"
 
 fn show_id id = match id {
-    (n : int) => concat "int " (to_string n)
+    (n : int) => concat "int " (to_string n),
     (s : str) => concat "str " s
 }
 
@@ -29,8 +29,8 @@ let a_no = No
 let a_num : Answer = 7
 
 fn show_answer ans = match ans {
-    Yes => "yes"
-    No => "no"
+    Yes => "yes",
+    No => "no",
     (n : int) => to_string n
 }
 

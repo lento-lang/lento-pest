@@ -2,18 +2,18 @@ let origin = { x: 0, y: 0 }
 let point = { x: 3, y: 4 }
 
 let describe = pt => match pt {
-    { x: 0, y: 0 } => "zero"
-    { x: a, y: b } => to_string (a + b)
+    { x: 0, y: 0 } => "zero",
+    { x: a, y: b } => to_string (a + b),
     _ => "other"
 }
 
 let get_x = pt => match pt {
-    { x: v, y: _ } => v
+    { x: v, y: _ } => v,
     _ => 0
 }
 
 let rest_keys = pt => match pt {
-    { x: xv, ...rest } => len rest
+    { x: xv, ...rest } => len rest,
     _ => 0
 }
 

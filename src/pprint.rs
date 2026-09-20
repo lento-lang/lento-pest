@@ -403,7 +403,7 @@ fn format_expr_inner(out: &mut String, expr: &Expr, ctx: Prec) {
             out.push_str("match ");
             format_expr(out, &m.scrutinee, Prec::Top);
             out.push_str(" {\n");
-            for arm in &m.arms {
+            for (i, arm) in m.arms.iter().enumerate() {
                 out.push_str("    ");
                 format_pattern(out, &arm.pattern);
                 if let Some(g) = &arm.guard {
@@ -412,6 +412,9 @@ fn format_expr_inner(out: &mut String, expr: &Expr, ctx: Prec) {
                 }
                 out.push_str(" => ");
                 format_expr(out, &arm.body, Prec::Top);
+                if i + 1 < m.arms.len() {
+                    out.push(',');
+                }
                 out.push('\n');
             }
             out.push('}');

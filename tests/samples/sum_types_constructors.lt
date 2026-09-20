@@ -2,7 +2,7 @@
 type Option a = Some a | None
 
 fn safe_head xs = match xs {
-    [] => None
+    [] => None,
     [x, ...rest] => Some x
 }
 
@@ -11,12 +11,12 @@ let first = safe_head [10, 20]
 let empty = safe_head []
 
 fn describe opt = match opt {
-    Some v => concat "some: " (to_string v)
+    Some v => concat "some: " (to_string v),
     None => "none"
 }
 
 fn from_option opt default = match opt {
-    Some v => v
+    Some v => v,
     None => default
 }
 

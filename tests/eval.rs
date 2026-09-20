@@ -88,7 +88,7 @@ fn grouped_function_clauses_evaluate_via_match() {
 #[test]
 fn list_spread_patterns_work_in_match_and_functions() {
     let value = eval(
-        "let len = xs => match xs {\n    [] => 0\n    [x, ...xs] => 1 + len xs\n}\nfn zip [] [] = []\nfn zip [x, ...xs] [y, ...ys] = {\n    let pair = [(x, y)]\n    let rest = zip xs ys\n    concat pair rest\n}\n(len [1, 2, 3], zip [1, 2] [3, 4])\n",
+        "let len = xs => match xs {\n    [] => 0,\n    [x, ...xs] => 1 + len xs\n}\nfn zip [] [] = []\nfn zip [x, ...xs] [y, ...ys] = {\n    let pair = [(x, y)]\n    let rest = zip xs ys\n    concat pair rest\n}\n(len [1, 2, 3], zip [1, 2] [3, 4])\n",
     )
     .unwrap();
     match value {

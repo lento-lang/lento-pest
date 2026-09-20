@@ -177,13 +177,14 @@ literal        = _{ boolean | number | string }
 ref_expr       = { "ref" ~ expression }
 ref_match_expr = { "ref" ~ match_scrutinee }
 
-// `match scrutinee { pattern [if guard] => body, ... }` — arms may be
-// separated by commas, semicolons, or newlines; `=>` maps a pattern to an
-// expression exactly as lambdas do (`->` stays reserved for type-level use).
+// `match scrutinee { pattern [if guard] => body, ... }` — arms must be
+// separated by commas; a comma may sit at end-of-line with the next arm on
+// the following line. `=>` maps a pattern to an expression exactly as
+// lambdas do (`->` stays reserved for type-level use).
 match_expr     = { "match" ~ NEWLINE* ~ match_scrutinee ~ NEWLINE* ~ "{" ~ NEWLINE* ~ match_arm ~ (match_arm_sep ~ match_arm)* ~ NEWLINE* ~ "}" }
 match_arm      = { pattern ~ guard? ~ "=>" ~ expression }
 guard          = { "if" ~ expression }
-match_arm_sep  = _{ (";" ~ NEWLINE*) | NEWLINE+ | "," }
+match_arm_sep  = _{ "," ~ NEWLINE* }
 
 // `()` is the empty tuple (unit-ish); tuples need at least one comma, so a
 // single parenthesized expression `(e)` is a grouped expression, which lets
