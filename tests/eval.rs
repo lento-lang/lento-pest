@@ -382,3 +382,20 @@ fn higher_order_intrinsics_report_predicate_errors() {
     let err = eval("any (x => x + 1) [1, 2]\n").unwrap_err();
     assert!(err.contains("any predicate must return bool"));
 }
+
+#[test]
+fn binary_operator_precedence() {
+    // Multiplication binds tighter than addition; comparison lower still.
+    assert_int(eval("1 + 2 * 3").unwrap(), 7);
+    assert_int(eval("2 * 3 + 4 * 5").unwrap(), 26);
+    assert_int(eval("(1 + 2) * 3").unwrap(), 9);
+    assert_int(eval("20 - 4 - 3").unwrap(), 13); // left-associative
+    match eval("1 + 1 == 2 && 2 < 3").unwrap() {
+        Value::Bool(true) => {}
+        other => panic!("expected true, got {other:?}"),
+    }
+    match eval("1 == 2 || 3 <= 3").unwrap() {
+        Value::Bool(true) => {}
+        other => panic!("expected true, got {other:?}"),
+    }
+}

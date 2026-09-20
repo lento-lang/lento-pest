@@ -552,17 +552,47 @@ fn binop_expr(pair: Pair<'_, Rule>) -> Expr {
     }
     operands.push(operand(current));
 
-    let mut iter = operands.into_iter();
-    let mut acc = iter.next().unwrap_or_else(none_expr);
-    for op in ops {
-        let rhs = iter.next().unwrap_or_else(none_expr);
-        acc = Expr::Binary(BinaryExpr {
+    // Precedence climbing over the flat (operand, op) sequence. All binary
+    // operators are left-associative; higher ranks bind tighter. Without
+    // this, `a == b * c` would parse as `(a == b) * c`.
+    let mut operand_iter = operands.into_iter();
+    let mut op_iter = ops.into_iter();
+    climb_binop(&mut operand_iter, &mut op_iter, 0)
+}
+
+/// Binary operator precedence: higher binds tighter.
+fn binop_rank(op: &BinaryOp) -> u8 {
+    match op {
+        BinaryOp::Or => 1,
+        BinaryOp::And => 2,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 3,
+        BinaryOp::Add | BinaryOp::Sub => 4,
+        BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 5,
+    }
+}
+
+fn climb_binop(
+    operands: &mut std::vec::IntoIter<Expr>,
+    ops: &mut std::vec::IntoIter<BinaryOp>,
+    min_rank: u8,
+) -> Expr {
+    let Some(mut lhs) = operands.next() else {
+        return none_expr();
+    };
+    while let Some(op) = ops.clone().next() {
+        let rank = binop_rank(&op);
+        if rank < min_rank {
+            break;
+        }
+        ops.next(); // consume
+        let rhs = climb_binop(operands, ops, rank + 1);
+        lhs = Expr::Binary(BinaryExpr {
             op,
-            lhs: Box::new(acc),
+            lhs: Box::new(lhs),
             rhs: Box::new(rhs),
         });
     }
-    acc
+    lhs
 }
 
 fn infix_op(s: &str) -> BinaryOp {
