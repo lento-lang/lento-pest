@@ -1156,8 +1156,16 @@ impl Checker {
                     if matches!(info.ty, Ty::Sum(_)) {
                         return self.sum_type_from_decl(&info, &arg_types);
                     }
-                    // Synonym: expand in place (parameters become fresh vars).
-                    return self.resolve_ty_scoped(&info.ty, scope);
+                    // Synonym: expand in place with the supplied arguments
+                    // bound to the synonym's parameters, so that two uses of
+                    // the same parameterized synonym share constraints.
+                    let mapping: HashMap<String, Type> = info
+                        .params
+                        .iter()
+                        .cloned()
+                        .zip(arg_types.iter().cloned())
+                        .collect();
+                    return self.resolve_ty_scoped(&info.ty, &mapping);
                 }
                 if name.chars().next().map(|c| c.is_ascii_lowercase()).unwrap_or(false) {
                     return Ok(self.var_ty());

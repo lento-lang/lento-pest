@@ -316,6 +316,27 @@ fn synonyms_expand() {
 }
 
 #[test]
+fn parameterized_synonyms_apply_their_arguments() {
+    // Two uses of the same parameterized synonym must share constraints:
+    // Wrapper<int> is not interchangeable with Wrapper<str>.
+    check_ok(
+        "type Wrapper a = { value: a }\n\
+         let w : Wrapper<int> = { value: 1 }\n\
+         assert (w.value == 1)\n",
+    );
+    check_err(
+        "type Wrapper a = { value: a }\nlet w : Wrapper<int> = { value: \"oops\" }\n",
+        "cannot unify",
+    );
+    check_err(
+        "type Wrapper a = { value: a }\n\
+         let w : Wrapper<int> = { value: 1 }\n\
+         let v : Wrapper<str> = w\n",
+        "cannot unify",
+    );
+}
+
+#[test]
 fn parameterized_types_check_arity() {
     check_err(
         "type Option a = Some a | None\nlet o : Option = Some 1\n",
