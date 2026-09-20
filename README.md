@@ -50,6 +50,11 @@ println doubled
   - type application is juxtaposed: `Option int`, `Pair int str`
 - **Checked specs**: `spec` signatures are verified against their definitions
   (skolemized conformance, including `::` constraint coverage)
+- **SMT-verified where-clauses**: `where` refinements on specs are checked
+  statically with cvc5 — preconditions are proven at every call site,
+  postconditions are proven against the definition (see
+  `docs/where-refinements.md`; unsupported or undecided clauses are compile
+  errors)
 - **Let bindings** with optional `mut` for mutation
 - **Functions** via curried `fn` clauses with pattern matching
 - **Lambdas** with `=>` syntax and optional type annotations
@@ -68,8 +73,12 @@ println doubled
   `x * 2` fixes `x : int`.
 - `ref`/`mut` are typed (`ref T`, `mut T`) but there is no borrow checking;
   runtime checks remain the authority.
-- `where` refinements are parsed but not checked; match exhaustiveness is not
-  analyzed (a non-matching scrutinee is a runtime error).
+- `where` refinements are checked with cvc5 over the encodable subset
+  (int/float/bool arithmetic, comparisons, logic); clauses needing strings,
+  lists, records, or reasoning beyond the solver's bounded budget are
+  compile errors, not silent acceptances. See `docs/where-refinements.md`.
+- Match exhaustiveness is not analyzed (a non-matching scrutinee is a
+  runtime error).
 - Constructor names share one global namespace per scope; redeclaration at the
   top level is an error, nested blocks may shadow.
 

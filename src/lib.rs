@@ -7,5 +7,6 @@ pub mod eval;
 mod intrinsics;
 pub mod parser;
 pub mod pprint;
+pub mod smt;
 pub mod ty;
 pub mod typecheck;

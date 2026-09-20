@@ -19,7 +19,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::{
-    BinaryOp, Decl, Expr, Lit, PatKind, Pattern, Program, Stmt, SumAlt, Ty, UnaryOp,
+    BinaryOp, Decl, Expr, Lit, PatKind, Pattern, Program, Stmt, SumAlt, Ty, UnaryOp, VarExpr,
 };
 use crate::ty::{
     Class, Con, Constraint, RecordType, Scheme, SolveResult, Subst, SumType, Type, TypeAlt, VarId,
@@ -47,6 +47,23 @@ struct EnvEntry {
     mutable: bool,
 }
 
+#[derive(Clone)]
+/// A spec's `where` refinement, classified by result-parameter reference:
+/// clauses touching the (named) result binder are postconditions, the rest
+/// are preconditions. See docs/where-refinements.md.
+struct WhereSpec {
+    /// Spec input binders in curry order: (name, solver sort when the type
+    /// is encodable). Unnamed binders consume an argument but cannot be
+    /// referenced by clauses.
+    inputs: Vec<(Option<String>, Option<crate::smt::SVal>)>,
+    /// The result binder when named and encodable.
+    result: Option<(String, crate::smt::SVal)>,
+    pres: Vec<crate::ast::Expr>,
+    posts: Vec<crate::ast::Expr>,
+    /// Number of input binders: full-application argument count.
+    arity: usize,
+}
+
 pub struct Checker {
     subst: Subst,
     next_decl: u32,
@@ -57,6 +74,12 @@ pub struct Checker {
     ctors: HashMap<String, CtorDecl>,
     types: HashMap<String, TypeDeclInfo>,
     specs: HashMap<String, Vec<crate::ast::SpecDecl>>,
+    where_specs: HashMap<String, WhereSpec>,
+    bodies: HashMap<String, crate::ast::Expr>,
+    verified_posts: HashSet<String>,
+    /// True while inferring a call's callee, so `infer_var` can tell value
+    /// use from call use for where-constrained functions.
+    in_callee: bool,
     pending: Vec<Constraint>,
     span: crate::ast::Span,
 }
@@ -71,6 +94,10 @@ pub fn check_program(program: &Program) -> TypeResult<()> {
         ctors: HashMap::new(),
         types: HashMap::new(),
         specs: HashMap::new(),
+        where_specs: HashMap::new(),
+        bodies: HashMap::new(),
+        verified_posts: HashSet::new(),
+        in_callee: false,
         pending: Vec::new(),
         span: crate::ast::Span { line: 0, col: 0 },
     };
@@ -95,6 +122,7 @@ pub fn check_program(program: &Program) -> TypeResult<()> {
                 .err(format!("spec for '{name}' has no matching definition")));
         }
         checker.check_specs_for(&name)?;
+        checker.verify_posts(&name)?;
     }
     Ok(())
 }
@@ -231,6 +259,7 @@ impl Checker {
             Decl::Type(t) => self.register_type(t),
             Decl::Spec(s) => {
                 self.specs.entry(s.name.clone()).or_default().push(s.clone());
+                self.register_where_spec(s)?;
                 Ok(())
             }
             Decl::Let(let_decl) => self.check_let(let_decl),
@@ -330,6 +359,8 @@ impl Checker {
         self.solve_pending()?;
 
         if let Some(n) = &name {
+            // Keep the definition body for where-postcondition encoding.
+            self.bodies.insert(n.clone(), let_decl.value.clone());
             let generalized = !let_decl.mutable && is_value(&let_decl.value);
             if generalized {
                 let (scheme, deferred) = self.generalize(binding_ty.clone(), Some(n));
@@ -360,6 +391,7 @@ impl Checker {
         }
         if let Some(n) = &name {
             self.check_specs_for(n)?;
+            self.verify_posts(n)?;
         }
         Ok(())
     }
@@ -406,6 +438,254 @@ impl Checker {
             self.subst.restore(snapshot);
         }
         Ok(())
+    }
+
+    /// Register a spec's `where` refinement: walk the signature's binder
+    /// chain, validate clause identifiers, and classify clauses into
+    /// preconditions (no result reference) and postconditions (reference the
+    /// result parameter). See docs/where-refinements.md.
+    fn register_where_spec(&mut self, spec: &crate::ast::SpecDecl) -> TypeResult<()> {
+        let Some(clauses) = &spec.ty.where_ else {
+            return Ok(());
+        };
+        if clauses.is_empty() {
+            return Ok(());
+        }
+        // Walk the arrow chain: input binders in curry order, then the final
+        // binder, which is the result when it carries a name.
+        let mut cur = &spec.ty.ty;
+        let mut binder_tys: Vec<(Option<String>, Ty)> = Vec::new();
+        loop {
+            match cur {
+                Ty::Arrow { from, to } => {
+                    binder_tys.push(Self::binder_name_ty(from));
+                    cur = to;
+                }
+                other => {
+                    binder_tys.push(Self::binder_name_ty(other));
+                    break;
+                }
+            }
+        }
+        let (result_name, result_ty) = binder_tys.pop().expect("at least one binder");
+        let arity = binder_tys.len();
+        let input_sorts: Vec<(Option<String>, Option<crate::smt::SVal>)> = binder_tys
+            .iter()
+            .map(|(n, t)| (n.clone(), crate::smt::sort_of_ty(t)))
+            .collect();
+        let result_sort = match (&result_name, crate::smt::sort_of_ty(&result_ty)) {
+            (Some(n), Some(s)) => Some((n.clone(), s)),
+            _ => None,
+        };
+
+        // Validate clause identifiers and classify.
+        let mut pres = Vec::new();
+        let mut posts = Vec::new();
+        for clause in clauses {
+            let mut fv = Vec::new();
+            crate::smt::free_vars(clause, &mut fv);
+            for v in fv {
+                let named_input = input_sorts.iter().any(|(n, _)| n.as_deref() == Some(v.as_str()));
+                let is_result = result_name.as_deref() == Some(v.as_str());
+                if !named_input && !is_result {
+                    return Err(self.err(format!(
+                        "unknown identifier '{v}' in where clause of spec '{}'",
+                        spec.name
+                    )));
+                }
+                if named_input
+                    && input_sorts
+                        .iter()
+                        .any(|(n, s)| n.as_deref() == Some(v.as_str()) && s.is_none())
+                {
+                    return Err(self.err(format!(
+                        "where clause of spec '{}' uses parameter '{v}', which is not int/float/bool",
+                        spec.name
+                    )));
+                }
+            }
+            let references_result = result_name
+                .as_deref()
+                .map(|rn| {
+                    let mut fv = Vec::new();
+                    crate::smt::free_vars(clause, &mut fv);
+                    fv.iter().any(|v| v == rn)
+                })
+                .unwrap_or(false);
+            if references_result {
+                posts.push(clause.clone());
+            } else {
+                pres.push(clause.clone());
+            }
+        }
+
+        // Postconditions require the whole signature to be encodable, since
+        // the definition body is encoded over every parameter.
+        if !posts.is_empty() {
+            for (n, s) in &input_sorts {
+                if s.is_none() {
+                    return Err(self.err(format!(
+                        "spec '{}' has postconditions, so parameter {} must be int/float/bool",
+                        spec.name,
+                        n.as_deref().unwrap_or("<unnamed>")
+                    )));
+                }
+            }
+            if result_sort.is_none() {
+                return Err(self.err(format!(
+                    "spec '{}' has postconditions, so its result must be a named (r: int|float|bool) binder",
+                    spec.name
+                )));
+            }
+        }
+
+        self.where_specs.insert(
+            spec.name.clone(),
+            WhereSpec {
+                inputs: input_sorts,
+                result: result_sort,
+                pres,
+                posts,
+                arity,
+            },
+        );
+        Ok(())
+    }
+
+    /// (name, type) of a binder position: `(x: int)` names the binder, bare
+    /// types are anonymous.
+    fn binder_name_ty(ty: &Ty) -> (Option<String>, Ty) {
+        match ty {
+            Ty::NamedBinder { name, ty } => (Some(name.clone()), (**ty).clone()),
+            other => (None, other.clone()),
+        }
+    }
+
+    /// Verify the postconditions of a spec'd definition by encoding its body
+    /// and asking the solver for a counterexample. Idempotent per name.
+    fn verify_posts(&mut self, name: &str) -> TypeResult<()> {
+        if !self.verified_posts.insert(name.to_string()) {
+            return Ok(());
+        }
+        let Some(ws) = self.where_specs.get(name).cloned() else {
+            return Ok(());
+        };
+        if ws.posts.is_empty() {
+            return Ok(());
+        }
+        let Some(result) = ws.result.clone() else {
+            return Err(self.err(format!(
+                "cannot verify postcondition of '{name}': result parameter must be a named (r: type) binder"
+            )));
+        };
+        let mut inputs: Vec<(Option<String>, crate::smt::SVal)> = Vec::new();
+        for (n, s) in &ws.inputs {
+            match (n, s) {
+                (Some(n), Some(s)) => inputs.push((Some(n.clone()), *s)),
+                (Some(n), None) => {
+                    return Err(self.err(format!(
+                        "cannot verify postcondition of '{name}': parameter '{n}' is not int/float/bool"
+                    )))
+                }
+                (None, _) => {
+                    return Err(self.err(format!(
+                        "cannot verify postcondition of '{name}': all parameters must be named"
+                    )))
+                }
+            }
+        }
+        let Some(body) = self.bodies.get(name).cloned() else {
+            return Err(self.err(format!(
+                "cannot verify postcondition of '{name}': no definition body"
+            )));
+        };
+        for post in &ws.posts {
+            match crate::smt::check_post(&inputs, &result, &body, &ws.pres, post) {
+                Ok(crate::smt::Verdict::Proven) => {}
+                Ok(crate::smt::Verdict::Counterexample(w)) => {
+                    return Err(self.err(format!(
+                        "definition of '{name}' violates postcondition {} (counterexample: {w})",
+                        clause_text(post)
+                    )))
+                }
+                Err(e) => {
+                    return Err(self.err(format!(
+                        "cannot verify postcondition of '{name}': {e}"
+                    )))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check where-preconditions at a fully applied call site. Partial
+    /// application of a precondition-carrying function is an error: the
+    /// obligation for the remaining argument cannot be tracked through
+    /// first-class function values.
+    fn check_where_call(&mut self, name: &str, args: &[&crate::ast::Expr]) -> TypeResult<()> {
+        let Some(ws) = self.where_specs.get(name).cloned() else {
+            return Ok(());
+        };
+        if ws.pres.is_empty() {
+            return Ok(());
+        }
+        if args.len() < ws.arity {
+            return Err(self.err(format!(
+                "partial application of '{name}' escapes its where-preconditions; call it with all {} argument(s) at once",
+                ws.arity
+            )));
+        }
+        if args.len() > ws.arity {
+            // Over-application is a type error in the unify loop; nothing to
+            // check here.
+            return Ok(());
+        }
+        // Caller-visible free variables in the arguments become solver
+        // constants of their inferred sorts.
+        let mut externals: Vec<(String, crate::smt::SVal)> = Vec::new();
+        for a in args {
+            let mut fv = Vec::new();
+            crate::smt::free_vars(a, &mut fv);
+            for v in fv {
+                if externals.iter().any(|(n, _)| *n == v) {
+                    continue;
+                }
+                let t = self.infer_var(&v)?;
+                let sval = self.type_sval(&t).ok_or_else(|| {
+                    self.err(format!(
+                        "cannot verify precondition of '{name}': variable '{v}' is not int/float/bool"
+                    ))
+                })?;
+                externals.push((v, sval));
+            }
+        }
+        for pre in &ws.pres {
+            match crate::smt::check_pre(&ws.inputs, pre, args, &externals) {
+                Ok(crate::smt::Verdict::Proven) => {}
+                Ok(crate::smt::Verdict::Counterexample(w)) => {
+                    return Err(self.err(format!(
+                        "call to '{name}' violates precondition {} (counterexample: {w})",
+                        clause_text(pre)
+                    )))
+                }
+                Err(e) => {
+                    return Err(self.err(format!(
+                        "cannot verify precondition of '{name}': {e}"
+                    )))
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Solver sort of a (pruned) checker type, if encodable.
+    fn type_sval(&self, ty: &Type) -> Option<crate::smt::SVal> {
+        match self.subst.prune(ty) {
+            Type::Con(Con::Int) => Some(crate::smt::SVal::Int),
+            Type::Con(Con::Float) => Some(crate::smt::SVal::Float),
+            Type::Con(Con::Bool) => Some(crate::smt::SVal::Bool),
+            _ => None,
+        }
     }
 
     /// Build the declared type of a spec. Quantified variables are marked
@@ -605,6 +885,16 @@ impl Checker {
             let (_, sum) = self.ctor_instance(name)?;
             return Ok(sum);
         }
+        if !self.in_callee {
+            if let Some(ws) = self.where_specs.get(name) {
+                if !ws.pres.is_empty() {
+                    return Err(self.err(format!(
+                        "'{name}' has where-preconditions and cannot be used as a value; call it with all {} argument(s) at once",
+                        ws.arity
+                    )));
+                }
+            }
+        }
         match self.vars.get(name).cloned() {
             Some(entry) => {
                 let instantiated = self.instantiate(&entry.scheme);
@@ -678,26 +968,59 @@ impl Checker {
     }
 
     fn infer_call(&mut self, call: &crate::ast::CallExpr) -> TypeResult<Type> {
+        // Flatten nested curried application `f a b` into (f, [a, b]) so
+        // where-clause checks see the full argument list at once.
+        let (base, args) = Self::flatten_call(call);
+
         // Constructor application: `Some 5`.
-        if let Expr::Var(var) = call.callee.as_ref() {
+        if let Expr::Var(var) = base {
             if let Some(ctor) = self.ctors.get(&var.name).cloned() {
                 if ctor.payload.is_some() {
-                    if call.args.len() != 1 {
+                    if args.len() != 1 {
                         return Err(self.err(format!(
                             "constructor '{}' expects 1 argument, got {}",
                             var.name,
-                            call.args.len()
+                            args.len()
                         )));
                     }
                     let (payload, sum) = self.ctor_instance(&var.name)?;
-                    let arg_ty = self.infer(&call.args[0])?;
+                    let arg_ty = self.infer(args[0])?;
                     self.subst.unify(&payload, &arg_ty).map_err(|e| self.err(e))?;
                     return Ok(sum);
                 }
             }
         }
-        let mut callee_ty = self.infer(&call.callee)?;
-        for arg in &call.args {
+        let saved = std::mem::replace(&mut self.in_callee, true);
+        let inferred = self.infer_call_body(base, &args);
+        self.in_callee = saved;
+        let callee_ty = inferred?;
+        if let Expr::Var(var) = base {
+            self.check_where_call(&var.name, &args)?;
+        }
+        Ok(callee_ty)
+    }
+
+    /// Flatten `f a b` (nested `Call` nodes) into the base callee and the
+    /// full argument list in application order.
+    fn flatten_call<'a>(
+        call: &'a crate::ast::CallExpr,
+    ) -> (&'a crate::ast::Expr, Vec<&'a crate::ast::Expr>) {
+        let mut args: Vec<&crate::ast::Expr> = call.args.iter().collect();
+        let mut base = call.callee.as_ref();
+        while let Expr::Call(inner) = base {
+            args.splice(0..0, inner.args.iter().collect::<Vec<_>>());
+            base = inner.callee.as_ref();
+        }
+        (base, args)
+    }
+
+    fn infer_call_body(
+        &mut self,
+        base: &crate::ast::Expr,
+        args: &[&crate::ast::Expr],
+    ) -> TypeResult<Type> {
+        let mut callee_ty = self.infer(base)?;
+        for arg in args {
             let arg_ty = self.infer(arg)?;
             if matches!(self.subst.prune(&callee_ty), Type::Sum(_)) {
                 return Err(self.err("cannot call a sum value (constructor already applied)"));
@@ -1373,6 +1696,48 @@ impl Checker {
 struct PatternBinds {
     ty: Type,
     bindings: Vec<(String, Type)>,
+}
+
+/// Minimal readable rendering of a where-clause expression for error
+/// messages (the pprint module only formats whole programs).
+fn clause_text(e: &Expr) -> String {
+    match e {
+        Expr::Lit(lit) => match &lit.value {
+            Lit::Bool(b) => b.to_string(),
+            Lit::Int(i) => i.to_string(),
+            Lit::Float(f) => f.to_string(),
+            Lit::Str(s) => format!("{s:?}"),
+        },
+        Expr::Var(v) => v.name.clone(),
+        Expr::Unary(u) => match u.op {
+            UnaryOp::Not => format!("!{}", clause_text(&u.operand)),
+            UnaryOp::Neg => format!("-{}", clause_text(&u.operand)),
+        },
+        Expr::Binary(b) => {
+            let sym = match b.op {
+                BinaryOp::Add => "+",
+                BinaryOp::Sub => "-",
+                BinaryOp::Mul => "*",
+                BinaryOp::Div => "/",
+                BinaryOp::Mod => "%",
+                BinaryOp::Eq => "==",
+                BinaryOp::Ne => "!=",
+                BinaryOp::Lt => "<",
+                BinaryOp::Gt => ">",
+                BinaryOp::Le => "<=",
+                BinaryOp::Ge => ">=",
+                BinaryOp::And => "&&",
+                BinaryOp::Or => "||",
+            };
+            format!(
+                "({} {} {})",
+                clause_text(&b.lhs),
+                sym,
+                clause_text(&b.rhs)
+            )
+        }
+        _ => "<unprintable clause>".into(),
+    }
 }
 
 fn sum_alts(ty: &Ty) -> &[SumAlt] {

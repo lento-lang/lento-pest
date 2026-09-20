@@ -217,7 +217,7 @@ fn constructor_sums_roundtrip() {
 fn constructor_arity_is_checked() {
     check_err(
         "type Option a = Some a | None\nSome 1 2\n",
-        "cannot call a sum value",
+        "constructor 'Some' expects 1 argument",
     );
     check_err(
         "type Option a = Some a | None\nNone 1\n",
@@ -460,5 +460,70 @@ fn empty_list_and_match_types_unify() {
     check_ok(
         "fn len xs = match xs {\n    [] => 0\n    [x, ...rest] => 1 + len rest\n}\n\
          assert (len [1, 2, 3] == 3)\n",
+    );
+}
+
+// -- where-clause refinements ------------------------------------------------
+
+const DIVIDE_SPEC: &str = "spec divide:\n    (x: int) -> (y: int) -> (r: int)\n    where\n        y != 0\n\nfn divide x y = x / y\n";
+
+#[test]
+fn where_preconditions_checked_at_callsites() {
+    check_ok(&format!("{DIVIDE_SPEC}assert (divide 20 4 == 5)\n"));
+    check_err(
+        &format!("{DIVIDE_SPEC}assert (divide 20 0 == 0)\n"),
+        "violates precondition",
+    );
+}
+
+#[test]
+fn where_preconditions_track_symbolic_callers() {
+    // Provable caller context: the precondition holds for all x.
+    check_ok(&format!(
+        "{DIVIDE_SPEC}fn helper x = divide 2 1\nassert (helper 9 == 2)\n"
+    ));
+    // Unprovable symbolic y: counterexample reported at the call site.
+    check_err(
+        &format!("{DIVIDE_SPEC}fn helper y = divide 2 y\n"),
+        "violates precondition",
+    );
+}
+
+#[test]
+fn where_partial_application_rejected() {
+    check_err(
+        &format!("{DIVIDE_SPEC}let g = divide 20\n"),
+        "partial application",
+    );
+    check_err(
+        &format!("{DIVIDE_SPEC}let g = divide\n"),
+        "cannot be used as a value",
+    );
+}
+
+#[test]
+fn where_postcondition_verified() {
+    check_ok(
+        "spec square:\n    (x: int) -> (r: int)\n    where\n        r == x * x\n\nfn square x = x * x\nassert (square 7 == 49)\n",
+    );
+    check_err(
+        "spec bad:\n    (x: int) -> (r: int)\n    where\n        r == x * x\n\nfn bad x = x + x\n",
+        "violates postcondition",
+    );
+}
+
+#[test]
+fn where_unknown_identifier_rejected() {
+    check_err(
+        "spec f:\n    (x: int) -> int\n    where\n        z != 0\n\nfn f x = x\n",
+        "unknown identifier 'z'",
+    );
+}
+
+#[test]
+fn where_unsupported_parameter_type_rejected() {
+    check_err(
+        "spec f:\n    (x: str) -> str\n    where\n        x != \"\"\n\nfn f x = x\n",
+        "not int/float/bool",
     );
 }
