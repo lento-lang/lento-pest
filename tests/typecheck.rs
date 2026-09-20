@@ -85,6 +85,13 @@ fn assignment_requires_mutable_binding() {
 }
 
 #[test]
+fn assignment_checks_value_against_binding_type() {
+    check_ok("let mut x = 1\nx = 2\nx = x + 1\nassert (x == 3)\n");
+    check_err("let mut x = 1\nx = \"hello\"\n", "cannot unify");
+    check_err("let mut f = x => x + 1\nf = \"oops\"\n", "cannot unify");
+}
+
+#[test]
 fn rejects_unsolved_constraints_on_concrete_types() {
     check_err("abs [1, 2]\n", "no Num instance");
     check_err("concat 1 2\n", "no Concat instance");

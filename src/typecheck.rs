@@ -492,7 +492,13 @@ impl Checker {
                     )));
                 }
                 let value_ty = self.infer(&assign.value)?;
-                let _ = value_ty;
+                // Mutable lets are monomorphic (value restriction), so the
+                // binding's current type is fully known: the assigned value
+                // must unify with it, or the invariant carried by the
+                // binding's original annotation is silently violated.
+                self.subst
+                    .unify(&entry.scheme.ty, &value_ty)
+                    .map_err(|e| self.err(e))?;
                 Ok(self.con(Con::Unit))
             }
             Expr::Lambda(lambda) => {
