@@ -755,6 +755,12 @@ impl Checker {
             {
                 Ok(self.con(Con::Int))
             }
+            // `.len` on tuples and lists: concrete types with a Len
+            // instance, matching both the len intrinsic and the runtime
+            // member access.
+            Type::Tuple(_) | Type::List(_) if member.field == "len" => {
+                Ok(self.con(Con::Int))
+            }
             Type::Var(_) => {
                 if member.field == "len" {
                     // `.len` on an unknown type resolves like the len

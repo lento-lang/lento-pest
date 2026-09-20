@@ -394,6 +394,19 @@ fn spec_constraint_coverage_is_required() {
 }
 
 #[test]
+fn member_len_matches_len_class() {
+    // Tuples and lists are concrete Len instances; `.len` must type-check
+    // the same way the len intrinsic (and the runtime) treats them.
+    check_ok("let t = (1, 2, 3)\nassert (t.len == 3)\n");
+    check_ok("assert ([1, 2].len == 2)\n");
+    check_ok("assert ((\"a\", \"b\").len == 2)\n");
+    // Non-len fields on tuples still fail, and a closed record's `.len`
+    // stays a plain field lookup.
+    check_err("(1, 2).nope\n", "cannot access field");
+    check_err("let r = { x: 1 }\nr.len\n", "has no field 'len'");
+}
+
+#[test]
 fn spec_after_definition_is_checked() {
     // A spec declared after its definition used to be recorded but never
     // verified, because check_specs_for only fires when the definition's
