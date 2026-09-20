@@ -490,6 +490,19 @@ fn where_preconditions_track_symbolic_callers() {
 }
 
 #[test]
+fn where_call_site_errors_are_type_errors() {
+    let definite_failure = format!(
+        "{DIVIDE_SPEC}let result = divide 20 0\n"
+    );
+    check_err(&definite_failure, "call to 'divide' violates precondition");
+
+    let symbolic_failure = format!(
+        "{DIVIDE_SPEC}fn caller y = divide 20 y\n"
+    );
+    check_err(&symbolic_failure, "call to 'divide' violates precondition");
+}
+
+#[test]
 fn where_partial_application_rejected() {
     check_err(
         &format!("{DIVIDE_SPEC}let g = divide 20\n"),
@@ -509,6 +522,14 @@ fn where_postcondition_verified() {
     check_err(
         "spec bad:\n    (x: int) -> (r: int)\n    where\n        r == x * x\n\nfn bad x = x + x\n",
         "violates postcondition",
+    );
+}
+
+#[test]
+#[ignore = "v1 does not compose postconditions into nested call-site preconditions"]
+fn chained_postcondition_proves_next_precondition() {
+    check_ok(
+        "spec positive:\n    (x: int) -> (r: int)\n    where\n        r > 0\n\nspec consume:\n    (x: int) -> (r: int)\n    where\n        x > 0\n\nfn positive x = x + 1\nfn consume x = x\nfn chained x = consume (positive x)\nassert (chained 4 == 5)\n",
     );
 }
 

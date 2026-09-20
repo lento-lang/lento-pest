@@ -1,0 +1,29 @@
+type Option a = Some a | None
+type Point = { x: int, y: int }
+
+fn option_value o = match o {
+    Some value => value,
+    None => 0
+}
+
+fn bool_value flag = match flag {
+    true => 1,
+    false => 0
+}
+
+fn list_value xs = match xs {
+    [] => 0,
+    [x, ...rest] => x
+}
+
+fn point_value point = match point {
+    { x: x, y: y } => x + y
+}
+
+assert (option_value (Some 7) == 7)
+assert (option_value None == 0)
+assert (bool_value true == 1)
+assert (bool_value false == 0)
+assert (list_value [] == 0)
+assert (list_value [4, 5] == 4)
+assert (point_value { x: 2, y: 3 } == 5)
