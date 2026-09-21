@@ -42,7 +42,17 @@ block          = { "{" ~ body ~ "}" }
 
 statement      = _{ declaration | expression }
 
-declaration    = _{ spec_decl | type_decl | let_decl | fn_clause }
+declaration    = _{ class_decl | impl_decl | spec_decl | type_decl | let_decl | fn_clause }
+
+// A class is a named scope of required ordinary specs. Its type parameters
+// may be proper types or higher-kinded constructors; kinds are inferred later.
+class_decl     = { "class" ~ identifier ~ type_param* ~ "{" ~ NEWLINE* ~ (spec_decl ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+
+// An implementation explicitly associates a class with a type or type
+// constructor and supplies ordinary function definitions for its specs.
+impl_decl      = { "impl" ~ identifier ~ impl_target? ~ "{" ~ NEWLINE* ~ (fn_clause ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+impl_target    = { type_atom+ }
+class_member_sep = _{ (";" ~ NEWLINE*) | NEWLINE+ | &"}" }
 
 // `spec name : spec_type`
 spec_decl      = { "spec" ~ identifier ~ ":" ~ spec_type }
@@ -74,7 +84,7 @@ spec_type  = _{ NEWLINE* ~ (quantifier* ~ arrow_type ~ where_clause?) }
 
 quantifier   = { "all" ~ type_var ~ ("," ~ NEWLINE* ~ type_var)* ~ constraints? ~ "." ~ NEWLINE* }
 type_var     = @{ ASCII_ALPHA_LOWER ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
-constraints  = { "::" ~ constraint ~ ("," ~ constraint)* }
+constraints  = { ("::" | ":") ~ constraint ~ (("," | "+") ~ constraint)* }
 constraint   = { identifier ~ type_atom* }
 
 // Conditions are comma-separated and terminated by the newline: a `where`

@@ -64,6 +64,8 @@ fn program(pairs: Pairs<'_, Rule>, source: &str) -> Program {
 
 fn stmt(pair: Pair<'_, Rule>) -> Option<Stmt> {
     match pair.as_rule() {
+        Rule::class_decl => Some(Stmt::Decl(Decl::Class(class_decl(pair)))),
+        Rule::impl_decl => Some(Stmt::Decl(Decl::Impl(impl_decl(pair)))),
         Rule::spec_decl => Some(Stmt::Decl(Decl::Spec(spec_decl(pair)))),
         Rule::type_decl => Some(Stmt::Decl(Decl::Type(type_decl(pair)))),
         Rule::let_decl => Some(Stmt::Decl(Decl::Let(let_decl(pair)))),
@@ -100,6 +102,36 @@ fn spec_decl(pair: Pair<'_, Rule>) -> SpecDecl {
             where_,
         },
     }
+}
+
+fn class_decl(pair: Pair<'_, Rule>) -> ClassDecl {
+    let mut name = String::new();
+    let mut params = Vec::new();
+    let mut specs = Vec::new();
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::identifier if name.is_empty() => name = inner.as_str().to_string(),
+            Rule::type_param => params.push(inner.as_str().to_string()),
+            Rule::spec_decl => specs.push(spec_decl(inner)),
+            _ => {}
+        }
+    }
+    ClassDecl { name, params, specs }
+}
+
+fn impl_decl(pair: Pair<'_, Rule>) -> ImplDecl {
+    let mut inner = pair.into_inner();
+    let class = inner.next().unwrap().as_str().to_string();
+    let mut target = Vec::new();
+    let mut methods = Vec::new();
+    for child in inner {
+        match child.as_rule() {
+            Rule::impl_target => target.extend(child.into_inner().map(type_)),
+            Rule::fn_clause => methods.push(fn_clause(child)),
+            _ => {}
+        }
+    }
+    ImplDecl { class, target, methods }
 }
 
 fn quantifier(pair: Pair<'_, Rule>) -> Quantifier {

@@ -485,6 +485,10 @@ pub enum Class {
     /// `Member target member` — target is a sum with `member` as a bare
     /// alternative (or already equals it). Deferred while target is unknown.
     Member,
+    /// User-defined class. The numeric id is assigned by the checker so
+    /// independently named classes remain distinct even when their text is
+    /// reused in a nested scope.
+    User(u32),
 }
 
 impl fmt::Display for Class {
@@ -499,6 +503,7 @@ impl fmt::Display for Class {
             Class::Len => "Len",
             Class::Haystack => "Haystack",
             Class::Member => "Member",
+            Class::User(_) => "User",
         };
         write!(f, "{name}")
     }
@@ -598,6 +603,11 @@ pub fn solve_constraint(subst: &mut Subst, con: &Constraint) -> SolveResult {
                 (Type::Var(_), _) | (_, Type::Var(_)) if has_var => SolveResult::Deferred,
                 (c, e) => SolveResult::Failed(format!("no Haystack instance for ({c}, {e})")),
             }
+        }
+        Class::User(_) => {
+            // User-class obligations remain in schemes until the checker can
+            // match them against an explicit `impl` instance.
+            if has_var { SolveResult::Deferred } else { SolveResult::Deferred }
         }
     }
 }

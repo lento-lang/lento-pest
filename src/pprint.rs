@@ -43,6 +43,39 @@ fn format_stmt(out: &mut String, stmt: &Stmt) {
 
 fn format_decl(out: &mut String, decl: &Decl) {
     match decl {
+        Decl::Class(class) => {
+            let _ = write!(out, "class {}", class.name);
+            for param in &class.params {
+                let _ = write!(out, " {param}");
+            }
+            out.push_str(" {\n");
+            for spec in &class.specs {
+                let _ = writeln!(out, "    spec {}:", spec.name);
+                format_spec_type(out, &spec.ty);
+            }
+            out.push_str("}\n");
+        }
+        Decl::Impl(implementation) => {
+            let _ = write!(out, "impl {} ", implementation.class);
+            for (i, target) in implementation.target.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                format_type(out, target);
+            }
+            out.push_str(" {\n");
+            for method in &implementation.methods {
+                let _ = write!(out, "    fn {} ", method.name);
+                for param in &method.params {
+                    format_pattern(out, param);
+                    out.push(' ');
+                }
+                let _ = write!(out, "= ");
+                format_expr(out, &method.body, Prec::Top);
+                out.push('\n');
+            }
+            out.push_str("}\n");
+        }
         Decl::Spec(spec) => {
             let _ = writeln!(out, "spec {}:", spec.name);
             format_spec_type(out, &spec.ty);

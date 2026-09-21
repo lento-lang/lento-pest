@@ -34,6 +34,10 @@ pub enum Stmt {
 /// whose value is a curried chain of lambdas.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decl {
+    /// `class Name params* { spec ... }` — a named scope of required specs.
+    Class(ClassDecl),
+    /// `impl Class Target { fn ... }` — an explicit class implementation.
+    Impl(ImplDecl),
     /// `spec name : spec_type` — a persistent local signature/contract.
     Spec(SpecDecl),
     /// `type name = type` — a named type synonym.
@@ -44,6 +48,22 @@ pub enum Decl {
     /// function definition. Kept as its own node so `fn` source round-trips
     /// through the pretty printer (see the evaluator note below).
     Fn(FnDecl),
+}
+
+/// `class name params* { spec ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassDecl {
+    pub name: String,
+    pub params: Vec<String>,
+    pub specs: Vec<SpecDecl>,
+}
+
+/// `impl class target { fn ... }`
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplDecl {
+    pub class: String,
+    pub target: Vec<Ty>,
+    pub methods: Vec<FnDecl>,
 }
 
 /// `spec name : <spec_type>`

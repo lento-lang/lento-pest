@@ -88,6 +88,8 @@ fn non_fn_statements_pass_through() {
         Stmt::Decl(Decl::Fn(_)) => "fn",
         Stmt::Decl(Decl::Spec(_)) => "spec",
         Stmt::Decl(Decl::Type(_)) => "type",
+        Stmt::Decl(Decl::Class(_)) => "class",
+        Stmt::Decl(Decl::Impl(_)) => "impl",
         Stmt::Expr(_) => "expr",
     };
     let kinds: Vec<&str> = out.statements.iter().map(kind_of).collect();
