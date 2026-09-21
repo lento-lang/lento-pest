@@ -61,6 +61,17 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
     parse_program(&src).map_err(|e| format!("Parse error in {}:\n{}", path.display(), e))
 }
 
+fn load_with_prelude(path: &std::path::Path) -> Result<lento::ast::Program, String> {
+    let prelude = parse_program(include_str!("prelude.lt"))
+        .map_err(|e| format!("Parse error in prelude.lt:\n{}", e))?;
+    let user = load(path)?;
+    let mut statements = prelude.statements;
+    statements.extend(user.statements);
+    let mut spans = prelude.spans;
+    spans.extend(user.spans);
+    Ok(lento::ast::Program { statements, spans })
+}
+
 /// Interpret a parsed program: desugar, type-check, then evaluate.
 ///
 /// `fn` clauses are desugared into `let` bindings first, so the type checker
@@ -102,7 +113,7 @@ fn main() -> Result<(), String> {
                 Ok(())
             } else {
                 // Default mode: interpret the program.
-                let ast = load(path)?;
+                let ast = load_with_prelude(path)?;
                 interpret(&ast)
             }
         }
