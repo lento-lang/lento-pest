@@ -21,6 +21,14 @@ pub enum Binding {
     Constructor { tag: String, has_payload: bool },
     /// A `type` declaration usable at runtime for typed-pattern checks.
     TypeDef { params: Vec<String>, ty: Ty },
+    Methods(Vec<MethodBinding>),
+}
+
+#[derive(Debug, Clone)]
+pub struct MethodBinding {
+    pub target: Vec<Ty>,
+    pub arity: usize,
+    pub value: Value,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +138,44 @@ fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Value, String> {
 
 fn eval_decl(decl: &Decl, env: &mut Env) -> Result<Value, String> {
     match decl {
+        Decl::Class(_) => Ok(Value::Unit),
+        Decl::Impl(i) => {
+            for method in &i.methods {
+                let let_decl = method.clone().desugar();
+                let previous = env.get(&method.name).cloned();
+                eval_method_decl(&let_decl, env)?;
+                let value = match env.remove(&method.name) {
+                    Some(Binding::Inline(value)) => value,
+                    Some(Binding::Cell { value, .. }) => value.borrow().clone(),
+                    Some(_) => return Err(format!("impl method '{}' is not a value", method.name)),
+                    None => return Err(format!("impl method '{}' was not bound", method.name)),
+                };
+                if let Some(previous) = previous {
+                    env.insert(method.name.clone(), previous);
+                } else {
+                    env.remove(&method.name);
+                }
+                let method_binding = MethodBinding {
+                    target: i.target.clone(),
+                    arity: method.params.len(),
+                    value,
+                };
+                let existing = env.remove(&method.name);
+                match existing {
+                    Some(Binding::Methods(mut methods)) => {
+                        methods.push(method_binding);
+                        env.insert(method.name.clone(), Binding::Methods(methods));
+                    }
+                    Some(_) => {
+                        env.insert(method.name.clone(), Binding::Methods(vec![method_binding]));
+                    }
+                    None => {
+                        env.insert(method.name.clone(), Binding::Methods(vec![method_binding]));
+                    }
+                }
+            }
+            Ok(Value::Unit)
+        }
         Decl::Spec(_) => Ok(Value::Unit),
         Decl::Type(t) => {
             install_type_decl(t, env);
@@ -192,6 +238,19 @@ fn eval_let_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
     Ok(value)
 }
 
+/// Impl methods are ordinary functions, but their definitions are not
+/// recursive bindings.  Avoid installing a self-referential cell while
+/// evaluating a method that delegates to a same-named intrinsic.
+fn eval_method_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
+    if let PatKind::Var(name) = &let_decl.pattern.kind {
+        let value = eval_expr(&let_decl.value, env)?;
+        env.insert(name.clone(), Binding::Inline(value.clone()));
+        Ok(value)
+    } else {
+        eval_let_decl(let_decl, env)
+    }
+}
+
 fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
     match expr {
         Expr::Lit(lit) => Ok(eval_lit(&lit.value)),
@@ -204,6 +263,19 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
             env: env.clone(),
         }))),
         Expr::Call(call) => {
+            if let Expr::Var(var) = call.callee.as_ref() {
+                if let Some(Binding::Methods(methods)) = env.get(&var.name).cloned() {
+                    let mut args = Vec::with_capacity(call.args.len());
+                    for arg in &call.args {
+                        args.push(eval_expr(arg, env)?);
+                    }
+                    let method = methods
+                        .iter()
+                        .find(|method| method_matches(&method.target, method.arity, &args, env))
+                        .ok_or_else(|| format!("no matching method '{}'", var.name))?;
+                    return apply_call(method.value.clone(), args);
+                }
+            }
             // Constructor application: `Some 5` parses as a call whose callee
             // is a variable bound to a constructor.
             if let Expr::Var(var) = call.callee.as_ref() {
@@ -770,8 +842,27 @@ fn lookup_var(env: &Env, name: &str) -> Result<Value, String> {
             "constructor '{tag}' expects one argument; use '{tag} value'"
         )),
         Some(Binding::TypeDef { .. }) => Err(format!("'{name}' is a type, not a value")),
+        Some(Binding::Methods(_)) => Err(format!("method '{name}' requires a typed call")),
         None => Err(format!("undefined variable '{name}'")),
     }
+}
+
+fn method_matches(target: &[Ty], arity: usize, args: &[Value], env: &Env) -> bool {
+    if target.is_empty() {
+        return true;
+    }
+    if args.len() < arity {
+        return target.len() == 1
+            && (args.iter().any(|arg| value_matches_ty(arg, &target[0], env))
+                || args.len() == 1);
+    }
+    if target.len() == args.len() {
+        return target
+            .iter()
+            .zip(args)
+            .all(|(ty, arg)| value_matches_ty(arg, ty, env));
+    }
+    target.len() == 1 && args.iter().any(|arg| value_matches_ty(arg, &target[0], env))
 }
 
 /// Runtime type test for typed patterns `(n : int)` / `(x : Option)`.
