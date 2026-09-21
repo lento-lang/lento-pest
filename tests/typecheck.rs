@@ -685,3 +685,35 @@ fn exhaustiveness_error_names_the_missing_case() {
     );
     check_err("fn f xs = match xs { [x, ...rest] => x }\n", "missing an empty list");
 }
+
+#[test]
+fn explicit_class_impl_checks_required_methods() {
+    check_ok(
+        "class Comparable a {\n    spec compare : a -> a -> int\n}\n\
+         type Cat = { name: str }\n\
+         impl Comparable Cat {\n    fn compare (x: Cat) (y: Cat) = 0\n}\n",
+    );
+    check_err(
+        "class Comparable a {\n    spec compare : a -> a -> int\n}\n\
+         type Cat = { name: str }\n\
+         impl Comparable Cat {\n    fn other (x: Cat) = 0\n}\n",
+        "method 'other' is not required",
+    );
+}
+
+#[test]
+fn explicit_class_impl_rejects_duplicate_instances() {
+    let src = "class Comparable a { spec compare : a -> a -> int }\n\
+               type Cat = { name: str }\n\
+               impl Comparable Cat { fn compare (x: Cat) (y: Cat) = 0 }\n\
+               impl Comparable Cat { fn compare (x: Cat) (y: Cat) = 0 }\n";
+    check_err(src, "overlapping implementation");
+}
+
+#[test]
+fn parameterless_class_can_have_polymorphic_method() {
+    check_ok(
+        "class Len {\n    spec len : all e. [e] -> int\n}\n\
+         impl Len {\n    fn len xs = 0\n}\n",
+    );
+}

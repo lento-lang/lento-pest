@@ -43,6 +43,13 @@ struct TypeDeclInfo {
 }
 
 #[derive(Clone)]
+struct ClassInfo {
+    id: Class,
+    params: Vec<String>,
+    specs: Vec<crate::ast::SpecDecl>,
+}
+
+#[derive(Clone)]
 struct EnvEntry {
     scheme: Scheme,
     mutable: bool,
@@ -74,6 +81,8 @@ pub struct Checker {
     vars: HashMap<String, EnvEntry>,
     ctors: HashMap<String, CtorDecl>,
     types: HashMap<String, TypeDeclInfo>,
+    classes: HashMap<String, ClassInfo>,
+    instances: HashSet<(String, String)>,
     specs: HashMap<String, Vec<crate::ast::SpecDecl>>,
     where_specs: HashMap<String, WhereSpec>,
     bodies: HashMap<String, crate::ast::Expr>,
@@ -94,6 +103,8 @@ pub fn check_program(program: &Program) -> TypeResult<()> {
         vars: HashMap::new(),
         ctors: HashMap::new(),
         types: HashMap::new(),
+        classes: HashMap::new(),
+        instances: HashSet::new(),
         specs: HashMap::new(),
         where_specs: HashMap::new(),
         bodies: HashMap::new(),
@@ -257,6 +268,8 @@ impl Checker {
 
     fn check_decl(&mut self, decl: &Decl) -> TypeResult<()> {
         match decl {
+            Decl::Class(c) => self.register_class(c),
+            Decl::Impl(i) => self.check_impl(i),
             Decl::Type(t) => self.register_type(t),
             Decl::Spec(s) => {
                 self.specs.entry(s.name.clone()).or_default().push(s.clone());
@@ -266,6 +279,163 @@ impl Checker {
             Decl::Let(let_decl) => self.check_let(let_decl),
             Decl::Fn(_) => Err(self.err("unexpected fn declaration; desugar first")),
         }
+    }
+
+    fn register_class(&mut self, class: &crate::ast::ClassDecl) -> TypeResult<()> {
+        if self.classes.contains_key(&class.name) {
+            return Err(self.err(format!("duplicate class declaration '{}'", class.name)));
+        }
+        if class.specs.is_empty() {
+            return Err(self.err(format!("class '{}' requires at least one spec", class.name)));
+        }
+        let mut names = HashSet::new();
+        for spec in &class.specs {
+            if !names.insert(spec.name.clone()) {
+                return Err(self.err(format!(
+                    "duplicate method spec '{}' in class '{}'",
+                    spec.name, class.name
+                )));
+            }
+        }
+        let id = builtin_class(&class.name).unwrap_or_else(|| Class::User(self.fresh_decl()));
+        self.classes.insert(
+            class.name.clone(),
+            ClassInfo { id, params: class.params.clone(), specs: class.specs.clone() },
+        );
+        Ok(())
+    }
+
+    fn check_impl(&mut self, implementation: &crate::ast::ImplDecl) -> TypeResult<()> {
+        let class = self.classes.get(&implementation.class).cloned().ok_or_else(|| {
+            self.err(format!("unknown class '{}'", implementation.class))
+        })?;
+        if class.params.len() != implementation.target.len() {
+            return Err(self.err(format!(
+                "class '{}' expects {} implementation type argument(s), got {}",
+                implementation.class,
+                class.params.len(),
+                implementation.target.len()
+            )));
+        }
+        if implementation.target.iter().any(|t| matches!(t, Ty::Named { name, args } if args.is_empty() && self.types.get(name).is_some_and(|i| !i.params.is_empty()))) {
+            return Err(self.err(
+                "higher-kinded implementation targets require constructor kinds; type checking support is next",
+            ));
+        }
+        let target = implementation
+            .target
+            .iter()
+            .map(|t| self.resolve_ty(t))
+            .collect::<TypeResult<Vec<_>>>()?;
+        let key = format!(
+            "{} {}",
+            implementation.class,
+            target.iter().map(ToString::to_string).collect::<Vec<_>>().join(" ")
+        );
+        if !self.instances.insert((implementation.class.clone(), key.clone())) {
+            return Err(self.err(format!(
+                "overlapping implementation of '{}' for {}",
+                implementation.class, key
+            )));
+        }
+
+        let mut method_names = HashSet::new();
+        for method in &implementation.methods {
+            if !method_names.insert(method.name.clone()) {
+                return Err(self.err(format!("duplicate method '{}' in impl", method.name)));
+            }
+            let let_decl = method.clone().desugar();
+            self.check_let(&let_decl)?;
+            let entry = self.vars.get(&method.name).cloned().ok_or_else(|| {
+                self.err(format!("method '{}' was not bound", method.name))
+            })?;
+            let specs: Vec<_> = class
+                .specs
+                .iter()
+                .filter(|s| s.name == method.name)
+                .cloned()
+                .collect();
+            if specs.is_empty() {
+                return Err(self.err(format!(
+                    "method '{}' is not required by class '{}'",
+                    method.name, implementation.class
+                )));
+            }
+            for spec in specs {
+                let declared = self.class_spec_scheme(&class, &spec, &target)?;
+                let snapshot = self.subst.snapshot();
+                let result = self.subst.unify(&entry.scheme.ty, &declared.ty);
+                self.subst.restore(snapshot);
+                result.map_err(|e| {
+                    self.err(format!(
+                        "method '{}' does not match class '{}' spec: {e}",
+                        method.name, implementation.class
+                    ))
+                })?;
+            }
+        }
+        for spec in &class.specs {
+            if !method_names.contains(&spec.name) {
+                return Err(self.err(format!(
+                    "impl '{}' is missing required method '{}'",
+                    implementation.class, spec.name
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    fn class_spec_scheme(
+        &mut self,
+        class: &ClassInfo,
+        spec: &crate::ast::SpecDecl,
+        target: &[Type],
+    ) -> TypeResult<Scheme> {
+        let mut mapping: HashMap<String, Type> = class
+            .params
+            .iter()
+            .cloned()
+            .zip(target.iter().cloned())
+            .collect();
+        for quant in &spec.ty.quantifiers {
+            for var in &quant.vars {
+                mapping.insert(var.clone(), self.var_ty());
+            }
+        }
+        let ty = self.resolve_ty_scoped(&spec.ty.ty, &mapping)?;
+        let mut constraints = Vec::new();
+        for quant in &spec.ty.quantifiers {
+            let quant_vars: Vec<Type> = quant
+                .vars
+                .iter()
+                .map(|name| mapping.get(name).cloned().expect("class method variable mapped"))
+                .collect();
+            for constraint in &quant.constraints {
+                let class = self.class_for(&constraint.name).ok_or_else(|| {
+                    self.err(format!("unknown constraint class '{}'", constraint.name))
+                })?;
+                let args = if constraint.args.is_empty() {
+                    quant_vars.clone()
+                } else {
+                    constraint
+                        .args
+                        .iter()
+                        .map(|arg| {
+                            if let Ty::Named { name, args } = arg {
+                                if args.is_empty() {
+                                    if let Some(mapped) = mapping.get(name) {
+                                        return Ok(mapped.clone());
+                                    }
+                                }
+                            }
+                            self.resolve_ty_scoped(arg, &mapping)
+                        })
+                        .collect::<TypeResult<Vec<_>>>()?
+                };
+                constraints.push(Constraint { class, args });
+            }
+        }
+        Ok(Scheme { vars: Vec::new(), constraints, ty })
     }
 
     fn register_type(&mut self, t: &crate::ast::TypeDecl) -> TypeResult<()> {
@@ -715,7 +885,7 @@ impl Checker {
                 .map(|v| mapping.get(v).cloned().expect("quantified var mapped"))
                 .collect();
             for c in &quant.constraints {
-                let class = builtin_class(&c.name).ok_or_else(|| {
+                let class = self.class_for(&c.name).ok_or_else(|| {
                     self.err(format!("unknown constraint class '{}'", c.name))
                 })?;
                 // `all a :: Num.` attaches the constraint to the quantified
@@ -1693,6 +1863,10 @@ impl Checker {
         }
         self.pending = remaining;
         Ok(())
+    }
+
+    fn class_for(&self, name: &str) -> Option<Class> {
+        self.classes.get(name).map(|class| class.id).or_else(|| builtin_class(name))
     }
 }
 
