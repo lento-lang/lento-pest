@@ -30,3 +30,39 @@ fn canonical_pipeline_rejects_namespace_collisions() {
     let error = analyze("let f = 1\nfn f x = x\n").expect_err("collision should fail");
     assert!(error.contains("declaration collision"), "{error}");
 }
+
+
+#[test]
+fn canonical_pipeline_validates_class_implementations() {
+    analyze(
+        "class Comparable a { spec compare : a -> a -> int }\n         type Cat = { name: str }\n         impl Comparable Cat { fn compare (x: Cat) (y: Cat) = 0 }\n",
+    )
+    .expect("valid class implementation should analyze");
+}
+
+#[test]
+fn canonical_pipeline_rejects_incomplete_class_implementation() {
+    let error = analyze(
+        "class Comparable a { spec compare : a -> a -> int }\n         impl Comparable int { }\n",
+    )
+    .expect_err("missing class method should be rejected");
+    assert!(error.contains("missing required method"));
+}
+
+#[test]
+fn canonical_pipeline_rejects_extra_class_methods() {
+    let error = analyze(
+        "class Comparable a { spec compare : a -> a -> int }\n         impl Comparable int { fn other x = 0 }\n",
+    )
+    .expect_err("extra class method should be rejected");
+    assert!(error.contains("not required"));
+}
+
+#[test]
+fn canonical_pipeline_rejects_overlapping_implementations() {
+    let error = analyze(
+        "class Comparable a { spec compare : a -> a -> int }\n         impl Comparable int { fn compare x y = 0 }\n         impl Comparable int { fn compare x y = 1 }\n",
+    )
+    .expect_err("duplicate implementation should be rejected");
+    assert!(error.contains("overlapping"));
+}
