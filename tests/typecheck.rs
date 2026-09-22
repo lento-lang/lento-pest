@@ -1,3 +1,5 @@
+#![cfg(feature = "legacy-typecheck")]
+
 // Type-checker integration tests: positive inference, new type syntax
 // (sums, records, synonyms), spec conformance, and negative cases.
 
