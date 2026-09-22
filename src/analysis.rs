@@ -287,7 +287,7 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
 fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
     let mut type_names = BTreeSet::new();
     let mut constructor_names = BTreeSet::new();
-    let mut classes = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut classes = BTreeMap::<String, (usize, BTreeSet<String>)>::new();
     let mut instances = BTreeSet::new();
 
     for statement in &program.statements {
@@ -325,18 +325,18 @@ fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
                 if methods.is_empty() {
                     return Err(format!("class '{}' requires at least one method", class.name));
                 }
-                classes.insert(class.name.clone(), methods);
+                classes.insert(class.name.clone(), (class.params.len(), methods));
             }
             Stmt::Decl(Decl::Impl(implementation)) => {
-                let required = classes.get(&implementation.class).ok_or_else(|| {
+                let (parameter_count, required) = classes.get(&implementation.class).ok_or_else(|| {
                     format!("unknown class '{}'", implementation.class)
                 })?;
-                if implementation.target.len() != required.len()
-                    && implementation.target.is_empty()
-                {
+                if implementation.target.len() != *parameter_count {
                     return Err(format!(
-                        "implementation of '{}' has an invalid target",
-                        implementation.class
+                        "class '{}' expects {} implementation type argument(s), got {}",
+                        implementation.class,
+                        parameter_count,
+                        implementation.target.len()
                     ));
                 }
                 let key = format!(
