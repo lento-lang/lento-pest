@@ -402,10 +402,28 @@ fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
     // Until multiple specializations share a runtime representation, each
     // specialization lowers independently and a single-specialization set is
     // just that specialization's dispatcher.
-    let value = match set.specializations.as_slice() {
-        [spec] => lower_specialization(&set.name, spec),
-        _ => unimplemented!("multi-specialization lowering arrives with overload resolution"),
+    // Runtime dispatch is represented by one ordered matcher. Type
+    // specialization remains visible through the clause annotations retained
+    // in each pattern; dropping all but the first specialization would make
+    // valid WIP overloads unreachable.
+    let merged = match set.specializations.as_slice() {
+        [spec] => spec.clone(),
+        [] => unreachable!("an overload set must contain a specialization"),
+        specializations => {
+            let first = &specializations[0];
+            let clauses = specializations
+                .iter()
+                .flat_map(|specialization| specialization.clauses.clone())
+                .collect();
+            TypedSpecialization {
+                id: first.id,
+                scheme: first.scheme.clone(),
+                origin: first.origin.clone(),
+                clauses,
+            }
+        }
     };
+    let value = lower_specialization(&set.name, &merged);
     LetDecl {
         mutable: false,
         pattern: Pattern {
