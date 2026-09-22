@@ -200,17 +200,6 @@ fn equivalent(a: &[Pat], b: &[Pat]) -> bool {
     covers(a, b) && covers(b, a)
 }
 
-/// The constructors of a literal type, for computing uncovered witnesses.
-/// `int`/`str`/`float` are infinite; `bool` is finite.
-fn lit_constructors(l: &Lit) -> &'static str {
-    match l {
-        Lit::Bool(_) => "bool",
-        Lit::Int(_) => "int",
-        Lit::Float(_) => "float",
-        Lit::Str(_) => "str",
-    }
-}
-
 /// Analyze one specialization's clauses for usefulness and exhaustiveness.
 ///
 /// Returns diagnostics in source order. The specialization's clauses are the
