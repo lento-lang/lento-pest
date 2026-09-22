@@ -99,6 +99,8 @@ enum Pat {
     List(usize, Vec<Pat>),
     /// A list with a rest: `ListOrMore(n, pats)` matches lists of length >= n.
     ListOrMore(usize, Vec<Pat>),
+    /// A nominal sum constructor and its optional payload.
+    Constructor(String, Option<Box<Pat>>),
     /// A record: a set of named fields (open — extra fields allowed).
     Record(Vec<(String, Pat)>),
 }
@@ -124,10 +126,10 @@ fn simplify(p: &Pattern) -> Pat {
             }
         }
         PatKind::Spread(_) => Pat::Wild, // `...rest` matches any suffix list
-        PatKind::Constructor { payload, .. } => payload
-            .as_deref()
-            .map(simplify)
-            .unwrap_or(Pat::Wild),
+        PatKind::Constructor { name, payload } => Pat::Constructor(
+            name.clone(),
+            payload.as_deref().map(simplify).map(Box::new),
+        ),
         PatKind::Record { fields, .. } => Pat::Record(
             fields
                 .iter()
@@ -157,6 +159,15 @@ fn covers1(p: &Pat, q: &Pat) -> bool {
             a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| covers1(x, y))
         }
         (Pat::Tuple(_), Pat::Wild) => false,
+        (Pat::Constructor(name_a, payload_a), Pat::Constructor(name_b, payload_b)) => {
+            name_a == name_b
+                && match (payload_a, payload_b) {
+                    (None, None) => true,
+                    (Some(a), Some(b)) => covers1(a, b),
+                    _ => false,
+                }
+        }
+        (Pat::Constructor(..), Pat::Wild) => false,
         // List coverage: exact-length vs exact-length, and or-more handling.
         (Pat::List(n, a), Pat::List(m, b)) => {
             n == m && a.iter().zip(b.iter()).all(|(x, y)| covers1(x, y))
@@ -299,6 +310,15 @@ fn find_uncovered(rows: &[Vec<Pat>], arity: usize) -> Option<Vec<Pat>> {
                 Pat::List(n, subs) => cands.push(Pat::List(*n, subs.clone())),
                 Pat::ListOrMore(n, subs) => cands.push(Pat::ListOrMore(*n, subs.clone())),
                 Pat::Tuple(subs) => cands.push(Pat::Tuple(subs.clone())),
+                Pat::Constructor(name, payload) => {
+                    cands.push(Pat::Constructor(name.clone(), payload.clone()));
+                    if payload.is_some() {
+                        cands.push(Pat::Constructor(
+                            name.clone(),
+                            Some(Box::new(Pat::Wild)),
+                        ));
+                    }
+                }
                 Pat::Record(fields) => cands.push(Pat::Record(fields.clone())),
             }
         }
@@ -433,6 +453,10 @@ fn render_pat(p: &Pat) -> String {
             inner.push("..._".to_string());
             format!("[{}]", inner.join(", "))
         }
+        Pat::Constructor(name, payload) => match payload {
+            Some(payload) => format!("{name} {}", render_pat(payload)),
+            None => name.clone(),
+        },
         Pat::Record(fields) => {
             let inner: Vec<String> = fields
                 .iter()
