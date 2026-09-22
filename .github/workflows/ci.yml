@@ -27,5 +27,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
+      - name: Show resolved CVC5 lock entries
+        run: cargo generate-lockfile && awk '/name = "cvc5"/{show=1} show{print} show && /^$/{if (++blocks == 2) exit}' Cargo.lock
       - name: Test legacy checker and SMT backend
         run: cargo test --all-targets --features legacy-typecheck
