@@ -39,6 +39,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let mut env = base_env(&mut ctx.supply);
 
     install_type_declarations(&mut env, &mut ctx, program);
+    validate_spec_refinements(program, &mut ctx, &env)?;
 
     // Seed every function before inferring any body. This preserves WIP's
     // recursive and mutually recursive definitions while the master pipeline
@@ -120,6 +121,87 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     }
 
     Ok(Analysis { overloads })
+}
+
+fn validate_spec_refinements(
+    program: &Program,
+    ctx: &mut InferCtx,
+    ambient: &TypeEnv,
+) -> Result<(), String> {
+    for statement in &program.statements {
+        let Stmt::Decl(Decl::Spec(spec)) = statement else {
+            continue;
+        };
+        let mut env = ambient.clone();
+        let mut binders = BTreeMap::new();
+        collect_named_binders(&spec.ty.ty, &mut binders);
+        for (name, ty) in binders {
+            env.insert(name, TypeScheme::mono(lower_ty(&ty, &BTreeMap::new())));
+        }
+
+        let Some(clauses) = &spec.ty.where_ else {
+            continue;
+        };
+        for clause in clauses {
+            let clause_ty = infer_expr(ctx, clause, &mut env).map_err(|error| {
+                format!(
+                    "where refinement for spec '{}' failed to type-check: {error}",
+                    spec.name
+                )
+            })?;
+            ctx.unify(&clause_ty, &crate::infer::ctor::bool())
+                .map_err(|error| {
+                    format!(
+                        "where refinement for spec '{}' must be boolean: {error}",
+                        spec.name
+                    )
+                })?;
+        }
+    }
+    Ok(())
+}
+
+fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
+    match ty {
+        Ty::NamedBinder { name, ty } => {
+            binders.insert(name.clone(), (**ty).clone());
+            collect_named_binders(ty, binders);
+        }
+        Ty::Arrow { from, to } => {
+            collect_named_binders(from, binders);
+            collect_named_binders(to, binders);
+        }
+        Ty::Tuple(items) => {
+            for item in items {
+                collect_named_binders(item, binders);
+            }
+        }
+        Ty::List(inner) | Ty::Ref(inner) | Ty::Mut(inner) => {
+            collect_named_binders(inner, binders)
+        }
+        Ty::Named { args, .. } => {
+            for arg in args {
+                collect_named_binders(arg, binders);
+            }
+        }
+        Ty::Sum(alts) => {
+            for alt in alts {
+                match alt {
+                    SumAlt::Ctor { payload, .. } => {
+                        if let Some(payload) = payload {
+                            collect_named_binders(payload, binders);
+                        }
+                    }
+                    SumAlt::Bare(ty) => collect_named_binders(ty, binders),
+                }
+            }
+        }
+        Ty::RecordType(fields) => {
+            for (_, ty) in fields {
+                collect_named_binders(ty, binders);
+            }
+        }
+    }
 }
 
 fn seed_function_type(ctx: &mut InferCtx, group: &FunctionGroup) -> MonoType {
