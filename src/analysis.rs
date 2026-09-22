@@ -5,7 +5,7 @@
 //! for diagnostics and feature semantics; master's semantic IR owns ordering
 //! and data flow.
 
-use crate::ast::{Decl, PatKind, Program, Stmt, SumAlt, Ty};
+use crate::ast::{Decl, Expr, PatKind, Program, Stmt, SumAlt, Ty};
 use crate::infer::{base_env, check_pattern, infer_expr, InferCtx};
 use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
 use crate::semantics::{collect_function_groups, FunctionGroup};
@@ -70,6 +70,10 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
             }
         }
 
+        for clause in &group.raw_clauses {
+            validate_nested_matches(&clause.body, &group.name)?;
+        }
+
         associate_specs(&mut ctx.supply, group, &set)
             .map_err(|error| format!("specification failed for '{}': {error}", group.name))?;
 
@@ -100,6 +104,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                 }
             }
             Stmt::Expr(expression) => {
+                validate_nested_matches(expression, "top-level")?;
                 infer_expr(&mut ctx, expression, &mut env)
                     .map_err(|error| format!("top-level expression inference failed: {error}"))?;
             }
@@ -173,4 +178,104 @@ fn install_type_declarations(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Pr
             );
         }
     }
+}
+
+
+fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String> {
+    match expression {
+        Expr::Match(m) => {
+            let specialization = crate::specialize::Specialization {
+                id: 0,
+                scheme: TypeScheme::mono(MonoType::Var(0)),
+                declared_domain: Vec::new(),
+                clauses: m
+                    .arms
+                    .iter()
+                    .enumerate()
+                    .map(|(index, arm)| crate::specialize::SpecializedClause {
+                        ty: MonoType::Var(0),
+                        patterns: vec![arm.pattern.clone()],
+                        source_index: index,
+                        declared_domain: Vec::new(),
+                    })
+                    .collect(),
+            };
+            for diagnostic in analyze_specialization(&specialization) {
+                match diagnostic.kind {
+                    DiagnosticKind::DuplicateClause { .. }
+                    | DiagnosticKind::NonExhaustive { .. } => {
+                        return Err(format!("pattern error in '{owner}': {diagnostic}"));
+                    }
+                    DiagnosticKind::UnreachableClause { .. } => {}
+                }
+            }
+            validate_nested_matches(&m.scrutinee, owner)?;
+            for arm in &m.arms {
+                if let Some(guard) = &arm.guard {
+                    validate_nested_matches(guard, owner)?;
+                }
+                validate_nested_matches(&arm.body, owner)?;
+            }
+        }
+        Expr::Lambda(lambda) => validate_nested_matches(&lambda.body, owner)?,
+        Expr::Call(call) => {
+            validate_nested_matches(&call.callee, owner)?;
+            for argument in &call.args {
+                validate_nested_matches(argument, owner)?;
+            }
+        }
+        Expr::Member(member) => validate_nested_matches(&member.obj, owner)?,
+        Expr::Index(index) => {
+            validate_nested_matches(&index.obj, owner)?;
+            validate_nested_matches(&index.index, owner)?;
+        }
+        Expr::Unary(unary) => validate_nested_matches(&unary.operand, owner)?,
+        Expr::Binary(binary) => {
+            validate_nested_matches(&binary.lhs, owner)?;
+            validate_nested_matches(&binary.rhs, owner)?;
+        }
+        Expr::Tuple(tuple) => {
+            for item in &tuple.items {
+                validate_nested_matches(item, owner)?;
+            }
+        }
+        Expr::List(list) => {
+            let mut current = list;
+            loop {
+                match current {
+                    crate::ast::ListExpr::Empty => break,
+                    crate::ast::ListExpr::Cells(cell) => {
+                        validate_nested_matches(&cell.head, owner)?;
+                        current = &cell.tail;
+                    }
+                }
+            }
+        }
+        Expr::Record(record) => {
+            for entry in &record.entries {
+                if let crate::ast::RecordValueEntry::Field(_, value)
+                | crate::ast::RecordValueEntry::Spread(value) = entry {
+                    validate_nested_matches(value, owner)?;
+                }
+            }
+        }
+        Expr::Block(block) => {
+            for statement in &block.body {
+                match statement {
+                    Stmt::Expr(expression) => validate_nested_matches(expression, owner)?,
+                    Stmt::Decl(Decl::Let(binding)) => {
+                        validate_nested_matches(&binding.value, owner)?
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Expr::Ref(reference) => validate_nested_matches(&reference.inner, owner)?,
+        Expr::Assign(assign) => {
+            validate_nested_matches(&assign.place, owner)?;
+            validate_nested_matches(&assign.value, owner)?;
+        }
+        Expr::Lit(_) | Expr::Var(_) => {}
+    }
+    Ok(())
 }
