@@ -253,9 +253,11 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
         }
         Expr::Record(record) => {
             for entry in &record.entries {
-                if let crate::ast::RecordValueEntry::Field(_, value)
-                | crate::ast::RecordValueEntry::Spread(value) = entry {
-                    validate_nested_matches(value, owner)?;
+                match entry {
+                    crate::ast::RecordValueEntry::Field(_, value)
+                    | crate::ast::RecordValueEntry::Spread(value) => {
+                        validate_nested_matches(value, owner)?;
+                    }
                 }
             }
         }
