@@ -31,6 +31,7 @@ pub struct Analysis {
 pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let collected = collect_function_groups(program)
         .map_err(|error| format!("declaration collection failed: {error}"))?;
+    validate_advanced_declarations(program)?;
 
     let mut ctx = InferCtx::new();
     let mut env = base_env(&mut ctx.supply);
@@ -278,6 +279,104 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
             validate_nested_matches(&assign.value, owner)?;
         }
         Expr::Lit(_) | Expr::Var(_) => {}
+    }
+    Ok(())
+}
+
+
+fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
+    let mut type_names = BTreeSet::new();
+    let mut constructor_names = BTreeSet::new();
+    let mut classes = BTreeMap::<String, BTreeSet<String>>::new();
+    let mut instances = BTreeSet::new();
+
+    for statement in &program.statements {
+        match statement {
+            Stmt::Decl(Decl::Type(declaration)) => {
+                if !type_names.insert(declaration.name.clone()) {
+                    return Err(format!(
+                        "duplicate type declaration '{}'",
+                        declaration.name
+                    ));
+                }
+                if let Ty::Sum(alternatives) = &declaration.ty {
+                    for alternative in alternatives {
+                        if let SumAlt::Ctor { name, .. } = alternative {
+                            if !constructor_names.insert(name.clone()) {
+                                return Err(format!("duplicate constructor '{name}'"));
+                            }
+                        }
+                    }
+                }
+            }
+            Stmt::Decl(Decl::Class(class)) => {
+                if classes.contains_key(&class.name) {
+                    return Err(format!("duplicate class declaration '{}'", class.name));
+                }
+                let mut methods = BTreeSet::new();
+                for spec in &class.specs {
+                    if !methods.insert(spec.name.clone()) {
+                        return Err(format!(
+                            "duplicate method spec '{}' in class '{}'",
+                            spec.name, class.name
+                        ));
+                    }
+                }
+                if methods.is_empty() {
+                    return Err(format!("class '{}' requires at least one method", class.name));
+                }
+                classes.insert(class.name.clone(), methods);
+            }
+            Stmt::Decl(Decl::Impl(implementation)) => {
+                let required = classes.get(&implementation.class).ok_or_else(|| {
+                    format!("unknown class '{}'", implementation.class)
+                })?;
+                if implementation.target.len() != required.len()
+                    && implementation.target.is_empty()
+                {
+                    return Err(format!(
+                        "implementation of '{}' has an invalid target",
+                        implementation.class
+                    ));
+                }
+                let key = format!(
+                    "{} {}",
+                    implementation.class,
+                    implementation
+                        .target
+                        .iter()
+                        .map(|target| format!("{target:?}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                );
+                if !instances.insert(key) {
+                    return Err(format!(
+                        "overlapping implementation of '{}'",
+                        implementation.class
+                    ));
+                }
+
+                let mut provided = BTreeSet::new();
+                for method in &implementation.methods {
+                    if !provided.insert(method.name.clone()) {
+                        return Err(format!("duplicate method '{}' in impl", method.name));
+                    }
+                    if !required.contains(&method.name) {
+                        return Err(format!(
+                            "method '{}' is not required by class '{}'",
+                            method.name, implementation.class
+                        ));
+                    }
+                }
+                if let Some(missing) = required.difference(&provided).next() {
+                    return Err(format!(
+                        "impl '{}' is missing required method '{}'",
+                        implementation.class, missing
+                    ));
+                }
+            }
+            _ => {}
+        }
     }
     Ok(())
 }
