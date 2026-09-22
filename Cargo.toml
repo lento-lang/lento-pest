@@ -17,4 +17,4 @@ colorful = "0.2.2"
 pest = "2.5.2"
 pest_derive = "2.4.0"
 pest_ascii_tree = "0.1.0"
-cvc5 = { version = "0.5.1", optional = true }
+cvc5 = { version = "0.4", features = ["static"], optional = true }
