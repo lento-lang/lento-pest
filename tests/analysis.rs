@@ -66,3 +66,30 @@ fn canonical_pipeline_rejects_overlapping_implementations() {
     .expect_err("duplicate implementation should be rejected");
     assert!(error.contains("overlapping"));
 }
+
+
+#[test]
+fn canonical_pipeline_type_checks_where_refinements() {
+    analyze(
+        "spec positive : (x: int) -> int where x > 0\n         fn positive x = x\n",
+    )
+    .expect("well-typed refinement should analyze");
+}
+
+#[test]
+fn canonical_pipeline_rejects_unknown_where_names() {
+    let error = analyze(
+        "spec positive : (x: int) -> int where y > 0\n         fn positive x = x\n",
+    )
+    .expect_err("unknown refinement name should fail");
+    assert!(error.contains("unbound variable"));
+}
+
+#[test]
+fn canonical_pipeline_rejects_non_boolean_where_refinements() {
+    let error = analyze(
+        "spec positive : (x: int) -> int where x + 1\n         fn positive x = x\n",
+    )
+    .expect_err("non-boolean refinement should fail");
+    assert!(error.contains("must be boolean"));
+}
