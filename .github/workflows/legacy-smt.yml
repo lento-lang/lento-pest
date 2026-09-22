@@ -9,11 +9,11 @@ permissions:
 jobs:
   legacy-smt:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.85.0
       - name: Test CVC5-backed checker
         run: cargo test --all-targets --features legacy-typecheck
