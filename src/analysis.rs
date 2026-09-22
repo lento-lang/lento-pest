@@ -15,12 +15,37 @@ use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
 use crate::types::{generalize, lower_ty, MonoType, TypeEnv, TypeScheme};
 
+/// Resolved declaration metadata shared by analysis, lowering, and runtime.
+/// This is the canonical identity for user-defined types; the evaluator may
+/// retain source AST details, but later phases must not rediscover constructors
+/// by reparsing declarations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeMetadata {
+    pub name: String,
+    pub parameters: Vec<String>,
+    pub constructors: Vec<ConstructorMetadata>,
+    pub fields: Vec<(String, MonoType)>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructorMetadata {
+    pub name: String,
+    pub payload: Option<MonoType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct DeclarationMetadata {
+    pub types: Vec<TypeMetadata>,
+}
+
+
 /// The result of canonical analysis. Later lowering phases consume the
 /// overload sets; declarations not yet represented in the semantic IR remain
 /// in the source program until their dedicated lowering is complete.
 #[derive(Debug)]
 pub struct Analysis {
     pub overloads: Vec<OverloadSet>,
+    pub declarations: DeclarationMetadata,
 }
 
 /// Analyze a program using the unified master/WIP pipeline.
@@ -38,6 +63,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let mut ctx = InferCtx::new();
     let mut env = base_env(&mut ctx.supply);
 
+    let declarations = resolve_declarations(program, &mut ctx);
     install_type_declarations(&mut env, &mut ctx, program);
     validate_spec_refinements(program, &mut ctx, &env)?;
 
@@ -120,7 +146,10 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         }
     }
 
-    Ok(Analysis { overloads })
+    Ok(Analysis {
+        overloads,
+        declarations,
+    })
 }
 
 fn validate_spec_refinements(
@@ -220,6 +249,59 @@ fn seed_function_type(ctx: &mut InferCtx, group: &FunctionGroup) -> MonoType {
     }
     ty
 }
+
+
+fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMetadata {
+    let mut declarations = DeclarationMetadata::default();
+    for statement in &program.statements {
+        let Stmt::Decl(Decl::Type(declaration)) = statement else {
+            continue;
+        };
+        let mut binders = BTreeMap::new();
+        for parameter in &declaration.params {
+            binders.insert(parameter.clone(), ctx.supply.fresh());
+        }
+        let mut metadata = TypeMetadata {
+            name: declaration.name.clone(),
+            parameters: declaration.params.clone(),
+            constructors: Vec::new(),
+            fields: Vec::new(),
+        };
+        match &declaration.ty {
+            Ty::Sum(alternatives) => {
+                for alternative in alternatives {
+                    match alternative {
+                        SumAlt::Ctor { name, payload } => metadata.constructors.push(
+                            ConstructorMetadata {
+                                name: name.clone(),
+                                payload: payload
+                                    .as_ref()
+                                    .map(|payload| lower_ty(payload, &binders)),
+                            },
+                        ),
+                        SumAlt::Bare(ty) => metadata.fields.push((
+                            format!("member{}", metadata.fields.len()),
+                            lower_ty(ty, &binders),
+                        )),
+                    }
+                }
+            }
+            Ty::RecordType(fields) => {
+                metadata.fields = fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), lower_ty(ty, &binders)))
+                    .collect();
+            }
+            ty => metadata.fields.push((
+                "value".to_string(),
+                lower_ty(ty, &binders),
+            )),
+        }
+        declarations.types.push(metadata);
+    }
+    declarations
+}
+
 
 fn install_type_declarations(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Program) {
     for statement in &program.statements {
