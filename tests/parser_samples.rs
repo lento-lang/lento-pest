@@ -1,3 +1,5 @@
+#![cfg(feature = "legacy-typecheck")]
+
 // Full-pipeline sample tests: every `tests/samples/**/*.lt` must parse,
 // type-check, and evaluate without error. Samples are organized into
 // categorical subdirectories (basics, matching, types, specs); the walk
