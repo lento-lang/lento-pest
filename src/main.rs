@@ -61,8 +61,7 @@ fn load_with_prelude(path: &std::path::Path) -> Result<lento::ast::Program, Stri
 }
 
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
-    lento::semantics::collect_function_groups(ast)
-        .map_err(|err| format!("semantic collection error: {err}"))?;
+    lento::analysis::analyze_program(ast)?;
     let desugared = lento::ast::desugar_program(ast);
     #[cfg(feature = "legacy-typecheck")]
     lento::typecheck::check_program(&desugared)?;
