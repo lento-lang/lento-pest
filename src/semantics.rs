@@ -391,7 +391,11 @@ pub fn lower_typed_program(program: &TypedProgram) -> Program {
     for e in &program.exprs {
         statements.push(Stmt::Expr(lower_typed_expr(e)));
     }
-    Program { statements }
+    let spans = statements
+        .iter()
+        .map(|_| crate::ast::Span { line: 0, col: 0 })
+        .collect();
+    Program { statements, spans }
 }
 
 fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
