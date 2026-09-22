@@ -556,6 +556,30 @@ pub fn lower_ty(ty: &Ty, binders: &BTreeMap<String, MonoType>) -> MonoType {
         Ty::Mut(inner) => MonoType::Mut(Box::new(lower_ty(inner, binders))),
         // `name: T` named binders are transparent at the type level.
         Ty::NamedBinder { ty, .. } => lower_ty(ty, binders),
+        Ty::Sum(alts) => MonoType::Constructor(
+            "sum".to_string(),
+            alts.iter()
+                .map(|alt| match alt {
+                    crate::ast::SumAlt::Ctor { name, payload } => MonoType::Constructor(
+                        name.clone(),
+                        payload
+                            .as_ref()
+                            .map(|ty| vec![lower_ty(ty, binders)])
+                            .unwrap_or_default(),
+                    ),
+                    crate::ast::SumAlt::Bare(ty) => lower_ty(ty, binders),
+                })
+                .collect(),
+        ),
+        Ty::RecordType(fields) => MonoType::Constructor(
+            "record".to_string(),
+            fields
+                .iter()
+                .map(|(name, ty)| {
+                    MonoType::Constructor(name.clone(), vec![lower_ty(ty, binders)])
+                })
+                .collect(),
+        ),
     }
 }
 
