@@ -4,10 +4,17 @@ extern crate pest_derive;
 
 pub mod ast;
 pub mod eval;
+pub mod infer;
 mod exhaustive;
 mod intrinsics;
 pub mod parser;
+pub mod patterns;
 pub mod pprint;
+pub mod resolve;
+pub mod semantics;
+pub mod specialize;
+pub mod specs;
 pub mod smt;
 pub mod ty;
 pub mod typecheck;
+pub mod types;
