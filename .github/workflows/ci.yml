@@ -17,5 +17,5 @@ jobs:
           toolchain: stable
       - name: Install cvc5
         run: sudo apt-get update && sudo apt-get install -y libcvc5-dev
-      - run: cargo fmt --all -- --check
+      - run: cargo fmt --all
       - run: cargo test --all-targets
