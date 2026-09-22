@@ -18,5 +18,3 @@ jobs:
       - run: cargo fmt --all
       - name: Test
         run: cargo test --all-targets
-      - name: Print resolved lock entries
-        run: cargo generate-lockfile && sed -n '/name = "cvc5"/,/^$/p' Cargo.lock
