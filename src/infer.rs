@@ -285,6 +285,18 @@ pub fn check_pattern(
             );
             Ok(())
         }
+        PatKind::Constructor { name, payload } => {
+            let payload_ty = payload.as_ref().map(|_| ctx.fresh());
+            let ctor_ty = MonoType::Constructor(
+                name.clone(),
+                payload_ty.iter().cloned().collect(),
+            );
+            ctx.unify(expected, &ctor_ty)?;
+            if let (Some(pattern), Some(payload_ty)) = (payload, payload_ty) {
+                check_pattern(ctx, pattern, &payload_ty, env)?;
+            }
+            Ok(())
+        }
         PatKind::Record { fields, rest } => {
             // Records are structurally typed here as a nominal `record`
             // constructor carrying field types; a dedicated record row type
