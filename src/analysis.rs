@@ -5,6 +5,8 @@
 //! for diagnostics and feature semantics; master's semantic IR owns ordering
 //! and data flow.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use crate::ast::{Decl, Expr, PatKind, Program, Stmt, SumAlt, Ty};
 use crate::infer::{base_env, check_pattern, infer_expr, InferCtx};
 use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
