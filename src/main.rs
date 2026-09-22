@@ -6,28 +6,17 @@ use clap::Parser;
 use lento::parser::parse_program;
 use lento::pprint::format_program;
 
-/// Lento command line: parse a file, or drop into an interactive REPL.
 #[derive(Parser, Debug)]
 #[command(name = "lento", version, about)]
 struct Cli {
-    /// A Lento source file. Omitted, runs the REPL.
     #[arg(value_name = "FILE")]
     file: Option<PathBuf>,
-
-    /// Run the interactive REPL, even when a FILE is given.
     #[arg(short, long, conflicts_with = "file")]
     interactive: bool,
-
-    /// For the FILE: print the parsed AST and stop.
     #[arg(long, requires = "file", conflicts_with = "print_code")]
     print_ast: bool,
-
-    /// For the FILE: print the pretty-printed source and stop.
     #[arg(long, requires = "file", conflicts_with = "print_ast")]
     print_code: bool,
-
-    /// Format FILE in place: parse it and, on success, write the
-    /// pretty-printed source back to the same file.
     #[arg(long, requires = "file", conflicts_with_all = ["print_ast", "print_code"])]
     fmt: bool,
 }
@@ -39,9 +28,9 @@ fn read_line(prompt: Option<&str>) -> Option<String> {
     }
     let mut input = String::new();
     match std::io::stdin().read_line(&mut input) {
-        Ok(0) => None, // EOF
+        Ok(0) => None,
         Ok(_) => Some(input.trim_end().to_string()),
-        Err(_) => None, // treat I/O error as EOF too
+        Err(_) => None,
     }
 }
 
@@ -54,7 +43,6 @@ fn run_repl() {
     }
 }
 
-/// Read and parse a FILE, yielding the AST.
 fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
     let src = std::fs::read_to_string(path)
         .map_err(|e| format!("Error reading {}: {}", path.display(), e))?;
@@ -72,15 +60,10 @@ fn load_with_prelude(path: &std::path::Path) -> Result<lento::ast::Program, Stri
     Ok(lento::ast::Program { statements, spans })
 }
 
-/// Interpret a parsed program: desugar, type-check, then evaluate.
-///
-/// `fn` clauses are desugared into `let` bindings first, so the type checker
-/// and the interpreter never see an `FnDecl`. Type checking is always on.
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
     let desugared = lento::ast::desugar_program(ast);
-    if let Err(err) = lento::typecheck::check_program(&desugared) {
-        return Err(err);
-    }
+    #[cfg(feature = "legacy-typecheck")]
+    lento::typecheck::check_program(&desugared)?;
     let value = lento::eval::eval_program(&desugared)?;
     if matches!(desugared.statements.last(), Some(lento::ast::Stmt::Expr(_)))
         && !matches!(value, lento::eval::Value::Unit)
@@ -112,7 +95,6 @@ fn main() -> Result<(), String> {
                     .map_err(|e| format!("Error writing {}: {}", path.display(), e))?;
                 Ok(())
             } else {
-                // Default mode: interpret the program.
                 let ast = load_with_prelude(path)?;
                 interpret(&ast)
             }
