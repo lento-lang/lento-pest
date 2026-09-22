@@ -43,7 +43,7 @@ fn canonical_pipeline_validates_class_implementations() {
 #[test]
 fn canonical_pipeline_rejects_incomplete_class_implementation() {
     let error = analyze(
-        "class Comparable a { spec compare : a -> a -> int }\n         impl Comparable int { }\n",
+        "class Comparable a { spec compare : a -> a -> int; spec equal : a -> a -> bool }\n         impl Comparable int { fn compare x y = 0 }\n",
     )
     .expect_err("missing class method should be rejected");
     assert!(error.contains("missing required method"), "unexpected error: {error}");
