@@ -18,3 +18,13 @@ jobs:
       - run: cargo fmt --all
       - name: Test
         run: cargo test --all-targets
+
+  legacy-smt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Test legacy checker and SMT backend
+        run: cargo test --all-targets --features legacy-typecheck
