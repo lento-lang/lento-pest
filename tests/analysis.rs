@@ -6,6 +6,11 @@ fn analyze(source: &str) -> Result<(), String> {
     analyze_program(&program).map(|_| ())
 }
 
+fn analysis(source: &str) -> Result<lento::analysis::Analysis, String> {
+    let program = parse_program(source).map_err(|error| error.to_string())?;
+    analyze_program(&program)
+}
+
 #[test]
 fn canonical_pipeline_accepts_polymorphic_identity() {
     analyze("fn id x = x\nassert (id 1 == 1)\n").expect("identity should analyze");
@@ -92,4 +97,29 @@ fn canonical_pipeline_rejects_non_boolean_where_refinements() {
     )
     .expect_err("non-boolean refinement should fail");
     assert!(error.contains("must be boolean"));
+}
+
+
+#[test]
+fn canonical_analysis_exposes_resolved_type_metadata() {
+    let result = analysis(
+        "type Option a = Some a | None\n         type User = { name: str }\n",
+    )
+    .expect("declarations should resolve");
+    let option = result
+        .declarations
+        .types
+        .iter()
+        .find(|ty| ty.name == "Option")
+        .expect("Option metadata");
+    assert_eq!(option.constructors.len(), 2);
+    assert_eq!(option.constructors[0].name, "Some");
+    let user = result
+        .declarations
+        .types
+        .iter()
+        .find(|ty| ty.name == "User")
+        .expect("User metadata");
+    assert_eq!(user.fields.len(), 1);
+    assert_eq!(user.fields[0].0, "name");
 }
