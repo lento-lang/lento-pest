@@ -1,0 +1,176 @@
+//! Canonical semantic analysis pipeline.
+//!
+//! This is the integration seam between the lossless WIP AST and master's
+//! phase-oriented compiler architecture. WIP remains the behavioral authority
+//! for diagnostics and feature semantics; master's semantic IR owns ordering
+//! and data flow.
+
+use crate::ast::{Decl, PatKind, Program, Stmt, SumAlt, Ty};
+use crate::infer::{base_env, check_pattern, infer_expr, InferCtx};
+use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
+use crate::semantics::{collect_function_groups, FunctionGroup};
+use crate::specialize::{partition, OverloadSet};
+use crate::specs::associate_specs;
+use crate::types::{generalize, lower_ty, MonoType, TypeEnv, TypeScheme};
+
+/// The result of canonical analysis. Later lowering phases consume the
+/// overload sets; declarations not yet represented in the semantic IR remain
+/// in the source program until their dedicated lowering is complete.
+#[derive(Debug)]
+pub struct Analysis {
+    pub overloads: Vec<OverloadSet>,
+}
+
+/// Analyze a program using the unified master/WIP pipeline.
+///
+/// WIP-preferred policy:
+/// - non-exhaustive and duplicate pattern clauses are errors;
+/// - constructor patterns and nominal type declarations are retained;
+/// - class/instance declarations are preserved for the dedicated class
+///   lowering phase instead of being silently desugared away.
+pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
+    let collected = collect_function_groups(program)
+        .map_err(|error| format!("declaration collection failed: {error}"))?;
+
+    let mut ctx = InferCtx::new();
+    let mut env = base_env(&mut ctx.supply);
+
+    install_type_declarations(&mut env, &mut ctx, program);
+
+    // Seed every function before inferring any body. This preserves WIP's
+    // recursive and mutually recursive definitions while the master pipeline
+    // computes their principal schemes.
+    for group in &collected.function_groups {
+        env.entry(group.name.clone())
+            .or_insert_with(|| TypeScheme::mono(seed_function_type(&mut ctx, group)));
+    }
+
+    let mut overloads = Vec::new();
+    for group in &collected.function_groups {
+        let set = partition(&mut ctx, group, &env)
+            .map_err(|error| format!("type inference failed for '{}': {error}", group.name))?;
+
+        for specialization in &set.specializations {
+            for diagnostic in analyze_specialization(specialization) {
+                match diagnostic.kind {
+                    DiagnosticKind::DuplicateClause { .. } => {
+                        return Err(format!("pattern error in '{}': {diagnostic}", group.name));
+                    }
+                    // Master originally classified this as a warning. WIP's
+                    // checker rejects it, and that behavior is retained.
+                    DiagnosticKind::NonExhaustive { .. } => {
+                        return Err(format!("pattern error in '{}': {diagnostic}", group.name));
+                    }
+                    DiagnosticKind::UnreachableClause { .. } => {
+                        // Preserve master’s warning severity for unreachable
+                        // clauses; warnings do not change program validity.
+                        debug_assert_eq!(diagnostic.severity, Severity::Warning);
+                    }
+                }
+            }
+        }
+
+        associate_specs(&mut ctx.supply, group, &set)
+            .map_err(|error| format!("specification failed for '{}': {error}", group.name))?;
+
+        // The inferred specialization is now the canonical environment entry
+        // for subsequent groups. Calls already being inferred can still use
+        // the seed above, which is what permits recursion.
+        if let Some(first) = set.specializations.first() {
+            env.insert(group.name.clone(), first.scheme.clone());
+        }
+        overloads.push(set);
+    }
+
+    // Check ordinary top-level expressions and lets against the same
+    // environment. Type/class/instance declarations are intentionally kept in
+    // the AST for their dedicated semantic lowering; they are not ignored by
+    // evaluation.
+    for statement in &collected.statements {
+        match statement {
+            Stmt::Decl(Decl::Let(binding)) => {
+                let value_ty = infer_expr(&mut ctx, &binding.value, &mut env)
+                    .map_err(|error| format!("top-level let inference failed: {error}"))?;
+                check_pattern(&mut ctx, &binding.pattern, &value_ty, &mut env)
+                    .map_err(|error| format!("top-level binding failed: {error}"))?;
+                if let PatKind::Var(name) = &binding.pattern.kind {
+                    let resolved = ctx.resolve(&value_ty);
+                    let scheme = generalize(&env, &resolved, ctx.constraints.clone());
+                    env.insert(name.clone(), scheme);
+                }
+            }
+            Stmt::Expr(expression) => {
+                infer_expr(&mut ctx, expression, &mut env)
+                    .map_err(|error| format!("top-level expression inference failed: {error}"))?;
+            }
+            Stmt::Decl(Decl::Type(_))
+            | Stmt::Decl(Decl::Class(_))
+            | Stmt::Decl(Decl::Impl(_))
+            | Stmt::Decl(Decl::Spec(_))
+            | Stmt::Decl(Decl::Fn(_)) => {}
+        }
+    }
+
+    Ok(Analysis { overloads })
+}
+
+fn seed_function_type(ctx: &mut InferCtx, group: &FunctionGroup) -> MonoType {
+    let arity = group
+        .raw_clauses
+        .first()
+        .map(|clause| clause.params.len())
+        .unwrap_or(0);
+    let mut ty = ctx.supply.fresh();
+    for _ in (0..arity).rev() {
+        ty = MonoType::Function(Box::new(ctx.supply.fresh()), Box::new(ty));
+    }
+    ty
+}
+
+fn install_type_declarations(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Program) {
+    for statement in &program.statements {
+        let Stmt::Decl(Decl::Type(declaration)) = statement else {
+            continue;
+        };
+        let Ty::Sum(alternatives) = &declaration.ty else {
+            continue;
+        };
+
+        let mut binders = std::collections::BTreeMap::new();
+        let mut quantified = Vec::new();
+        for parameter in &declaration.params {
+            let id = ctx.supply.fresh_id();
+            quantified.push(id);
+            binders.insert(parameter.clone(), MonoType::Var(id));
+        }
+        let result = MonoType::Constructor(
+            declaration.name.clone(),
+            declaration
+                .params
+                .iter()
+                .map(|parameter| binders[parameter].clone())
+                .collect(),
+        );
+
+        for alternative in alternatives {
+            let SumAlt::Ctor { name, payload } = alternative else {
+                continue;
+            };
+            let body = match payload {
+                Some(payload) => MonoType::Function(
+                    Box::new(lower_ty(payload, &binders)),
+                    Box::new(result.clone()),
+                ),
+                None => result.clone(),
+            };
+            env.insert(
+                name.clone(),
+                TypeScheme {
+                    quantified: quantified.clone(),
+                    constraints: Vec::new(),
+                    body,
+                },
+            );
+        }
+    }
+}
