@@ -124,6 +124,10 @@ fn simplify(p: &Pattern) -> Pat {
             }
         }
         PatKind::Spread(_) => Pat::Wild, // `...rest` matches any suffix list
+        PatKind::Constructor { payload, .. } => payload
+            .as_deref()
+            .map(simplify)
+            .unwrap_or(Pat::Wild),
         PatKind::Record { fields, .. } => Pat::Record(
             fields
                 .iter()
