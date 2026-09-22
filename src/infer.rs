@@ -304,9 +304,9 @@ pub fn check_pattern(
                 (None, result) => (None, result),
                 (Some(_), other) => {
                     return Err(TypeError {
-                        kind: TypeErrorKind::Mismatch {
-                            expected: MonoType::Constructor(name.clone(), Vec::new()),
-                            actual: other,
+                        kind: TypeErrorKind::PatternMismatch {
+                            expected: other,
+                            got: name.clone(),
                         },
                     });
                 }
