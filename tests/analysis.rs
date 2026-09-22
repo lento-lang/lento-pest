@@ -123,3 +123,15 @@ fn canonical_analysis_exposes_resolved_type_metadata() {
     assert_eq!(user.fields.len(), 1);
     assert_eq!(user.fields[0].0, "name");
 }
+
+
+#[test]
+fn canonical_analysis_exposes_class_dispatch_metadata() {
+    let result = analysis(
+        "class Comparable a { spec compare : a -> a -> int }\n         impl Comparable int { fn compare x y = 0 }\n",
+    )
+    .expect("class declarations should resolve");
+    assert_eq!(result.declarations.classes[0].methods, vec!["compare"]);
+    assert_eq!(result.declarations.instances[0].class, "Comparable");
+    assert_eq!(result.declarations.instances[0].methods, vec!["compare"]);
+}
