@@ -16,8 +16,11 @@ jobs:
         with:
           toolchain: stable
       - name: Install cvc5
-        run: sudo apt-get update && sudo apt-get install -y libcvc5-dev
+        run: sudo apt-get update && sudo apt-get install -y libcvc5-dev g++
       - run: cargo fmt --all
+      - name: Configure C++ headers
+        run: |
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I$(g++ -print-file-name=include) -I/usr/include/c++/$(g++ -dumpversion) -I/usr/include/x86_64-linux-gnu/c++/$(g++ -dumpversion)" >> "$GITHUB_ENV"
       - name: Test
         env:
           CVC5_INCLUDE_DIR: /usr/include
