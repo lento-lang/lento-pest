@@ -149,7 +149,11 @@ fn validate_spec_refinements(
                     spec.name
                 )
             })?;
-            ctx.unify(&clause_ty, &crate::infer::ctor::bool())
+            crate::types::unify(
+                &mut ctx.subst,
+                &clause_ty,
+                &crate::infer::ctor::bool(),
+            )
                 .map_err(|error| {
                     format!(
                         "where refinement for spec '{}' must be boolean: {error}",
