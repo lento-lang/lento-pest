@@ -71,7 +71,7 @@ fn canonical_pipeline_rejects_overlapping_implementations() {
 #[test]
 fn canonical_pipeline_type_checks_where_refinements() {
     analyze(
-        "spec positive : (x: int) -> int where\n             x > 0\n",
+        "spec positive:\n         (x: int) -> int\n         where\n             x > 0\n",
     )
     .expect("well-typed refinement should analyze");
 }
@@ -79,7 +79,7 @@ fn canonical_pipeline_type_checks_where_refinements() {
 #[test]
 fn canonical_pipeline_rejects_unknown_where_names() {
     let error = analyze(
-        "spec positive : (x: int) -> int where\n             y > 0\n",
+        "spec positive:\n         (x: int) -> int\n         where\n             y > 0\n",
     )
     .expect_err("unknown refinement name should fail");
     assert!(error.contains("unbound variable"));
@@ -88,7 +88,7 @@ fn canonical_pipeline_rejects_unknown_where_names() {
 #[test]
 fn canonical_pipeline_rejects_non_boolean_where_refinements() {
     let error = analyze(
-        "spec positive : (x: int) -> int where\n             x + 1\n",
+        "spec positive:\n         (x: int) -> int\n         where\n             x + 1\n",
     )
     .expect_err("non-boolean refinement should fail");
     assert!(error.contains("must be boolean"));
