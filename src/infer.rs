@@ -293,12 +293,25 @@ pub fn check_pattern(
             Ok(())
         }
         PatKind::Constructor { name, payload } => {
-            let payload_ty = payload.as_ref().map(|_| ctx.fresh());
-            let ctor_ty = MonoType::Constructor(
-                name.clone(),
-                payload_ty.iter().cloned().collect(),
-            );
-            ctx.unify(expected, &ctor_ty)?;
+            let declared = env.get(name).cloned().ok_or_else(|| {
+                TypeError {
+                    kind: TypeErrorKind::UnboundVariable(name.clone()),
+                }
+            })?;
+            let ctor_ty = instantiate(&mut ctx.supply, &declared).0;
+            let (payload_ty, result_ty) = match (payload, ctor_ty) {
+                (Some(_), MonoType::Function(argument, result)) => (Some(*argument), *result),
+                (None, result) => (None, result),
+                (Some(_), other) => {
+                    return Err(TypeError {
+                        kind: TypeErrorKind::Mismatch {
+                            expected: MonoType::Constructor(name.clone(), Vec::new()),
+                            actual: other,
+                        },
+                    });
+                }
+            };
+            ctx.unify(expected, &result_ty)?;
             if let (Some(pattern), Some(payload_ty)) = (payload, payload_ty) {
                 check_pattern(ctx, pattern, &payload_ty, env)?;
             }
