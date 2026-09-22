@@ -167,6 +167,13 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
     // A couple of representative polymorphic intrinsics; the full table grows
     // as the evaluator's intrinsics are typed.
     env.insert(
+        "assert".to_string(),
+        TypeScheme::mono(MonoType::Function(
+            Box::new(ctor::bool()),
+            Box::new(ctor::unit()),
+        )),
+    );
+    env.insert(
         "concat".to_string(),
         TypeScheme {
             quantified: vec![a],
