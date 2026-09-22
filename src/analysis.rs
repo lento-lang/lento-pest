@@ -36,6 +36,22 @@ pub struct ConstructorMetadata {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct DeclarationMetadata {
     pub types: Vec<TypeMetadata>,
+    pub classes: Vec<ClassMetadata>,
+    pub instances: Vec<InstanceMetadata>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClassMetadata {
+    pub name: String,
+    pub parameters: Vec<String>,
+    pub methods: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct InstanceMetadata {
+    pub class: String,
+    pub target: Vec<MonoType>,
+    pub methods: Vec<String>,
 }
 
 
@@ -298,6 +314,34 @@ fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMet
             )),
         }
         declarations.types.push(metadata);
+    }
+
+    for statement in &program.statements {
+        match statement {
+            Stmt::Decl(Decl::Class(class)) => {
+                declarations.classes.push(ClassMetadata {
+                    name: class.name.clone(),
+                    parameters: class.params.clone(),
+                    methods: class.specs.iter().map(|spec| spec.name.clone()).collect(),
+                });
+            }
+            Stmt::Decl(Decl::Impl(implementation)) => {
+                declarations.instances.push(InstanceMetadata {
+                    class: implementation.class.clone(),
+                    target: implementation
+                        .target
+                        .iter()
+                        .map(|ty| lower_ty(ty, &BTreeMap::new()))
+                        .collect(),
+                    methods: implementation
+                        .methods
+                        .iter()
+                        .map(|method| method.name.clone())
+                        .collect(),
+                });
+            }
+            _ => {}
+        }
     }
     declarations
 }
