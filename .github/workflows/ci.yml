@@ -18,4 +18,8 @@ jobs:
       - name: Install cvc5
         run: sudo apt-get update && sudo apt-get install -y libcvc5-dev
       - run: cargo fmt --all
-      - run: cargo test --all-targets
+      - name: Test
+        env:
+          CVC5_INCLUDE_DIR: /usr/include
+          CVC5_LIB_DIR: /usr/lib/x86_64-linux-gnu
+        run: cargo test --all-targets
