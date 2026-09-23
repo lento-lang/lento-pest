@@ -62,7 +62,7 @@ fn load_with_prelude(path: &std::path::Path) -> Result<lento::ast::Program, Stri
 
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
     let analysis = lento::analysis::analyze_program(ast)?;
-    let desugared = lento::ast::desugar_program(ast);
+    let desugared = lento::semantics::lower_analyzed_program(ast, &analysis.typed);
     #[cfg(feature = "legacy-typecheck")]
     lento::typecheck::check_program(&desugared)?;
     let value = lento::eval::eval_program_with_declarations(&desugared, &analysis.declarations)?;
