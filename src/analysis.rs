@@ -26,6 +26,7 @@ use crate::types::{generalize, lower_ty, MonoType, TypeEnv, TypeScheme};
 pub struct TypeMetadata {
     pub name: String,
     pub parameters: Vec<String>,
+    pub parameter_ids: Vec<u32>,
     pub constructors: Vec<ConstructorMetadata>,
     pub fields: Vec<(String, MonoType)>,
 }
@@ -92,7 +93,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let mut env = base_env(&mut ctx.supply);
 
     let declarations = resolve_declarations(program, &mut ctx);
-    install_type_declarations(&mut env, &mut ctx, program);
+    install_type_declarations(&mut env, &declarations);
     install_class_methods(&mut env, &mut ctx, program);
     validate_spec_refinements(program, &mut ctx, &env)?;
     let refinements = collect_refinement_metadata(&collected.function_groups);
@@ -1014,6 +1015,14 @@ fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMet
         let mut metadata = TypeMetadata {
             name: declaration.name.clone(),
             parameters: declaration.params.clone(),
+            parameter_ids: declaration
+                .params
+                .iter()
+                .map(|parameter| match &binders[parameter] {
+                    MonoType::Var(id) => *id,
+                    _ => unreachable!(),
+                })
+                .collect(),
             constructors: Vec::new(),
             fields: Vec::new(),
         };
@@ -1081,46 +1090,32 @@ fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMet
 }
 
 
-fn install_type_declarations(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Program) {
-    for statement in &program.statements {
-        let Stmt::Decl(Decl::Type(declaration)) = statement else {
-            continue;
-        };
-        let Ty::Sum(alternatives) = &declaration.ty else {
-            continue;
-        };
-
-        let mut binders = std::collections::BTreeMap::new();
-        let mut quantified = Vec::new();
-        for parameter in &declaration.params {
-            let id = ctx.supply.fresh_id();
-            quantified.push(id);
-            binders.insert(parameter.clone(), MonoType::Var(id));
-        }
+fn install_type_declarations(
+    env: &mut TypeEnv,
+    declarations: &DeclarationMetadata,
+) {
+    for declaration in &declarations.types {
         let result = MonoType::Constructor(
             declaration.name.clone(),
             declaration
-                .params
+                .parameter_ids
                 .iter()
-                .map(|parameter| binders[parameter].clone())
+                .copied()
+                .map(MonoType::Var)
                 .collect(),
         );
-
-        for alternative in alternatives {
-            let SumAlt::Ctor { name, payload } = alternative else {
-                continue;
-            };
-            let body = match payload {
+        for constructor in &declaration.constructors {
+            let body = match &constructor.payload {
                 Some(payload) => MonoType::Function(
-                    Box::new(lower_ty(payload, &binders)),
+                    Box::new(payload.clone()),
                     Box::new(result.clone()),
                 ),
                 None => result.clone(),
             };
             env.insert(
-                name.clone(),
+                constructor.name.clone(),
                 TypeScheme {
-                    quantified: quantified.clone(),
+                    quantified: declaration.parameter_ids.clone(),
                     constraints: Vec::new(),
                     body,
                 },
@@ -1128,7 +1123,6 @@ fn install_type_declarations(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Pr
         }
     }
 }
-
 
 fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String> {
     match expression {
