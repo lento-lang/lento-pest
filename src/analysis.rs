@@ -149,9 +149,6 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         overloads.push(set);
     }
 
-    validate_class_constraints(&ctx, &declarations)?;
-    let typed = build_typed_program(&collected.function_groups, &overloads)?;
-
     // Check ordinary top-level expressions and lets against the same
     // environment. Type/class/instance declarations are intentionally kept in
     // the AST for their dedicated semantic lowering; they are not ignored by
@@ -181,6 +178,9 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
             | Stmt::Decl(Decl::Fn(_)) => {}
         }
     }
+
+    validate_class_constraints(&ctx, &declarations)?;
+    let typed = build_typed_program(&collected.function_groups, &overloads)?;
 
     Ok(Analysis {
         overloads,
