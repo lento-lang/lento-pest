@@ -539,22 +539,25 @@ fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
     value
 }
 
+
+fn lower_next(children: &mut std::slice::Iter<'_, TypedExpr>) -> Expr {
+    lower_typed_expr(children.next().expect("typed child/source shape mismatch"))
+}
 fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
     use crate::ast::{ListCons, ListExpr, RecordValueEntry};
     let mut children = children.iter();
-    let mut next = || lower_typed_expr(children.next().expect("typed child/source shape mismatch"));
     match source {
         Expr::Unary(unary) => Expr::Unary(crate::ast::UnaryExpr {
             op: unary.op.clone(),
-            operand: Box::new(next()),
+            operand: Box::new(lower_next(&mut children)),
         }),
         Expr::Binary(binary) => Expr::Binary(crate::ast::BinaryExpr {
             op: binary.op.clone(),
-            lhs: Box::new(next()),
-            rhs: Box::new(next()),
+            lhs: Box::new(lower_next(&mut children)),
+            rhs: Box::new(lower_next(&mut children)),
         }),
         Expr::Tuple(tuple) => Expr::Tuple(crate::ast::TupleExpr {
-            items: tuple.items.iter().map(|_| next()).collect(),
+            items: tuple.items.iter().map(|_| lower_next(&mut children)).collect(),
         }),
         Expr::List(list) => {
             fn lower_list(
@@ -565,7 +568,7 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
                     ListExpr::Empty => ListExpr::Empty,
                     ListExpr::Cells(cell) => ListExpr::Cells(Box::new(ListCons {
                         head: Box::new(lower_typed_expr(
-                            children.next().expect("typed list child missing"),
+                            children.lower_next(&mut children).expect("typed list child missing"),
                         )),
                         tail: Box::new(lower_list(&cell.tail, children)),
                     })),
@@ -577,8 +580,8 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
             let mut body = block.body.clone();
             for statement in &mut body {
                 match statement {
-                    Stmt::Expr(_) => *statement = Stmt::Expr(next()),
-                    Stmt::Decl(Decl::Let(binding)) => binding.value = next(),
+                    Stmt::Expr(_) => *statement = Stmt::Expr(lower_next(&mut children)),
+                    Stmt::Decl(Decl::Let(binding)) => binding.value = lower_next(&mut children),
                     _ => {}
                 }
             }
@@ -590,27 +593,27 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
                 .iter()
                 .map(|entry| match entry {
                     RecordValueEntry::Field(name, _) => {
-                        RecordValueEntry::Field(name.clone(), next())
+                        RecordValueEntry::Field(name.clone(), lower_next(&mut children))
                     }
-                    RecordValueEntry::Spread(_) => RecordValueEntry::Spread(next()),
+                    RecordValueEntry::Spread(_) => RecordValueEntry::Spread(lower_next(&mut children)),
                 })
                 .collect();
             Expr::Record(crate::ast::RecordExpr { entries })
         }
         Expr::Member(member) => Expr::Member(crate::ast::MemberExpr {
-            obj: Box::new(next()),
+            obj: Box::new(lower_next(&mut children)),
             field: member.field.clone(),
         }),
         Expr::Index(_) => Expr::Index(crate::ast::IndexExpr {
-            obj: Box::new(next()),
-            index: Box::new(next()),
+            obj: Box::new(lower_next(&mut children)),
+            index: Box::new(lower_next(&mut children)),
         }),
         Expr::Ref(_) => Expr::Ref(crate::ast::RefExpr {
-            inner: Box::new(next()),
+            inner: Box::new(lower_next(&mut children)),
         }),
         Expr::Assign(_) => Expr::Assign(crate::ast::AssignExpr {
-            place: Box::new(next()),
-            value: Box::new(next()),
+            place: Box::new(lower_next(&mut children)),
+            value: Box::new(lower_next(&mut children)),
         }),
         _ => source.clone(),
     }
