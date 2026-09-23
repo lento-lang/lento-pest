@@ -675,7 +675,11 @@ fn resolve_typed_expr_calls(
                     .then_with(|| left_id.cmp(right_id))
             });
             match matches.as_slice() {
-                [] => {}
+                [] => {
+                    return Err(format!(
+                        "no specialization of '{name}' accepts the fully typed call"
+                    ));
+                }
                 [(_, id)] => *specialization = Some(*id),
                 [(best_score, _id), (next_score, _), ..] if best_score == next_score => {
                     return Err(format!(
