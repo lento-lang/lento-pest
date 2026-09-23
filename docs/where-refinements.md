@@ -67,6 +67,11 @@ body, assumes the spec's preconditions, and asks whether the postcondition
 can be violated. A definite counterexample is a compile/type error at the
 spec (with the witness in the message); the definition never runs.
 
+The canonical checker currently proves postconditions only for single-clause
+function definitions. It rejects multi-clause definitions because encoding only
+the first clause would leave other runtime branches unproved. A function group
+may also have only one refinement-bearing spec in this version.
+
 ```lento
 spec divide:
     (x: int) -> (y: int) -> (r: int)
