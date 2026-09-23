@@ -371,10 +371,14 @@ pub fn infer_typed_expr(
             kind: TypedExprKind::Lit(l.value.clone()),
         }),
         Expr::Var(v) => match env.get(&v.name) {
-            Some(scheme) => Ok(TypedExpr {
-                ty: instantiate(&mut ctx.supply, scheme).0,
-                kind: TypedExprKind::Var(v.name.clone()),
-            }),
+            Some(scheme) => {
+                let (ty, constraints) = instantiate(&mut ctx.supply, scheme);
+                ctx.constraints.extend(constraints);
+                Ok(TypedExpr {
+                    ty,
+                    kind: TypedExprKind::Var(v.name.clone()),
+                })
+            }
             None => Err(unbound(&v.name)),
         },
         Expr::Lambda(l) => {
@@ -591,51 +595,6 @@ pub fn infer_typed_expr(
 /// Infer only the type when a caller does not need the typed expression tree.
 pub fn infer_expr(ctx: &mut InferCtx, expr: &Expr, env: &mut TypeEnv) -> Result<MonoType, TypeError> {
     infer_typed_expr(ctx, expr, env).map(|typed| typed.ty)
-}
-
-fn infer_binary(
-    ctx: &mut InferCtx,
-    b: &crate::ast::BinaryExpr,
-    env: &mut TypeEnv,
-) -> Result<MonoType, TypeError> {
-    let lhs = infer_expr(ctx, &b.lhs, env)?;
-    let rhs = infer_expr(ctx, &b.rhs, env)?;
-    match b.op {
-        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
-            // Numeric arithmetic: operands share a numeric type; result is it.
-            ctx.unify(&lhs, &rhs)?;
-            Ok(lhs)
-        }
-        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
-            ctx.unify(&lhs, &rhs)?;
-            Ok(ctor::bool())
-        }
-        BinaryOp::And | BinaryOp::Or => {
-            ctx.unify(&lhs, &ctor::bool())?;
-            ctx.unify(&rhs, &ctor::bool())?;
-            Ok(ctor::bool())
-        }
-    }
-}
-
-fn infer_list(
-    ctx: &mut InferCtx,
-    l: &crate::ast::ListExpr,
-    env: &mut TypeEnv,
-) -> Result<MonoType, TypeError> {
-    let elem = ctx.fresh();
-    let mut cur = l;
-    loop {
-        match cur {
-            crate::ast::ListExpr::Empty => break,
-            crate::ast::ListExpr::Cells(cell) => {
-                let h = infer_expr(ctx, &cell.head, env)?;
-                ctx.unify(&elem, &h)?;
-                cur = &cell.tail;
-            }
-        }
-    }
-    Ok(MonoType::List(Box::new(elem)))
 }
 
 // --------------------------------------------------------------------------
