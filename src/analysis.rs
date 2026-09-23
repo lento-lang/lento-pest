@@ -582,15 +582,11 @@ fn build_typed_program(
                             clause.source_index, group.name
                         )
                     })?;
-                let source = &group.raw_clauses[source_position];
-                let body_ty = callable_result_type(&clause.ty, clause.patterns.len());
+                let _source = &group.raw_clauses[source_position];
                 typed_clauses.push(TypedPatternClause {
                     patterns: clause.patterns.clone(),
                     clause_ty: clause.ty.clone(),
-                    body: TypedExpr {
-                        ty: body_ty,
-                        kind: TypedExprKind::Unresolved(Box::new(source.body.clone())),
-                    },
+                    body: clause.body.clone(),
                     source_index: clause.source_index,
                 });
             }
@@ -1139,6 +1135,10 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
                     .enumerate()
                     .map(|(index, arm)| crate::specialize::SpecializedClause {
                         ty: MonoType::Var(0),
+                        body: TypedExpr {
+                            ty: MonoType::Var(0),
+                            kind: TypedExprKind::Unresolved(Box::new(arm.body.clone())),
+                        },
                         patterns: vec![arm.pattern.clone()],
                         source_index: index,
                         declared_domain: Vec::new(),
