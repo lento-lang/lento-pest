@@ -333,6 +333,12 @@ pub enum TypedExprKind {
         scrutinee: Box<TypedExpr>,
         arms: Vec<TypedMatchArm>,
     },
+    /// A recursively annotated expression whose dedicated node is still its
+    /// source AST form. Child order follows the source expression structure.
+    Composite {
+        source: Box<Expr>,
+        children: Vec<TypedExpr>,
+    },
     /// A construct not yet lowered into the typed IR; carries the parsed
     /// expression until its typed form is defined.
     Unresolved(Box<Expr>),
@@ -518,6 +524,7 @@ fn lower_typed_expr(e: &TypedExpr) -> Expr {
                 })
                 .collect(),
         }),
+        TypedExprKind::Composite { source, .. } => (**source).clone(),
         TypedExprKind::Unresolved(expr) => (**expr).clone(),
     }
 }
