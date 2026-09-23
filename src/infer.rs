@@ -614,6 +614,7 @@ pub fn infer_clause(
     clause: &FnDecl,
     env: &TypeEnv,
 ) -> Result<InferredClause, TypeError> {
+    let constraints_start = ctx.constraints.len();
     let mut local = env.clone();
     let mut param_tys = Vec::with_capacity(clause.params.len());
     for p in &clause.params {
@@ -638,7 +639,7 @@ pub fn infer_clause(
         ty,
         body,
         patterns: clause.params.clone(),
-        constraints: ctx.constraints.clone(),
+        constraints: ctx.constraints[constraints_start..].to_vec(),
     })
 }
 
@@ -654,6 +655,8 @@ pub struct InferredGroup {
     pub clause_patterns: Vec<Vec<Pattern>>,
     /// Per-clause recursively typed bodies, in source order.
     pub clause_bodies: Vec<crate::semantics::TypedExpr>,
+    /// Per-clause class and prelude constraints after group substitution.
+    pub clause_constraints: Vec<Vec<SchemeConstraint>>,
 }
 
 /// Infer every clause of a function group in a shared context.
@@ -669,22 +672,32 @@ pub fn infer_function_group(
     let mut clause_types = Vec::new();
     let mut clause_patterns = Vec::new();
     let mut clause_bodies = Vec::new();
+    let mut clause_constraints = Vec::new();
     for clause in &group.raw_clauses {
         let inferred = infer_clause(ctx, clause, env)?;
         clause_types.push(inferred.ty);
         clause_patterns.push(inferred.patterns);
         clause_bodies.push(inferred.body);
+        clause_constraints.push(inferred.constraints);
     }
-    // Resolve every annotation through the final group substitution.
+    // Resolve every annotation and constraint through the final group substitution.
     let clause_types = clause_types.iter().map(|t| ctx.resolve(t)).collect();
     for body in &mut clause_bodies {
         resolve_typed_expr(ctx, body);
+    }
+    for constraints in &mut clause_constraints {
+        for constraint in constraints {
+            for argument in &mut constraint.args {
+                *argument = ctx.resolve(argument);
+            }
+        }
     }
     Ok(InferredGroup {
         name: group.name.clone(),
         clause_types,
         clause_patterns,
         clause_bodies,
+        clause_constraints,
     })
 }
 
