@@ -691,7 +691,7 @@ fn resolve_typed_expr_calls(
                         rejections.push(resolved_constraints);
                     }
                 } else {
-                    rejections.push(vec![(candidate_type.to_string(), vec![applied_type.clone()])]);
+                    rejections.push(vec![(format!("{candidate_type:?}"), vec![applied_type.clone()])]);
                 }
             }
             matches.sort_by(|(left_score, left_id), (right_score, right_id)| {
