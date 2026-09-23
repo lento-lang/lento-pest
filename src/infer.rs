@@ -729,7 +729,7 @@ pub fn infer_function_group(
     })
 }
 
-fn resolve_typed_expr(ctx: &InferCtx, expression: &mut crate::semantics::TypedExpr) {
+pub(crate) fn resolve_typed_expr(ctx: &InferCtx, expression: &mut crate::semantics::TypedExpr) {
     use crate::semantics::TypedExprKind;
     expression.ty = ctx.resolve(&expression.ty);
     match &mut expression.kind {
