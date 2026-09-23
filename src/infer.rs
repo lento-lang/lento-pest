@@ -351,7 +351,11 @@ pub fn infer_expr(ctx: &mut InferCtx, expr: &Expr, env: &mut TypeEnv) -> Result<
             Lit::Str(_) => ctor::str(),
         }),
         Expr::Var(v) => match env.get(&v.name) {
-            Some(scheme) => Ok(instantiate(&mut ctx.supply, scheme).0),
+            Some(scheme) => {
+                let (ty, constraints) = instantiate(&mut ctx.supply, scheme);
+                ctx.constraints.extend(constraints);
+                Ok(ty)
+            }
             None => Err(unbound(&v.name)),
         },
         Expr::Lambda(l) => {
