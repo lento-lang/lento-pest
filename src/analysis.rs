@@ -1254,6 +1254,7 @@ fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
     let mut type_names = BTreeSet::new();
     let mut constructor_names = BTreeSet::new();
     let mut classes = BTreeMap::<String, (usize, BTreeSet<String>)>::new();
+    let mut method_owners = BTreeMap::<String, String>::new();
     let mut instances = BTreeSet::new();
 
     for statement in &program.statements {
@@ -1287,6 +1288,13 @@ fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
                             spec.name, class.name
                         ));
                     }
+                    if let Some(owner) = method_owners.get(&spec.name) {
+                        return Err(format!(
+                            "class method '{}' is declared by both '{}' and '{}';                              global method overload resolution is not available yet",
+                            spec.name, owner, class.name
+                        ));
+                    }
+                    method_owners.insert(spec.name.clone(), class.name.clone());
                 }
                 if methods.is_empty() {
                     return Err(format!("class '{}' requires at least one method", class.name));
