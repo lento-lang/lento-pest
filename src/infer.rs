@@ -368,7 +368,7 @@ pub fn infer_typed_expr(
                 Lit::Float(_) => ctor::float(),
                 Lit::Str(_) => ctor::str(),
             },
-            kind: TypedExprKind::Lit(l.clone()),
+            kind: TypedExprKind::Lit(l.value.clone()),
         }),
         Expr::Var(v) => match env.get(&v.name) {
             Some(scheme) => Ok(TypedExpr {
