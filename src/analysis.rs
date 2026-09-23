@@ -92,6 +92,8 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     validate_spec_refinements(program, &mut ctx, &env)?;
     let refinements = collect_refinement_metadata(&collected.function_groups);
     validate_refinement_calls(program, &collected.function_groups)?;
+    #[cfg(feature = "canonical-smt")]
+    verify_canonical_smt(program, &collected.function_groups)?;
 
     // Seed every function before inferring any body. This preserves WIP's
     // recursive and mutually recursive definitions while the master pipeline
@@ -262,6 +264,319 @@ fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
             }
         }
     }
+}
+
+
+#[cfg(feature = "canonical-smt")]
+#[derive(Clone)]
+struct SmtRefinement {
+    inputs: Vec<(Option<String>, Option<crate::smt::SVal>)>,
+    preconditions: Vec<Expr>,
+    postconditions: Vec<Expr>,
+    arity: usize,
+}
+
+#[cfg(feature = "canonical-smt")]
+fn verify_canonical_smt(
+    program: &Program,
+    groups: &[FunctionGroup],
+) -> Result<(), String> {
+    let mut refinements = BTreeMap::<String, SmtRefinement>::new();
+
+    for group in groups {
+        for parsed in &group.explicit_specs {
+            let Some(clauses) = &parsed.decl.ty.where_ else {
+                continue;
+            };
+            let mut binders = Vec::new();
+            collect_signature_binders(&parsed.decl.ty.ty, &mut binders);
+            if binders.is_empty() {
+                return Err(format!(
+                    "cannot verify refinement for '{}': empty signature",
+                    group.name
+                ));
+            }
+            let result = binders.last().cloned().unwrap();
+            let inputs = &binders[..binders.len() - 1];
+            let input_sorts = inputs
+                .iter()
+                .map(|(name, ty)| (name.clone(), crate::smt::sort_of_ty(ty)))
+                .collect::<Vec<_>>();
+            let result_name = result.0.clone();
+            let mut preconditions = Vec::new();
+            let mut postconditions = Vec::new();
+            for clause in clauses {
+                let mut names = BTreeSet::new();
+                collect_expr_names(clause, &mut names);
+                if result_name
+                    .as_ref()
+                    .map(|name| names.contains(name))
+                    .unwrap_or(false)
+                {
+                    postconditions.push(clause.clone());
+                } else {
+                    preconditions.push(clause.clone());
+                }
+            }
+            refinements.insert(
+                group.name.clone(),
+                SmtRefinement {
+                    inputs: input_sorts,
+                    preconditions,
+                    postconditions,
+                    arity: inputs.len(),
+                },
+            );
+        }
+    }
+
+    for group in groups {
+        for clause in &group.raw_clauses {
+            if !refinements.contains_key(&group.name) {
+                continue;
+            }
+            if clause.params.len() != refinements[&group.name].arity {
+                return Err(format!(
+                    "cannot verify refinement for '{}': implementation arity differs from spec",
+                    group.name
+                ));
+            }
+            if !refinements[&group.name].postconditions.is_empty() {
+                if group.raw_clauses.len() != 1 {
+                    return Err(format!(
+                        "cannot verify postcondition for '{}': multiple pattern clauses require typed body lowering first",
+                        group.name
+                    ));
+                }
+                let refinement = &refinements[&group.name];
+                let Some(result_name) = group
+                    .explicit_specs
+                    .iter()
+                    .flat_map(|spec| spec.decl.ty.where_.as_ref())
+                    .flat_map(|_| std::iter::empty::<String>())
+                    .next()
+                else {
+                    // The actual result binder is extracted below from the spec.
+                    continue;
+                };
+                let _ = result_name;
+            }
+        }
+    }
+
+    verify_canonical_smt_calls(program, &refinements)?;
+
+    for group in groups {
+        let Some(refinement) = refinements.get(&group.name) else {
+            continue;
+        };
+        if refinement.postconditions.is_empty() {
+            continue;
+        }
+        let parsed = group
+            .explicit_specs
+            .iter()
+            .find(|spec| spec.decl.ty.where_.is_some())
+            .expect("refinement metadata has a source spec");
+        let mut binders = Vec::new();
+        collect_signature_binders(&parsed.decl.ty.ty, &mut binders);
+        let (result_name, result_ty) = binders.last().cloned().unwrap();
+        let Some(result_name) = result_name else {
+            return Err(format!(
+                "cannot verify postcondition for '{}': result binder must be named",
+                group.name
+            ));
+        };
+        let Some(result_sort) = crate::smt::sort_of_ty(&result_ty) else {
+            return Err(format!(
+                "cannot verify postcondition for '{}': result type is not solver-supported",
+                group.name
+            ));
+        };
+        let inputs = refinement
+            .inputs
+            .iter()
+            .map(|(name, sort)| {
+                sort.map(|sort| (name.clone(), sort)).ok_or_else(|| {
+                    format!(
+                        "cannot verify postcondition for '{}': input type is not solver-supported",
+                        group.name
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let body = curry_function_clause(&group.raw_clauses[0]);
+        for post in &refinement.postconditions {
+            match crate::smt::check_post(
+                &inputs,
+                &(result_name.clone(), result_sort),
+                &body,
+                &refinement.preconditions,
+                post,
+            )
+            .map_err(|error| format!("postcondition for '{}': {error}", group.name))?
+            {
+                crate::smt::Verdict::Proven => {}
+                crate::smt::Verdict::Counterexample(witness) => {
+                    return Err(format!(
+                        "postcondition for '{}' is false: {witness}",
+                        group.name
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "canonical-smt")]
+fn verify_canonical_smt_calls(
+    program: &Program,
+    refinements: &BTreeMap<String, SmtRefinement>,
+) -> Result<(), String> {
+    fn walk(
+        expression: &Expr,
+        refinements: &BTreeMap<String, SmtRefinement>,
+        nested_callee: bool,
+    ) -> Result<(), String> {
+        match expression {
+            Expr::Call(call) => {
+                if !nested_callee {
+                    let (base, args) = flatten_call(call);
+                    if let Expr::Var(variable) = base {
+                        if let Some(refinement) = refinements.get(&variable.name) {
+                            if args.len() != refinement.arity {
+                                return Err(format!(
+                                    "cannot verify call to '{}': expected {} arguments, got {}",
+                                    variable.name, refinement.arity, args.len()
+                                ));
+                            }
+                            for argument in &args {
+                                let mut names = BTreeSet::new();
+                                collect_expr_names(argument, &mut names);
+                                if !names.is_empty() {
+                                    return Err(format!(
+                                        "cannot verify call to '{}': symbolic arguments require canonical type-to-SMT lowering",
+                                        variable.name
+                                    ));
+                                }
+                            }
+                            for pre in &refinement.preconditions {
+                                match crate::smt::check_pre(
+                                    &refinement.inputs,
+                                    pre,
+                                    &args,
+                                    &[],
+                                )
+                                .map_err(|error| {
+                                    format!("precondition for '{}': {error}", variable.name)
+                                })? {
+                                    crate::smt::Verdict::Proven => {}
+                                    crate::smt::Verdict::Counterexample(witness) => {
+                                        return Err(format!(
+                                            "precondition for '{}' is false: {witness}",
+                                            variable.name
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                walk(&call.callee, refinements, true)?;
+                for argument in &call.args {
+                    walk(argument, refinements, false)?;
+                }
+            }
+            Expr::Lambda(lambda) => walk(&lambda.body, refinements, false)?,
+            Expr::Member(member) => walk(&member.obj, refinements, false)?,
+            Expr::Index(index) => {
+                walk(&index.obj, refinements, false)?;
+                walk(&index.index, refinements, false)?;
+            }
+            Expr::Unary(unary) => walk(&unary.operand, refinements, false)?,
+            Expr::Binary(binary) => {
+                walk(&binary.lhs, refinements, false)?;
+                walk(&binary.rhs, refinements, false)?;
+            }
+            Expr::Tuple(tuple) => {
+                for item in &tuple.items {
+                    walk(item, refinements, false)?;
+                }
+            }
+            Expr::List(list) => {
+                let mut current = list;
+                loop {
+                    match current {
+                        crate::ast::ListExpr::Empty => break,
+                        crate::ast::ListExpr::Cells(cell) => {
+                            walk(&cell.head, refinements, false)?;
+                            current = &cell.tail;
+                        }
+                    }
+                }
+            }
+            Expr::Record(record) => {
+                for entry in &record.entries {
+                    let value = match entry {
+                        crate::ast::RecordValueEntry::Field(_, value)
+                        | crate::ast::RecordValueEntry::Spread(value) => value,
+                    };
+                    walk(value, refinements, false)?;
+                }
+            }
+            Expr::Block(block) => {
+                for statement in &block.body {
+                    match statement {
+                        Stmt::Expr(expression) => walk(expression, refinements, false)?,
+                        Stmt::Decl(Decl::Let(binding)) => {
+                            walk(&binding.value, refinements, false)?
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Expr::Ref(reference) => walk(&reference.inner, refinements, false)?,
+            Expr::Assign(assign) => {
+                walk(&assign.place, refinements, false)?;
+                walk(&assign.value, refinements, false)?;
+            }
+            Expr::Match(matched) => {
+                walk(&matched.scrutinee, refinements, false)?;
+                for arm in &matched.arms {
+                    if let Some(guard) = &arm.guard {
+                        walk(guard, refinements, false)?;
+                    }
+                    walk(&arm.body, refinements, false)?;
+                }
+            }
+            Expr::Var(_) | Expr::Lit(_) => {}
+        }
+        Ok(())
+    }
+
+    for statement in &program.statements {
+        match statement {
+            Stmt::Expr(expression) => walk(expression, refinements, false)?,
+            Stmt::Decl(Decl::Let(binding)) => {
+                walk(&binding.value, refinements, false)?
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "canonical-smt")]
+fn curry_function_clause(clause: &crate::ast::FnDecl) -> Expr {
+    let mut body = clause.body.clone();
+    for parameter in clause.params.iter().rev() {
+        body = Expr::Lambda(crate::ast::LambdaExpr {
+            params: vec![parameter.clone()],
+            body: Box::new(body),
+        });
+    }
+    body
 }
 
 
