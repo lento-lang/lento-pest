@@ -539,6 +539,83 @@ fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
     value
 }
 
+fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
+    use crate::ast::{ListCons, ListExpr, RecordValueEntry};
+    let mut children = children.iter();
+    let mut next = || lower_typed_expr(children.next().expect("typed child/source shape mismatch"));
+    match source {
+        Expr::Unary(unary) => Expr::Unary(crate::ast::UnaryExpr {
+            op: unary.op.clone(),
+            operand: Box::new(next()),
+        }),
+        Expr::Binary(binary) => Expr::Binary(crate::ast::BinaryExpr {
+            op: binary.op.clone(),
+            lhs: Box::new(next()),
+            rhs: Box::new(next()),
+        }),
+        Expr::Tuple(tuple) => Expr::Tuple(crate::ast::TupleExpr {
+            items: tuple.items.iter().map(|_| next()).collect(),
+        }),
+        Expr::List(list) => {
+            fn lower_list(
+                list: &ListExpr,
+                children: &mut std::slice::Iter<'_, TypedExpr>,
+            ) -> ListExpr {
+                match list {
+                    ListExpr::Empty => ListExpr::Empty,
+                    ListExpr::Cells(cell) => ListExpr::Cells(Box::new(ListCons {
+                        head: Box::new(lower_typed_expr(
+                            children.next().expect("typed list child missing"),
+                        )),
+                        tail: Box::new(lower_list(&cell.tail, children)),
+                    })),
+                }
+            }
+            Expr::List(lower_list(list, &mut children))
+        }
+        Expr::Block(block) => {
+            let mut body = block.body.clone();
+            for statement in &mut body {
+                match statement {
+                    Stmt::Expr(_) => *statement = Stmt::Expr(next()),
+                    Stmt::Decl(Decl::Let(binding)) => binding.value = next(),
+                    _ => {}
+                }
+            }
+            Expr::Block(crate::ast::BlockExpr { body })
+        }
+        Expr::Record(record) => {
+            let entries = record
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    RecordValueEntry::Field(name, _) => {
+                        RecordValueEntry::Field(name.clone(), next())
+                    }
+                    RecordValueEntry::Spread(_) => RecordValueEntry::Spread(next()),
+                })
+                .collect();
+            Expr::Record(crate::ast::RecordExpr { entries })
+        }
+        Expr::Member(member) => Expr::Member(crate::ast::MemberExpr {
+            obj: Box::new(next()),
+            field: member.field.clone(),
+        }),
+        Expr::Index(_) => Expr::Index(crate::ast::IndexExpr {
+            obj: Box::new(next()),
+            index: Box::new(next()),
+        }),
+        Expr::Ref(_) => Expr::Ref(crate::ast::RefExpr {
+            inner: Box::new(next()),
+        }),
+        Expr::Assign(_) => Expr::Assign(crate::ast::AssignExpr {
+            place: Box::new(next()),
+            value: Box::new(next()),
+        }),
+        _ => source.clone(),
+    }
+}
+
 fn lower_typed_let(l: &TypedLet) -> LetDecl {
     LetDecl {
         mutable: l.mutable,
@@ -571,7 +648,7 @@ fn lower_typed_expr(e: &TypedExpr) -> Expr {
                 })
                 .collect(),
         }),
-        TypedExprKind::Composite { source, .. } => (**source).clone(),
+        TypedExprKind::Composite { source, children } => lower_composite_expr(source, children),
         TypedExprKind::Unresolved(expr) => (**expr).clone(),
     }
 }
