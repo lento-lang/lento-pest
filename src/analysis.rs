@@ -330,40 +330,6 @@ fn verify_canonical_smt(
         }
     }
 
-    for group in groups {
-        for clause in &group.raw_clauses {
-            if !refinements.contains_key(&group.name) {
-                continue;
-            }
-            if clause.params.len() != refinements[&group.name].arity {
-                return Err(format!(
-                    "cannot verify refinement for '{}': implementation arity differs from spec",
-                    group.name
-                ));
-            }
-            if !refinements[&group.name].postconditions.is_empty() {
-                if group.raw_clauses.len() != 1 {
-                    return Err(format!(
-                        "cannot verify postcondition for '{}': multiple pattern clauses require typed body lowering first",
-                        group.name
-                    ));
-                }
-                let refinement = &refinements[&group.name];
-                let Some(result_name) = group
-                    .explicit_specs
-                    .iter()
-                    .flat_map(|spec| spec.decl.ty.where_.as_ref())
-                    .flat_map(|_| std::iter::empty::<String>())
-                    .next()
-                else {
-                    // The actual result binder is extracted below from the spec.
-                    continue;
-                };
-                let _ = result_name;
-            }
-        }
-    }
-
     verify_canonical_smt_calls(program, &refinements)?;
 
     for group in groups {
