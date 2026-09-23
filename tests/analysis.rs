@@ -15,9 +15,19 @@ fn analysis(source: &str) -> Result<lento::analysis::Analysis, String> {
 #[test]
 fn canonical_smt_proves_refinement_postconditions() {
     analyze(
-        "spec increment:\n             (x: int) -> (r: int)\n             where\n                 r > x\n         fn increment x = x + 1\n",
+        "spec increment:\n             (x: int) -> (r: int)\n             where\n                 x < 9223372036854775807,\n                 r > x\n         fn increment x = x + 1\n",
     )
-    .expect("SMT should prove the postcondition");
+    .expect("SMT should prove the postcondition when increment cannot overflow");
+}
+
+#[cfg(feature = "canonical-smt")]
+#[test]
+fn canonical_smt_rejects_increment_at_i64_max() {
+    let error = analyze(
+        "spec increment:\n             (x: int) -> (r: int)\n             where\n                 x < 9223372036854775807,\n                 r > x\n         fn increment x = x + 1\n         increment 9223372036854775807\n",
+    )
+    .expect_err("the precondition must reject the overflowing input");
+    assert!(error.contains("precondition"), "{error}");
 }
 
 #[cfg(feature = "canonical-smt")]
