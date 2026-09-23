@@ -37,7 +37,7 @@ fn runtime_uses_resolved_sum_metadata() {
     )
     .expect("program should parse");
     let analysis = analyze_program(&program).expect("sum type should analyze");
-    let lowered = lento::ast::desugar_program(&program);
+    let lowered = lento::semantics::lower_analyzed_program(&program, &analysis.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)
         .expect("metadata-installed constructor should evaluate");
     assert_eq!(value.to_string(), "Some(5)");
