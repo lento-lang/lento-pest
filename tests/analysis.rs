@@ -156,11 +156,44 @@ fn canonical_analysis_populates_typed_bodies_and_schemes() {
     assert_eq!(clause.source_index, 0);
     assert!(matches!(
         clause.body.kind,
-        lento::semantics::TypedExprKind::Unresolved(_)
+        lento::semantics::TypedExprKind::Var(_)
     ));
     assert!(!set.specializations[0].scheme.body.free_vars().is_empty());
 }
 
+
+#[test]
+fn canonical_typed_expressions_keep_recursive_annotations() {
+    let result = analysis("fn add_one x = x + 1\n").expect("function should analyze");
+    let body = &result.typed.overloads[0].specializations[0].clauses[0].body;
+    let lento::semantics::TypedExprKind::Composite { children, .. } = &body.kind else {
+        panic!("binary expression should retain its typed children");
+    };
+    assert_eq!(children.len(), 2);
+    assert_eq!(
+        children[0].ty,
+        lento::types::MonoType::Constructor("int".into(), vec![])
+    );
+    assert_eq!(
+        children[1].ty,
+        lento::types::MonoType::Constructor("int".into(), vec![])
+    );
+}
+
+#[test]
+fn canonical_typed_program_keeps_top_level_let_and_expression_types() {
+    let result = analysis("let value = 1\nvalue + 2\n").expect("program should analyze");
+    assert_eq!(result.typed.lets.len(), 1);
+    assert_eq!(result.typed.exprs.len(), 1);
+    assert_eq!(
+        result.typed.lets[0].value.ty,
+        lento::types::MonoType::Constructor("int".into(), vec![])
+    );
+    assert_eq!(
+        result.typed.exprs[0].ty,
+        lento::types::MonoType::Constructor("int".into(), vec![])
+    );
+}
 
 #[test]
 fn canonical_pipeline_resolves_class_method_instances() {
