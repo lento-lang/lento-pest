@@ -209,7 +209,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         typed_exprs,
         typed_expr_source_indices,
     )?;
-    resolve_typed_program_calls(&mut typed, &overloads)?;
+    resolve_typed_program_calls(&mut typed, &overloads, &declarations)?;
 
     Ok(Analysis {
         overloads,
@@ -606,19 +606,20 @@ fn curry_function_clause(clause: &crate::ast::FnDecl) -> Expr {
 fn resolve_typed_program_calls(
     program: &mut TypedProgram,
     overloads: &[OverloadSet],
+    declarations: &DeclarationMetadata,
 ) -> Result<(), String> {
     for set in &mut program.overloads {
         for specialization in &mut set.specializations {
             for clause in &mut specialization.clauses {
-                resolve_typed_expr_calls(&mut clause.body, overloads)?;
+                resolve_typed_expr_calls(&mut clause.body, overloads, declarations)?;
             }
         }
     }
     for binding in &mut program.lets {
-        resolve_typed_expr_calls(&mut binding.value, overloads)?;
+        resolve_typed_expr_calls(&mut binding.value, overloads, declarations)?;
     }
     for expression in &mut program.exprs {
-        resolve_typed_expr_calls(expression, overloads)?;
+        resolve_typed_expr_calls(expression, overloads, declarations)?;
     }
     Ok(())
 }
@@ -626,6 +627,7 @@ fn resolve_typed_program_calls(
 fn resolve_typed_expr_calls(
     expression: &mut TypedExpr,
     overloads: &[OverloadSet],
+    declarations: &DeclarationMetadata,
 ) -> Result<(), String> {
     match &mut expression.kind {
         TypedExprKind::Call {
@@ -633,9 +635,9 @@ fn resolve_typed_expr_calls(
             args,
             specialization,
         } => {
-            resolve_typed_expr_calls(callee, overloads)?;
+            resolve_typed_expr_calls(callee, overloads, declarations)?;
             for argument in args.iter_mut() {
-                resolve_typed_expr_calls(argument, overloads)?;
+                resolve_typed_expr_calls(argument, overloads, declarations)?;
             }
             let TypedExprKind::Var(name) = &callee.kind else {
                 return Ok(());
@@ -661,11 +663,21 @@ fn resolve_typed_expr_calls(
                 }
                 let mut supply = TypeVarSupply::new();
                 let (candidate_type, constraints) = instantiate(&mut supply, &candidate.scheme);
-                if !constraints.is_empty() {
-                    continue;
-                }
                 let mut substitution = Substitution::new();
-                if unify(&mut substitution, &candidate_type, &applied_type).is_ok() {
+                if unify(&mut substitution, &candidate_type, &applied_type).is_ok()
+                    && constraints.iter().all(|constraint| {
+                        let args = constraint
+                            .args
+                            .iter()
+                            .map(|argument| substitution.apply(argument))
+                            .collect::<Vec<_>>();
+                        !args.iter().any(contains_type_variable)
+                            && declarations.instances.iter().any(|instance| {
+                                instance.class == constraint.name
+                                    && instance.target == args
+                            })
+                    })
+                {
                     matches.push((candidate_specificity(candidate), candidate.id));
                 }
             }
@@ -691,17 +703,17 @@ fn resolve_typed_expr_calls(
         }
         TypedExprKind::Lambda { body, .. } => resolve_typed_expr_calls(body, overloads)?,
         TypedExprKind::Match { scrutinee, arms } => {
-            resolve_typed_expr_calls(scrutinee, overloads)?;
+            resolve_typed_expr_calls(scrutinee, overloads, declarations)?;
             for arm in arms {
                 if let Some(guard) = &mut arm.guard {
-                    resolve_typed_expr_calls(guard, overloads)?;
+                    resolve_typed_expr_calls(guard, overloads, declarations)?;
                 }
-                resolve_typed_expr_calls(&mut arm.body, overloads)?;
+                resolve_typed_expr_calls(&mut arm.body, overloads, declarations)?;
             }
         }
         TypedExprKind::Composite { children, .. } => {
             for child in children {
-                resolve_typed_expr_calls(child, overloads)?;
+                resolve_typed_expr_calls(child, overloads, declarations)?;
             }
         }
         TypedExprKind::Lit(_) | TypedExprKind::Var(_) | TypedExprKind::Unresolved(_) => {}
