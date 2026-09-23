@@ -302,6 +302,8 @@ pub struct TypedSpecialization {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedOverloadSet {
     pub name: String,
+    /// Source index of the first function clause in this overload set.
+    pub source_index: usize,
     pub specializations: Vec<TypedSpecialization>,
 }
 
@@ -354,6 +356,7 @@ pub struct TypedMatchArm {
 /// A typed `let` binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedLet {
+    pub source_index: usize,
     pub mutable: bool,
     pub pattern: Pattern,
     pub annotation: Option<Ty>,
@@ -365,8 +368,9 @@ pub struct TypedLet {
 pub struct TypedProgram {
     pub overloads: Vec<TypedOverloadSet>,
     pub lets: Vec<TypedLet>,
-    /// Top-level expressions, in source order relative to `lets`.
+    /// Top-level expressions, in the same order as `expr_source_indices`.
     pub exprs: Vec<TypedExpr>,
+    pub expr_source_indices: Vec<usize>,
 }
 
 /// Lower a typed program back into the parsed AST shape the evaluator
@@ -378,16 +382,41 @@ pub struct TypedProgram {
 /// function, one match per specialization), not from name/arity adjacency
 /// while walking statements.
 pub fn lower_typed_program(program: &TypedProgram) -> Program {
-    let mut statements = Vec::new();
-    for set in &program.overloads {
-        statements.push(Stmt::Decl(Decl::Let(lower_overload_set(set))));
+    enum Item<'a> {
+        Overload(&'a TypedOverloadSet),
+        Let(&'a TypedLet),
+        Expr(&'a TypedExpr),
     }
-    for l in &program.lets {
-        statements.push(Stmt::Decl(Decl::Let(lower_typed_let(l))));
-    }
-    for e in &program.exprs {
-        statements.push(Stmt::Expr(lower_typed_expr(e)));
-    }
+    let mut items = Vec::new();
+    items.extend(
+        program
+            .overloads
+            .iter()
+            .map(|set| (set.source_index, Item::Overload(set))),
+    );
+    items.extend(
+        program
+            .lets
+            .iter()
+            .map(|binding| (binding.source_index, Item::Let(binding))),
+    );
+    items.extend(
+        program
+            .exprs
+            .iter()
+            .zip(&program.expr_source_indices)
+            .map(|(expression, index)| (*index, Item::Expr(expression))),
+    );
+    items.sort_by_key(|(index, _)| *index);
+
+    let statements = items
+        .into_iter()
+        .map(|(_, item)| match item {
+            Item::Overload(set) => Stmt::Decl(Decl::Let(lower_overload_set(set))),
+            Item::Let(binding) => Stmt::Decl(Decl::Let(lower_typed_let(binding))),
+            Item::Expr(expression) => Stmt::Expr(lower_typed_expr(expression)),
+        })
+        .collect::<Vec<_>>();
     let spans = statements
         .iter()
         .map(|_| crate::ast::Span { line: 0, col: 0 })
@@ -403,6 +432,7 @@ pub fn lower_analyzed_program(source: &Program, typed: &TypedProgram) -> Program
         overloads: typed.overloads.clone(),
         lets: Vec::new(),
         exprs: Vec::new(),
+        expr_source_indices: Vec::new(),
     };
     let lowered_functions = lower_typed_program(&function_ir);
     let mut functions = std::collections::BTreeMap::new();
@@ -414,33 +444,59 @@ pub fn lower_analyzed_program(source: &Program, typed: &TypedProgram) -> Program
         }
     }
 
+    let lets = typed
+        .lets
+        .iter()
+        .map(|binding| (binding.source_index, binding))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let expressions = typed
+        .exprs
+        .iter()
+        .zip(&typed.expr_source_indices)
+        .map(|(expression, index)| (*index, expression))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
     let mut statements = Vec::new();
     let mut spans = Vec::new();
-    let mut emitted = std::collections::BTreeSet::new();
+    let mut emitted_functions = std::collections::BTreeSet::new();
     for (index, statement) in source.statements.iter().enumerate() {
         match statement {
             Stmt::Decl(Decl::Fn(function)) => {
-                if emitted.insert(function.name.clone()) {
+                if emitted_functions.insert(function.name.clone()) {
                     if let Some(binding) = functions.remove(&function.name) {
                         statements.push(Stmt::Decl(Decl::Let(binding)));
-                        spans.push(source.spans.get(index).copied().unwrap_or(crate::ast::Span {
-                            line: 0,
-                            col: 0,
-                        }));
+                        spans.push(source_span(source, index));
                     }
                 }
             }
             Stmt::Decl(Decl::Spec(_)) => {}
+            Stmt::Decl(Decl::Let(_)) => {
+                if let Some(binding) = lets.get(&index) {
+                    statements.push(Stmt::Decl(Decl::Let(lower_typed_let(binding))));
+                    spans.push(source_span(source, index));
+                }
+            }
+            Stmt::Expr(_) => {
+                if let Some(expression) = expressions.get(&index) {
+                    statements.push(Stmt::Expr(lower_typed_expr(expression)));
+                    spans.push(source_span(source, index));
+                }
+            }
             other => {
                 statements.push(other.clone());
-                spans.push(source.spans.get(index).copied().unwrap_or(crate::ast::Span {
-                    line: 0,
-                    col: 0,
-                }));
+                spans.push(source_span(source, index));
             }
         }
     }
     Program { statements, spans }
+}
+
+fn source_span(source: &Program, index: usize) -> crate::ast::Span {
+    source
+        .spans
+        .get(index)
+        .copied()
+        .unwrap_or(crate::ast::Span { line: 0, col: 0 })
 }
 
 fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
