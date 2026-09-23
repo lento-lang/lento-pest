@@ -110,6 +110,39 @@ impl fmt::Display for Value {
     }
 }
 
+pub fn eval_program_with_declarations(
+    program: &Program,
+    declarations: &crate::analysis::DeclarationMetadata,
+) -> Result<Value, String> {
+    let mut env = initial_env();
+    install_resolved_declarations(declarations, &mut env);
+    eval_program_in_env(program, &mut env)
+}
+
+fn install_resolved_declarations(
+    declarations: &crate::analysis::DeclarationMetadata,
+    env: &mut Env,
+) {
+    for declaration in &declarations.types {
+        env.insert(
+            declaration.name.clone(),
+            Binding::TypeDef {
+                params: declaration.parameters.clone(),
+                ty: declaration.source.clone(),
+            },
+        );
+        for constructor in &declaration.constructors {
+            env.insert(
+                constructor.name.clone(),
+                Binding::Constructor {
+                    tag: constructor.name.clone(),
+                    has_payload: constructor.payload.is_some(),
+                },
+            );
+        }
+    }
+}
+
 pub fn eval_program(program: &Program) -> Result<Value, String> {
     let mut env = initial_env();
     eval_program_in_env(program, &mut env)
