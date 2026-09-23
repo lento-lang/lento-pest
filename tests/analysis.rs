@@ -44,6 +44,19 @@ fn runtime_uses_resolved_sum_metadata() {
 }
 
 #[test]
+fn typed_lowering_executes_analyzed_function_bodies_in_source_order() {
+    let program = parse_program(
+        "fn increment x = x + 1\n         let value = increment 4\n         value\n",
+    )
+    .expect("program should parse");
+    let analysis = analyze_program(&program).expect("program should analyze");
+    let lowered = lento::semantics::lower_analyzed_program(&program, &analysis.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)
+        .expect("typed lowering should execute");
+    assert_eq!(value.to_string(), "5");
+}
+
+#[test]
 fn canonical_pipeline_rejects_namespace_collisions() {
     let error = analyze("let f = 1\nfn f x = x\n").expect_err("collision should fail");
     assert!(error.contains("declaration collision"), "{error}");
