@@ -598,7 +598,7 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
                     RecordValueEntry::Spread(_) => RecordValueEntry::Spread(lower_next(&mut children)),
                 })
                 .collect();
-            Expr::Record(crate::ast::RecordExpr { entries })
+            Expr::Record(crate::ast::RecordValueExpr { entries })
         }
         Expr::Member(member) => Expr::Member(crate::ast::MemberExpr {
             obj: Box::new(lower_next(&mut children)),
