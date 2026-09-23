@@ -21,9 +21,11 @@
 use std::fmt;
 
 use crate::ast::{
-    Decl, Expr, FnDecl, LetDecl, Lit, MatchArm, PatKind, Pattern, Program, SpecDecl, Stmt, Ty,
+    Decl, Expr, FnDecl, LetDecl, Lit, MatchArm, PatKind, Pattern, Program, SpecDecl, Stmt,
     TypeDecl,
 };
+
+pub use crate::types::{MonoType, TypeScheme};
 
 /// A source span as 0-based byte offsets into the program source.
 pub type Span = (usize, usize);
@@ -269,17 +271,6 @@ pub enum SpecOrigin {
     Inferred(Vec<Span>),
 }
 
-/// A callable type scheme. Quantified variables are `TypeVarId`s over a
-/// `MonoType` body (the internal inference representation from `types`);
-/// the legacy `ast::Ty`-bodied `TypeScheme` below is retained only until the
-/// inference pipeline switches the typed IR over.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeScheme {
-    pub quantified: Vec<String>,
-    pub constraints: Vec<crate::ast::Constraint>,
-    pub body: Ty,
-}
-
 /// One clause after type checking: its patterns plus the inferred type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedPatternClause {
@@ -288,7 +279,7 @@ pub struct TypedPatternClause {
     /// The curried clause type `P1 -> ... -> Pn -> R` (type dispatch).
     /// Pattern dispatch and type dispatch are separate stages, so both are
     /// retained.
-    pub clause_ty: Ty,
+    pub clause_ty: MonoType,
     pub body: TypedExpr,
     /// Statement index of the source clause, for diagnostics.
     pub source_index: usize,
@@ -318,7 +309,7 @@ pub struct TypedOverloadSet {
 /// record the overload resolution result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedExpr {
-    pub ty: Ty,
+    pub ty: MonoType,
     pub kind: TypedExprKind,
 }
 
