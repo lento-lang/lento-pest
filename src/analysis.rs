@@ -1103,19 +1103,39 @@ fn install_class_methods(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Progra
             binders.insert(parameter.clone(), MonoType::Var(id));
         }
         for spec in &class.specs {
-            let body = lower_ty(&spec.ty.ty, &binders);
+            let mut method_binders = binders.clone();
+            let mut method_quantified = quantified.clone();
+            for quantifier in &spec.ty.quantifiers {
+                for name in &quantifier.vars {
+                    if !method_binders.contains_key(name) {
+                        let id = ctx.supply.fresh_id();
+                        method_quantified.push(id);
+                        method_binders.insert(name.clone(), MonoType::Var(id));
+                    }
+                }
+            }
+            let mut constraints = vec![crate::types::SchemeConstraint {
+                name: class.name.clone(),
+                args: class
+                    .params
+                    .iter()
+                    .map(|parameter| method_binders[parameter].clone())
+                    .collect(),
+            }];
+            for quantifier in &spec.ty.quantifiers {
+                for constraint in &quantifier.constraints {
+                    constraints.push(crate::types::lower_constraint(
+                        constraint,
+                        &method_binders,
+                    ));
+                }
+            }
+            let body = lower_ty(&spec.ty.ty, &method_binders);
             env.insert(
                 spec.name.clone(),
                 TypeScheme {
-                    quantified: quantified.clone(),
-                    constraints: vec![crate::types::SchemeConstraint {
-                        name: class.name.clone(),
-                        args: class
-                            .params
-                            .iter()
-                            .map(|parameter| binders[parameter].clone())
-                            .collect(),
-                    }],
+                    quantified: method_quantified,
+                    constraints,
                     body,
                 },
             );
