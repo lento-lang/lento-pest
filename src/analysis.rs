@@ -155,7 +155,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     // environment, retaining their recursive type annotations.
     let mut typed_lets = Vec::new();
     let mut typed_exprs = Vec::new();
-    for (source_index, statement) in program.statements.iter().enumerate() {
+    for statement in &collected.statements {
         match statement {
             Stmt::Decl(Decl::Let(binding)) => {
                 let value = infer_typed_expr(&mut ctx, &binding.value, &mut env)
@@ -173,7 +173,6 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                     annotation: binding.annotation.clone(),
                     value,
                 });
-                let _ = source_index;
             }
             Stmt::Expr(expression) => {
                 validate_nested_matches(expression, "top-level")?;
@@ -629,17 +628,6 @@ fn build_typed_program(
         lets,
         exprs,
     })
-}
-
-fn callable_result_type(ty: &MonoType, arity: usize) -> MonoType {
-    let mut current = ty.clone();
-    for _ in 0..arity {
-        current = match current {
-            MonoType::Function(_, result) => *result,
-            other => other,
-        };
-    }
-    current
 }
 
 
