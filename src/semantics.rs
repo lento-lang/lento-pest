@@ -396,29 +396,33 @@ pub fn lower_typed_program(program: &TypedProgram) -> Program {
 }
 
 fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
-    // Until multiple specializations share a runtime representation, each
-    // specialization lowers independently and a single-specialization set is
-    // just that specialization's dispatcher.
-    // Runtime dispatch is represented by one ordered matcher. Type
-    // specialization remains visible through the clause annotations retained
-    // in each pattern; dropping all but the first specialization would make
-    // valid WIP overloads unreachable.
-    let merged = match set.specializations.as_slice() {
-        [spec] => spec.clone(),
-        [] => unreachable!("an overload set must contain a specialization"),
-        specializations => {
-            let first = &specializations[0];
-            let clauses = specializations
-                .iter()
-                .flat_map(|specialization| specialization.clauses.clone())
-                .collect();
-            TypedSpecialization {
-                id: first.id,
-                scheme: first.scheme.clone(),
-                origin: first.origin.clone(),
-                clauses,
-            }
-        }
+    let mut specializations = set.specializations.iter().collect::<Vec<_>>();
+    specializations.sort_by(|left, right| {
+        specialization_specificity(right)
+            .cmp(&specialization_specificity(left))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let first = specializations
+        .first()
+        .expect("an overload set must contain a specialization");
+    let mut clauses = specializations
+        .iter()
+        .flat_map(|specialization| {
+            specialization.clauses.iter().map(move |clause| {
+                (specialization_specificity(specialization), clause)
+            })
+        })
+        .collect::<Vec<_>>();
+    clauses.sort_by(|(left_specificity, left), (right_specificity, right)| {
+        right_specificity
+            .cmp(left_specificity)
+            .then_with(|| left.source_index.cmp(&right.source_index))
+    });
+    let merged = TypedSpecialization {
+        id: first.id,
+        scheme: first.scheme.clone(),
+        origin: first.origin.clone(),
+        clauses: clauses.into_iter().map(|(_, clause)| clause.clone()).collect(),
     };
     let value = lower_specialization(&set.name, &merged);
     LetDecl {
@@ -429,6 +433,49 @@ fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
         },
         annotation: None,
         value,
+    }
+}
+
+/// Specific type domains precede generic catch-all patterns in the shared
+/// runtime matcher. Source order remains the tie-breaker for equally specific
+/// clauses.
+fn specialization_specificity(specialization: &TypedSpecialization) -> (usize, usize) {
+    specialization
+        .clauses
+        .iter()
+        .flat_map(|clause| clause.patterns.iter())
+        .filter_map(|pattern| pattern.annotation.as_ref())
+        .map(|ty| {
+            let lowered = crate::types::lower_ty(ty, &std::collections::BTreeMap::new());
+            let nodes = type_nodes(&lowered);
+            (usize::from(!contains_type_variable(&lowered)), nodes)
+        })
+        .fold((0, 0), |(concrete, nodes), (is_concrete, size)| {
+            (concrete + is_concrete, nodes + size)
+        })
+}
+
+fn contains_type_variable(ty: &MonoType) -> bool {
+    match ty {
+        MonoType::Var(_) => true,
+        MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
+            args.iter().any(contains_type_variable)
+        }
+        MonoType::Function(from, to) => contains_type_variable(from) || contains_type_variable(to),
+        MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
+            contains_type_variable(inner)
+        }
+    }
+}
+
+fn type_nodes(ty: &MonoType) -> usize {
+    match ty {
+        MonoType::Var(_) => 1,
+        MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
+            1 + args.iter().map(type_nodes).sum::<usize>()
+        }
+        MonoType::Function(from, to) => 1 + type_nodes(from) + type_nodes(to),
+        MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => 1 + type_nodes(inner),
     }
 }
 
