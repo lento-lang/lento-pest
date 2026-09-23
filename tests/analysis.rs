@@ -90,6 +90,15 @@ fn canonical_pipeline_rejects_extra_class_methods() {
 }
 
 #[test]
+fn canonical_pipeline_rejects_ambiguous_global_class_method_names() {
+    let error = analyze(
+        "class First a { spec compare : a -> a -> int }\n         class Second a { spec compare : a -> a -> int }\n",
+    )
+    .expect_err("method names currently require a unique global scheme");
+    assert!(error.contains("global method overload resolution"), "{error}");
+}
+
+#[test]
 fn canonical_pipeline_rejects_overlapping_implementations() {
     let error = analyze(
         "class Comparable a { spec compare : a -> a -> int }\n         impl Comparable int { fn compare x y = 0 }\n         impl Comparable int { fn compare x y = 1 }\n",
