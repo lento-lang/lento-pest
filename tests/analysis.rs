@@ -11,6 +11,25 @@ fn analysis(source: &str) -> Result<lento::analysis::Analysis, String> {
     analyze_program(&program)
 }
 
+#[cfg(feature = "canonical-smt")]
+#[test]
+fn canonical_smt_proves_refinement_postconditions() {
+    analyze(
+        "spec increment:\n             (x: int) -> (r: int)\n             where\n                 r > x\n         fn increment x = x + 1\n",
+    )
+    .expect("SMT should prove the postcondition");
+}
+
+#[cfg(feature = "canonical-smt")]
+#[test]
+fn canonical_smt_rejects_false_refinement_postconditions() {
+    let error = analyze(
+        "spec unchanged:\n             (x: int) -> (r: int)\n             where\n                 r > x\n         fn unchanged x = x\n",
+    )
+    .expect_err("SMT should find a counterexample");
+    assert!(error.contains("postcondition"), "{error}");
+}
+
 #[test]
 fn canonical_pipeline_accepts_polymorphic_identity() {
     analyze("fn id x = x\nassert (id 1 == 1)\n").expect("identity should analyze");
