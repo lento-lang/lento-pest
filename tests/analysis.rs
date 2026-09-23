@@ -263,6 +263,37 @@ fn canonical_pipeline_resolves_fully_typed_overload_calls() {
 }
 
 #[test]
+fn canonical_overload_schemes_preserve_and_select_class_instances() {
+    let result = analysis(
+        "class Eq a { spec eq : a -> a -> bool }\n         impl Eq int { fn eq x y = x == y }\n         fn same x y = eq x y\n         let result = same 1 1\n",
+    )
+    .expect("the concrete call should select the Eq int instance");
+    let same = result
+        .typed
+        .overloads
+        .iter()
+        .find(|set| set.name == "same")
+        .expect("same overload should be in typed program");
+    assert_eq!(same.specializations[0].scheme.constraints.len(), 1);
+    let lento::semantics::TypedExprKind::Call {
+        specialization, ..
+    } = &result.typed.lets[0].value.kind
+    else {
+        panic!("same call should remain a typed call");
+    };
+    assert_eq!(*specialization, Some(0));
+}
+
+#[test]
+fn canonical_overload_calls_reject_missing_class_instances() {
+    let error = analyze(
+        "class Eq a { spec eq : a -> a -> bool }\n         impl Eq int { fn eq x y = x == y }\n         fn same x y = eq x y\n         let result = same \"a\" \"a\"\n",
+    )
+    .expect_err("Eq str has no instance");
+    assert!(error.contains("no instance"), "{error}");
+}
+
+#[test]
 fn canonical_pipeline_resolves_class_method_instances() {
     analyze(
         "class Eq a { spec eq : a -> a -> bool }\n         impl Eq int { fn eq x y = x == y }\n         assert (eq 1 1)\n",
