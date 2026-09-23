@@ -54,6 +54,13 @@ pub struct InstanceMetadata {
     pub methods: Vec<String>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RefinementMetadata {
+    pub function: String,
+    pub arity: usize,
+    pub has_precondition: bool,
+}
+
 
 /// The result of canonical analysis. Later lowering phases consume the
 /// overload sets; declarations not yet represented in the semantic IR remain
@@ -62,6 +69,7 @@ pub struct InstanceMetadata {
 pub struct Analysis {
     pub overloads: Vec<OverloadSet>,
     pub declarations: DeclarationMetadata,
+    pub refinements: Vec<RefinementMetadata>,
 }
 
 /// Analyze a program using the unified master/WIP pipeline.
@@ -82,6 +90,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let declarations = resolve_declarations(program, &mut ctx);
     install_type_declarations(&mut env, &mut ctx, program);
     validate_spec_refinements(program, &mut ctx, &env)?;
+    let refinements = collect_refinement_metadata(&collected.function_groups);
     validate_refinement_calls(program, &collected.function_groups)?;
 
     // Seed every function before inferring any body. This preserves WIP's
@@ -166,6 +175,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     Ok(Analysis {
         overloads,
         declarations,
+        refinements,
     })
 }
 
@@ -253,6 +263,37 @@ fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
         }
     }
 }
+
+
+fn collect_refinement_metadata(groups: &[FunctionGroup]) -> Vec<RefinementMetadata> {
+    let mut metadata = Vec::new();
+    for group in groups {
+        for parsed in &group.explicit_specs {
+            let Some(clauses) = &parsed.decl.ty.where_ else {
+                continue;
+            };
+            let mut binders = Vec::new();
+            collect_signature_binders(&parsed.decl.ty.ty, &mut binders);
+            let result_name = binders.last().and_then(|(name, _)| name.clone());
+            let arity = binders.len().saturating_sub(1);
+            let has_precondition = clauses.iter().any(|clause| {
+                let mut names = BTreeSet::new();
+                collect_expr_names(clause, &mut names);
+                result_name
+                    .as_ref()
+                    .map(|result| !names.contains(result))
+                    .unwrap_or(true)
+            });
+            metadata.push(RefinementMetadata {
+                function: group.name.clone(),
+                arity,
+                has_precondition,
+            });
+        }
+    }
+    metadata
+}
+
 
 fn validate_refinement_calls(
     program: &Program,
