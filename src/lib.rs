@@ -16,7 +16,7 @@ pub mod resolve;
 pub mod semantics;
 pub mod specialize;
 pub mod specs;
-#[cfg(feature = "legacy-typecheck")]
+#[cfg(any(feature = "legacy-typecheck", feature = "canonical-smt"))]
 pub mod smt;
 #[cfg(feature = "legacy-typecheck")]
 pub mod ty;
