@@ -160,3 +160,21 @@ fn canonical_analysis_populates_typed_bodies_and_schemes() {
     ));
     assert!(!set.specializations[0].scheme.body.free_vars().is_empty());
 }
+
+
+#[test]
+fn canonical_pipeline_resolves_class_method_instances() {
+    analyze(
+        "class Eq a { spec eq : a -> a -> bool }\n         impl Eq int { fn eq x y = x == y }\n         assert (eq 1 1)\n",
+    )
+    .expect("concrete class method should resolve through its instance");
+}
+
+#[test]
+fn canonical_pipeline_rejects_missing_class_instance() {
+    let error = analyze(
+        "class Eq a { spec eq : a -> a -> bool }\n         assert (eq 1 1)\n",
+    )
+    .expect_err("missing class instance should fail");
+    assert!(error.contains("no instance"), "{error}");
+}
