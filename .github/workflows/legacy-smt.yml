@@ -2,9 +2,6 @@ name: Legacy SMT backend
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - reconcile/wip-with-master
 
 permissions:
   contents: read
