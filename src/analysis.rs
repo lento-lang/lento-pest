@@ -639,14 +639,22 @@ fn resolve_typed_expr_calls(
             for argument in args.iter_mut() {
                 resolve_typed_expr_calls(argument, overloads, declarations)?;
             }
-            let TypedExprKind::Var(name) = &callee.kind else {
+            let (base_callee, applied_arguments) = flatten_typed_call(callee, args);
+            let TypedExprKind::Var(name) = &base_callee.kind else {
                 return Ok(());
             };
             let Some(set) = overloads.iter().find(|set| set.name == *name) else {
                 return Ok(());
             };
+            let exact_arity = set
+                .specializations
+                .iter()
+                .any(|candidate| specialization_arity(candidate) == applied_arguments.len());
+            if !exact_arity {
+                return Ok(());
+            }
             let mut applied_type = expression.ty.clone();
-            for argument in args.iter().rev() {
+            for argument in applied_arguments.iter().rev() {
                 applied_type = MonoType::Function(
                     Box::new(argument.ty.clone()),
                     Box::new(applied_type),
@@ -659,7 +667,7 @@ fn resolve_typed_expr_calls(
             let mut matches = Vec::new();
             let mut rejections = Vec::new();
             for candidate in &set.specializations {
-                if callable_arity(&candidate.scheme.body) != args.len() {
+                if specialization_arity(candidate) != applied_arguments.len() {
                     continue;
                 }
                 let mut supply = TypeVarSupply::new();
@@ -742,6 +750,33 @@ fn resolve_typed_expr_calls(
         TypedExprKind::Lit(_) | TypedExprKind::Var(_) | TypedExprKind::Unresolved(_) => {}
     }
     Ok(())
+}
+
+
+fn flatten_typed_call<'a>(
+    callee: &'a TypedExpr,
+    arguments: &'a [TypedExpr],
+) -> (&'a TypedExpr, Vec<&'a TypedExpr>) {
+    if let TypedExprKind::Call {
+        callee: inner_callee,
+        args: inner_arguments,
+        ..
+    } = &callee.kind
+    {
+        let (base, mut flattened) = flatten_typed_call(inner_callee, inner_arguments);
+        flattened.extend(arguments.iter());
+        (base, flattened)
+    } else {
+        (callee, arguments.iter().collect())
+    }
+}
+
+fn specialization_arity(specialization: &crate::specialize::Specialization) -> usize {
+    specialization
+        .clauses
+        .first()
+        .map(|clause| clause.patterns.len())
+        .unwrap_or_else(|| callable_arity(&specialization.scheme.body))
 }
 
 fn callable_arity(ty: &MonoType) -> usize {
