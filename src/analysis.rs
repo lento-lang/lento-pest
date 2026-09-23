@@ -688,8 +688,15 @@ fn resolve_typed_expr_calls(
             });
             match matches.as_slice() {
                 [] => {
+                    let candidates = set
+                        .specializations
+                        .iter()
+                        .map(|candidate| {
+                            (&candidate.scheme.body, &candidate.scheme.constraints)
+                        })
+                        .collect::<Vec<_>>();
                     return Err(format!(
-                        "no specialization of '{name}' accepts the fully typed call"
+                        "no specialization of '{name}' accepts call type {applied_type:?}; candidates: {candidates:?}"
                     ));
                 }
                 [(_, id)] => *specialization = Some(*id),
