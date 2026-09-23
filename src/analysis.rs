@@ -392,7 +392,16 @@ fn validate_refinement_calls_in_expr(
                     walk(&arm.body, obligations, false)?;
                 }
             }
-            Expr::Lit(_) | Expr::Var(_) => {}
+            Expr::Var(variable) => {
+                if !nested_callee && obligations.contains_key(&variable.name) {
+                    let arity = obligations[&variable.name];
+                    return Err(format!(
+                        "partial application of '{}' escapes its where-preconditions; call it with all {} argument(s) at once",
+                        variable.name, arity
+                    ));
+                }
+            }
+            Expr::Lit(_) => {}
         }
         Ok(())
     }
