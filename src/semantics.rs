@@ -395,6 +395,54 @@ pub fn lower_typed_program(program: &TypedProgram) -> Program {
     Program { statements, spans }
 }
 
+
+/// Lower analyzed functions through the typed IR while preserving all
+/// non-function declarations and their source order for runtime setup.
+pub fn lower_analyzed_program(source: &Program, typed: &TypedProgram) -> Program {
+    let function_ir = TypedProgram {
+        overloads: typed.overloads.clone(),
+        lets: Vec::new(),
+        exprs: Vec::new(),
+    };
+    let lowered_functions = lower_typed_program(&function_ir);
+    let mut functions = std::collections::BTreeMap::new();
+    for statement in lowered_functions.statements {
+        if let Stmt::Decl(Decl::Let(binding)) = statement {
+            if let PatKind::Var(name) = &binding.pattern.kind {
+                functions.insert(name.clone(), binding);
+            }
+        }
+    }
+
+    let mut statements = Vec::new();
+    let mut spans = Vec::new();
+    let mut emitted = std::collections::BTreeSet::new();
+    for (index, statement) in source.statements.iter().enumerate() {
+        match statement {
+            Stmt::Decl(Decl::Fn(function)) => {
+                if emitted.insert(function.name.clone()) {
+                    if let Some(binding) = functions.remove(&function.name) {
+                        statements.push(Stmt::Decl(Decl::Let(binding)));
+                        spans.push(source.spans.get(index).copied().unwrap_or(crate::ast::Span {
+                            line: 0,
+                            col: 0,
+                        }));
+                    }
+                }
+            }
+            Stmt::Decl(Decl::Spec(_)) => {}
+            other => {
+                statements.push(other.clone());
+                spans.push(source.spans.get(index).copied().unwrap_or(crate::ast::Span {
+                    line: 0,
+                    col: 0,
+                }));
+            }
+        }
+    }
+    Program { statements, spans }
+}
+
 fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
     let mut specializations = set.specializations.iter().collect::<Vec<_>>();
     specializations.sort_by(|left, right| {
