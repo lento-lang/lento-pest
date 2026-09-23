@@ -26,6 +26,7 @@ use crate::types::{generalize, lower_ty, MonoType, TypeEnv, TypeScheme};
 pub struct TypeMetadata {
     pub name: String,
     pub parameters: Vec<String>,
+    pub source: Ty,
     pub parameter_ids: Vec<u32>,
     pub constructors: Vec<ConstructorMetadata>,
     pub fields: Vec<(String, MonoType)>,
@@ -1015,6 +1016,7 @@ fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMet
         let mut metadata = TypeMetadata {
             name: declaration.name.clone(),
             parameters: declaration.params.clone(),
+            source: declaration.ty.clone(),
             parameter_ids: declaration
                 .params
                 .iter()
