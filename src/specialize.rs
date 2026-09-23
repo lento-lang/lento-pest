@@ -259,7 +259,7 @@ fn same_specialization(
 ) -> bool {
     let _ = supply;
     // The semantic boundary: declared type restrictions must agree.
-    if !domains_compatible(a_domain, b_domain) {
+    if !domains_compatible(a_domain, b_domain) || a.constraints != b.constraints {
         return false;
     }
     if alpha_equiv(a, b) {
@@ -298,7 +298,11 @@ pub fn partition(
             .get(i)
             .map(declared_domain)
             .unwrap_or_default();
-        let scheme = canonicalize(&crate::types::generalize(env, clause_ty, vec![]));
+        let scheme = canonicalize(&crate::types::generalize(
+            env,
+            clause_ty,
+            inferred.clause_constraints[i].clone(),
+        ));
 
         let mut placed = false;
         for spec in specializations.iter_mut() {
