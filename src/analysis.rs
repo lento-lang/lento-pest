@@ -701,7 +701,9 @@ fn resolve_typed_expr_calls(
                 [(_, id), ..] => *specialization = Some(*id),
             }
         }
-        TypedExprKind::Lambda { body, .. } => resolve_typed_expr_calls(body, overloads)?,
+        TypedExprKind::Lambda { body, .. } => {
+            resolve_typed_expr_calls(body, overloads, declarations)?
+        },
         TypedExprKind::Match { scrutinee, arms } => {
             resolve_typed_expr_calls(scrutinee, overloads, declarations)?;
             for arm in arms {
