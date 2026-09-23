@@ -341,21 +341,38 @@ pub fn check_pattern(
 // Expression inference
 // --------------------------------------------------------------------------
 
-/// Infer the type of an expression in `env`.
-pub fn infer_expr(ctx: &mut InferCtx, expr: &Expr, env: &mut TypeEnv) -> Result<MonoType, TypeError> {
+/// Infer an expression and retain annotations for every nested expression.
+pub fn infer_typed_expr(
+    ctx: &mut InferCtx,
+    expr: &Expr,
+    env: &mut TypeEnv,
+) -> Result<crate::semantics::TypedExpr, TypeError> {
+    use crate::semantics::{TypedExpr, TypedExprKind, TypedMatchArm};
+    use crate::ast::{RecordValueEntry, Stmt};
+
+    let composite = |ty, children| TypedExpr {
+        ty,
+        kind: TypedExprKind::Composite {
+            source: Box::new(expr.clone()),
+            children,
+        },
+    };
+
     match expr {
-        Expr::Lit(l) => Ok(match l.value {
-            Lit::Bool(_) => ctor::bool(),
-            Lit::Int(_) => ctor::int(),
-            Lit::Float(_) => ctor::float(),
-            Lit::Str(_) => ctor::str(),
+        Expr::Lit(l) => Ok(TypedExpr {
+            ty: match l.value {
+                Lit::Bool(_) => ctor::bool(),
+                Lit::Int(_) => ctor::int(),
+                Lit::Float(_) => ctor::float(),
+                Lit::Str(_) => ctor::str(),
+            },
+            kind: TypedExprKind::Lit(l.clone()),
         }),
         Expr::Var(v) => match env.get(&v.name) {
-            Some(scheme) => {
-                let (ty, constraints) = instantiate(&mut ctx.supply, scheme);
-                ctx.constraints.extend(constraints);
-                Ok(ty)
-            }
+            Some(scheme) => Ok(TypedExpr {
+                ty: instantiate(&mut ctx.supply, scheme).0,
+                kind: TypedExprKind::Var(v.name.clone()),
+            }),
             None => Err(unbound(&v.name)),
         },
         Expr::Lambda(l) => {
@@ -366,146 +383,212 @@ pub fn infer_expr(ctx: &mut InferCtx, expr: &Expr, env: &mut TypeEnv) -> Result<
                 check_pattern(ctx, p, &pt, &mut local)?;
                 param_tys.push(pt);
             }
-            let body_ty = infer_expr(ctx, &l.body, &mut local)?;
-            let mut ty = body_ty;
+            let body = infer_typed_expr(ctx, &l.body, &mut local)?;
+            let mut ty = body.ty.clone();
             for pt in param_tys.into_iter().rev() {
                 ty = MonoType::Function(Box::new(pt), Box::new(ty));
             }
-            Ok(ty)
+            Ok(TypedExpr {
+                ty,
+                kind: TypedExprKind::Lambda {
+                    params: l.params.clone(),
+                    body: Box::new(body),
+                },
+            })
         }
         Expr::Call(c) => {
-            let callee_ty = infer_expr(ctx, &c.callee, env)?;
-            // Fold the argument list right-to-left into a curried application.
-            let mut result = callee_ty;
+            let callee = infer_typed_expr(ctx, &c.callee, env)?;
+            let mut result = callee.ty.clone();
+            let mut args = Vec::with_capacity(c.args.len());
             for arg in &c.args {
-                let arg_ty = infer_expr(ctx, arg, env)?;
+                let arg = infer_typed_expr(ctx, arg, env)?;
                 let ret = ctx.fresh();
                 ctx.unify(
                     &result,
-                    &MonoType::Function(Box::new(arg_ty), Box::new(ret.clone())),
+                    &MonoType::Function(Box::new(arg.ty.clone()), Box::new(ret.clone())),
                 )?;
                 result = ret;
+                args.push(arg);
             }
-            Ok(result)
+            Ok(TypedExpr {
+                ty: result,
+                kind: TypedExprKind::Call {
+                    callee: Box::new(callee),
+                    args,
+                    specialization: None,
+                },
+            })
         }
         Expr::Unary(u) => {
-            let operand = infer_expr(ctx, &u.operand, env)?;
-            match u.op {
+            let operand = infer_typed_expr(ctx, &u.operand, env)?;
+            let ty = match u.op {
                 UnaryOp::Not => {
-                    ctx.unify(&operand, &ctor::bool())?;
-                    Ok(ctor::bool())
+                    ctx.unify(&operand.ty, &ctor::bool())?;
+                    ctor::bool()
                 }
-                UnaryOp::Neg => {
-                    // Numeric negation; keep the operand type.
-                    Ok(operand)
-                }
-            }
+                UnaryOp::Neg => operand.ty.clone(),
+            };
+            Ok(composite(ty, vec![operand]))
         }
-        Expr::Binary(b) => infer_binary(ctx, b, env),
+        Expr::Binary(b) => {
+            let lhs = infer_typed_expr(ctx, &b.lhs, env)?;
+            let rhs = infer_typed_expr(ctx, &b.rhs, env)?;
+            let ty = match b.op {
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
+                    ctx.unify(&lhs.ty, &rhs.ty)?;
+                    lhs.ty.clone()
+                }
+                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
+                    ctx.unify(&lhs.ty, &rhs.ty)?;
+                    ctor::bool()
+                }
+                BinaryOp::And | BinaryOp::Or => {
+                    ctx.unify(&lhs.ty, &ctor::bool())?;
+                    ctx.unify(&rhs.ty, &ctor::bool())?;
+                    ctor::bool()
+                }
+            };
+            Ok(composite(ty, vec![lhs, rhs]))
+        }
         Expr::Tuple(t) => {
-            let mut items = Vec::new();
-            for e in &t.items {
-                items.push(infer_expr(ctx, e, env)?);
+            let mut items = Vec::with_capacity(t.items.len());
+            for item in &t.items {
+                items.push(infer_typed_expr(ctx, item, env)?);
             }
-            Ok(MonoType::Tuple(items))
+            Ok(composite(
+                MonoType::Tuple(items.iter().map(|item| item.ty.clone()).collect()),
+                items,
+            ))
         }
-        Expr::List(l) => infer_list(ctx, l, env),
+        Expr::List(l) => {
+            let elem = ctx.fresh();
+            let mut current = l;
+            let mut children = Vec::new();
+            loop {
+                match current {
+                    crate::ast::ListExpr::Empty => break,
+                    crate::ast::ListExpr::Cells(cell) => {
+                        let head = infer_typed_expr(ctx, &cell.head, env)?;
+                        ctx.unify(&elem, &head.ty)?;
+                        children.push(head);
+                        current = &cell.tail;
+                    }
+                }
+            }
+            Ok(composite(MonoType::List(Box::new(elem)), children))
+        }
         Expr::Block(b) => {
-            // A block evaluates its statements; the value is the last
-            // expression (or unit). Local declarations extend the env.
             let mut local = env.clone();
             let mut last = ctor::unit();
+            let mut children = Vec::new();
             for stmt in &b.body {
                 match stmt {
-                    crate::ast::Stmt::Expr(e) => last = infer_expr(ctx, e, &mut local)?,
-                    crate::ast::Stmt::Decl(crate::ast::Decl::Let(l)) => {
-                        let vt = infer_expr(ctx, &l.value, &mut local)?;
-                        check_pattern(ctx, &l.pattern, &vt, &mut local)?;
+                    Stmt::Expr(e) => {
+                        let value = infer_typed_expr(ctx, e, &mut local)?;
+                        last = value.ty.clone();
+                        children.push(value);
                     }
-                    _ => {
-                        // fn/spec/type inside a block: handled by the
-                        // collection phase at top level; ignored here.
+                    Stmt::Decl(crate::ast::Decl::Let(binding)) => {
+                        let value = infer_typed_expr(ctx, &binding.value, &mut local)?;
+                        check_pattern(ctx, &binding.pattern, &value.ty, &mut local)?;
+                        children.push(value);
                     }
+                    _ => {}
                 }
             }
-            Ok(last)
+            Ok(composite(last, children))
         }
         Expr::Match(m) => {
-            let scrut = infer_expr(ctx, &m.scrutinee, env)?;
+            let scrutinee = infer_typed_expr(ctx, &m.scrutinee, env)?;
             let result = ctx.fresh();
+            let mut arms = Vec::with_capacity(m.arms.len());
             for arm in &m.arms {
                 let mut local = env.clone();
-                check_pattern(ctx, &arm.pattern, &scrut, &mut local)?;
-                if let Some(guard) = &arm.guard {
-                    let g = infer_expr(ctx, guard, &mut local)?;
-                    ctx.unify(&g, &ctor::bool())?;
-                }
-                let body = infer_expr(ctx, &arm.body, &mut local)?;
-                ctx.unify(&result, &body)?;
+                check_pattern(ctx, &arm.pattern, &scrutinee.ty, &mut local)?;
+                let guard = if let Some(guard) = &arm.guard {
+                    let guard = infer_typed_expr(ctx, guard, &mut local)?;
+                    ctx.unify(&guard.ty, &ctor::bool())?;
+                    Some(guard)
+                } else {
+                    None
+                };
+                let body = infer_typed_expr(ctx, &arm.body, &mut local)?;
+                ctx.unify(&result, &body.ty)?;
+                arms.push(TypedMatchArm {
+                    pattern: arm.pattern.clone(),
+                    guard,
+                    body,
+                });
             }
-            Ok(result)
+            Ok(TypedExpr {
+                ty: result,
+                kind: TypedExprKind::Match {
+                    scrutinee: Box::new(scrutinee),
+                    arms,
+                },
+            })
         }
         Expr::Record(r) => {
             let mut fields = Vec::new();
+            let mut children = Vec::new();
             for entry in &r.entries {
                 match entry {
-                    crate::ast::RecordValueEntry::Field(name, e) => {
-                        let ft = infer_expr(ctx, e, env)?;
-                        fields.push(MonoType::Constructor(name.clone(), vec![ft]));
+                    RecordValueEntry::Field(name, expression) => {
+                        let field = infer_typed_expr(ctx, expression, env)?;
+                        fields.push(MonoType::Constructor(name.clone(), vec![field.ty.clone()]));
+                        children.push(field);
                     }
-                    crate::ast::RecordValueEntry::Spread(_) => {
-                        // Spread merges fields; approximated until record rows.
+                    RecordValueEntry::Spread(expression) => {
+                        children.push(infer_typed_expr(ctx, expression, env)?);
                     }
                 }
             }
-            Ok(MonoType::Constructor("record".to_string(), fields))
+            Ok(composite(MonoType::Constructor("record".into(), fields), children))
         }
         Expr::Member(m) => {
-            let obj = infer_expr(ctx, &m.obj, env)?;
-            match ctx.resolve(&obj) {
+            let object = infer_typed_expr(ctx, &m.obj, env)?;
+            let ty = match ctx.resolve(&object.ty) {
                 MonoType::Constructor(name, fields) if name == "record" => {
-                    for f in &fields {
-                        if let MonoType::Constructor(fname, fargs) = f {
-                            if *fname == m.field && fargs.len() == 1 {
-                                return Ok(fargs[0].clone());
-                            }
-                        }
-                    }
-                    Err(TypeError {
+                    let found = fields.iter().find_map(|field| match field {
+                        MonoType::Constructor(field_name, args) if *field_name == m.field && args.len() == 1 => Some(args[0].clone()),
+                        _ => None,
+                    });
+                    found.ok_or_else(|| TypeError {
                         kind: TypeErrorKind::BadMember {
-                            ty: obj,
+                            ty: object.ty.clone(),
                             field: m.field.clone(),
                         },
-                    })
+                    })?
                 }
-                other => Err(TypeError {
-                    kind: TypeErrorKind::BadMember {
-                        ty: other,
-                        field: m.field.clone(),
-                    },
+                other => return Err(TypeError {
+                    kind: TypeErrorKind::BadMember { ty: other, field: m.field.clone() },
                 }),
-            }
+            };
+            Ok(composite(ty, vec![object]))
         }
         Expr::Index(i) => {
-            let obj = infer_expr(ctx, &i.obj, env)?;
-            let idx = infer_expr(ctx, &i.index, env)?;
-            ctx.unify(&idx, &ctor::int())?;
+            let object = infer_typed_expr(ctx, &i.obj, env)?;
+            let index = infer_typed_expr(ctx, &i.index, env)?;
+            ctx.unify(&index.ty, &ctor::int())?;
             let elem = ctx.fresh();
-            ctx.unify(&obj, &MonoType::List(Box::new(elem.clone())))?;
-            Ok(elem)
+            ctx.unify(&object.ty, &MonoType::List(Box::new(elem.clone())))?;
+            Ok(composite(elem, vec![object, index]))
         }
         Expr::Ref(r) => {
-            let inner = infer_expr(ctx, &r.inner, env)?;
-            Ok(MonoType::Ref(Box::new(inner)))
+            let inner = infer_typed_expr(ctx, &r.inner, env)?;
+            Ok(composite(MonoType::Ref(Box::new(inner.ty.clone())), vec![inner]))
         }
         Expr::Assign(a) => {
-            // `place := value` evaluates to unit; place must be a mut/ref.
-            let value = infer_expr(ctx, &a.value, env)?;
-            let place = infer_expr(ctx, &a.place, env)?;
-            let _ = (place, value);
-            Ok(ctor::unit())
+            let value = infer_typed_expr(ctx, &a.value, env)?;
+            let place = infer_typed_expr(ctx, &a.place, env)?;
+            Ok(composite(ctor::unit(), vec![place, value]))
         }
     }
+}
+
+/// Infer only the type when a caller does not need the typed expression tree.
+pub fn infer_expr(ctx: &mut InferCtx, expr: &Expr, env: &mut TypeEnv) -> Result<MonoType, TypeError> {
+    infer_typed_expr(ctx, expr, env).map(|typed| typed.ty)
 }
 
 fn infer_binary(
