@@ -116,13 +116,21 @@ pub fn eval_program_with_declarations(
 ) -> Result<Value, String> {
     let mut env = initial_env();
     install_resolved_declarations(declarations, &mut env);
-    let (statements, spans): (Vec<_>, Vec<_>) = program
-        .statements
-        .iter()
-        .cloned()
-        .zip(program.spans.iter().cloned())
-        .filter(|(statement, _)| !matches!(statement, Stmt::Decl(Decl::Type(_))))
-        .unzip();
+    let mut statements = Vec::new();
+    let mut spans = Vec::new();
+    for (index, statement) in program.statements.iter().enumerate() {
+        if matches!(statement, Stmt::Decl(Decl::Type(_))) {
+            continue;
+        }
+        statements.push(statement.clone());
+        spans.push(
+            program
+                .spans
+                .get(index)
+                .copied()
+                .unwrap_or(crate::ast::Span { line: 0, col: 0 }),
+        );
+    }
     let runtime_program = Program { statements, spans };
     eval_program_in_env(&runtime_program, &mut env)
 }
