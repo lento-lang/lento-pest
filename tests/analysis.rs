@@ -31,6 +31,19 @@ fn canonical_pipeline_installs_sum_constructors() {
 }
 
 #[test]
+fn runtime_uses_resolved_sum_metadata() {
+    let program = parse_program(
+        "type Option a = Some a | None\n         Some 5\n",
+    )
+    .expect("program should parse");
+    let analysis = analyze_program(&program).expect("sum type should analyze");
+    let lowered = lento::ast::desugar_program(&program);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)
+        .expect("metadata-installed constructor should evaluate");
+    assert_eq!(value.to_string(), "Some(5)");
+}
+
+#[test]
 fn canonical_pipeline_rejects_namespace_collisions() {
     let error = analyze("let f = 1\nfn f x = x\n").expect_err("collision should fail");
     assert!(error.contains("declaration collision"), "{error}");
