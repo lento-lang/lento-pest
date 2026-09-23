@@ -10,7 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::ast::{Decl, Expr, PatKind, Program, Stmt, SumAlt, Ty};
 use crate::infer::{base_env, check_pattern, infer_expr, InferCtx};
 use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
-use crate::semantics::{collect_function_groups, FunctionGroup};
+use crate::semantics::{
+    collect_function_groups, FunctionGroup, SpecOrigin, TypedExpr, TypedExprKind,
+    TypedOverloadSet, TypedPatternClause, TypedProgram, TypedSpecialization,
+};
 use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
 use crate::types::{generalize, lower_ty, MonoType, TypeEnv, TypeScheme};
@@ -70,6 +73,7 @@ pub struct Analysis {
     pub overloads: Vec<OverloadSet>,
     pub declarations: DeclarationMetadata,
     pub refinements: Vec<RefinementMetadata>,
+    pub typed: TypedProgram,
 }
 
 /// Analyze a program using the unified master/WIP pipeline.
@@ -144,6 +148,8 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         overloads.push(set);
     }
 
+    let typed = build_typed_program(&collected.function_groups, &overloads)?;
+
     // Check ordinary top-level expressions and lets against the same
     // environment. Type/class/instance declarations are intentionally kept in
     // the AST for their dedicated semantic lowering; they are not ignored by
@@ -178,6 +184,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         overloads,
         declarations,
         refinements,
+        typed,
     })
 }
 
@@ -543,6 +550,74 @@ fn curry_function_clause(clause: &crate::ast::FnDecl) -> Expr {
         });
     }
     body
+}
+
+
+
+fn build_typed_program(
+    groups: &[FunctionGroup],
+    overloads: &[OverloadSet],
+) -> Result<TypedProgram, String> {
+    let mut typed_sets = Vec::new();
+    for set in overloads {
+        let group = groups
+            .iter()
+            .find(|group| group.name == set.name)
+            .ok_or_else(|| format!("missing source group for '{}'", set.name))?;
+        let mut typed_specializations = Vec::new();
+        for specialization in &set.specializations {
+            let mut typed_clauses = Vec::new();
+            for clause in &specialization.clauses {
+                let source_position = group
+                    .source_indices
+                    .iter()
+                    .position(|index| *index == clause.source_index)
+                    .ok_or_else(|| {
+                        format!(
+                            "missing source clause {} for '{}'",
+                            clause.source_index, group.name
+                        )
+                    })?;
+                let source = &group.raw_clauses[source_position];
+                let body_ty = callable_result_type(&clause.ty, clause.patterns.len());
+                typed_clauses.push(TypedPatternClause {
+                    patterns: clause.patterns.clone(),
+                    clause_ty: clause.ty.clone(),
+                    body: TypedExpr {
+                        ty: body_ty,
+                        kind: TypedExprKind::Unresolved(Box::new(source.body.clone())),
+                    },
+                    source_index: clause.source_index,
+                });
+            }
+            typed_specializations.push(TypedSpecialization {
+                id: specialization.id,
+                scheme: specialization.scheme.clone(),
+                origin: SpecOrigin::Inferred(vec![group.source_span]),
+                clauses: typed_clauses,
+            });
+        }
+        typed_sets.push(TypedOverloadSet {
+            name: set.name.clone(),
+            specializations: typed_specializations,
+        });
+    }
+    Ok(TypedProgram {
+        overloads: typed_sets,
+        lets: Vec::new(),
+        exprs: Vec::new(),
+    })
+}
+
+fn callable_result_type(ty: &MonoType, arity: usize) -> MonoType {
+    let mut current = ty.clone();
+    for _ in 0..arity {
+        current = match current {
+            MonoType::Function(_, result) => *result,
+            other => other,
+        };
+    }
+    current
 }
 
 
