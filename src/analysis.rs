@@ -93,6 +93,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
 
     let declarations = resolve_declarations(program, &mut ctx);
     install_type_declarations(&mut env, &mut ctx, program);
+    install_class_methods(&mut env, &mut ctx, program);
     validate_spec_refinements(program, &mut ctx, &env)?;
     let refinements = collect_refinement_metadata(&collected.function_groups);
     validate_refinement_calls(program, &collected.function_groups)?;
@@ -148,6 +149,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         overloads.push(set);
     }
 
+    validate_class_constraints(&ctx, &declarations)?;
     let typed = build_typed_program(&collected.function_groups, &overloads)?;
 
     // Check ordinary top-level expressions and lets against the same
@@ -922,6 +924,80 @@ fn seed_function_type(ctx: &mut InferCtx, group: &FunctionGroup) -> MonoType {
         ty = MonoType::Function(Box::new(ctx.supply.fresh()), Box::new(ty));
     }
     ty
+}
+
+
+
+fn install_class_methods(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Program) {
+    for statement in &program.statements {
+        let Stmt::Decl(Decl::Class(class)) = statement else {
+            continue;
+        };
+        let mut binders = BTreeMap::new();
+        let mut quantified = Vec::new();
+        for parameter in &class.params {
+            let id = ctx.supply.fresh_id();
+            quantified.push(id);
+            binders.insert(parameter.clone(), MonoType::Var(id));
+        }
+        for spec in &class.specs {
+            let body = lower_ty(&spec.ty.ty, &binders);
+            env.insert(
+                spec.name.clone(),
+                TypeScheme {
+                    quantified: quantified.clone(),
+                    constraints: vec![crate::types::SchemeConstraint {
+                        name: class.name.clone(),
+                        args: class
+                            .params
+                            .iter()
+                            .map(|parameter| binders[parameter].clone())
+                            .collect(),
+                    }],
+                    body,
+                },
+            );
+        }
+    }
+}
+
+fn validate_class_constraints(
+    ctx: &InferCtx,
+    declarations: &DeclarationMetadata,
+) -> Result<(), String> {
+    for constraint in &ctx.constraints {
+        let args = constraint
+            .args
+            .iter()
+            .map(|argument| ctx.resolve(argument))
+            .collect::<Vec<_>>();
+        if args.iter().any(|argument| matches!(argument, MonoType::Var(_))) {
+            continue;
+        }
+        let Some(class) = declarations
+            .classes
+            .iter()
+            .find(|class| class.name == constraint.name)
+        else {
+            return Err(format!("unknown class constraint '{}'", constraint.name));
+        };
+        let implemented = declarations.instances.iter().any(|instance| {
+            instance.class == class.name
+                && instance.target.len() == args.len()
+                && instance
+                    .target
+                    .iter()
+                    .zip(&args)
+                    .all(|(target, argument)| target == argument)
+        });
+        if !implemented {
+            return Err(format!(
+                "no instance of '{}' satisfies {:?}",
+                constraint.name, args
+            ));
+        }
+    }
+    Ok(())
 }
 
 
