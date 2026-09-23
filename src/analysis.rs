@@ -82,6 +82,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let declarations = resolve_declarations(program, &mut ctx);
     install_type_declarations(&mut env, &mut ctx, program);
     validate_spec_refinements(program, &mut ctx, &env)?;
+    validate_refinement_calls(program, &collected.function_groups)?;
 
     // Seed every function before inferring any body. This preserves WIP's
     // recursive and mutually recursive definitions while the master pipeline
@@ -252,6 +253,257 @@ fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
         }
     }
 }
+
+fn validate_refinement_calls(
+    program: &Program,
+    groups: &[FunctionGroup],
+) -> Result<(), String> {
+    let mut obligations = BTreeMap::<String, usize>::new();
+    for group in groups {
+        for parsed in &group.explicit_specs {
+            let Some(clauses) = &parsed.decl.ty.where_ else {
+                continue;
+            };
+            let mut binders = Vec::new();
+            collect_signature_binders(&parsed.decl.ty.ty, &mut binders);
+            let result_name = binders.last().and_then(|(name, _)| name.clone());
+            let arity = binders.len().saturating_sub(1);
+            let has_precondition = clauses.iter().any(|clause| {
+                let mut names = BTreeSet::new();
+                collect_expr_names(clause, &mut names);
+                result_name
+                    .as_ref()
+                    .map(|result| !names.contains(result))
+                    .unwrap_or(true)
+            });
+            if has_precondition {
+                obligations.insert(group.name.clone(), arity);
+            }
+        }
+    }
+
+    for group in groups {
+        for clause in &group.raw_clauses {
+            validate_refinement_calls_in_expr(&clause.body, &obligations)?;
+        }
+    }
+    for statement in &program.statements {
+        match statement {
+            Stmt::Expr(expression) => {
+                validate_refinement_calls_in_expr(expression, &obligations)?;
+            }
+            Stmt::Decl(Decl::Let(binding)) => {
+                validate_refinement_calls_in_expr(&binding.value, &obligations)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_refinement_calls_in_expr(
+    expression: &Expr,
+    obligations: &BTreeMap<String, usize>,
+) -> Result<(), String> {
+    fn walk(
+        expression: &Expr,
+        obligations: &BTreeMap<String, usize>,
+        nested_callee: bool,
+    ) -> Result<(), String> {
+        match expression {
+            Expr::Call(call) => {
+                if !nested_callee {
+                    let (base, args) = flatten_call(call);
+                    if let Expr::Var(variable) = base {
+                        if let Some(arity) = obligations.get(&variable.name) {
+                            if args.len() < *arity {
+                                return Err(format!(
+                                    "partial application of '{}' escapes its where-preconditions; call it with all {} argument(s) at once",
+                                    variable.name, arity
+                                ));
+                            }
+                        }
+                    }
+                }
+                walk(&call.callee, obligations, true)?;
+                for argument in &call.args {
+                    walk(argument, obligations, false)?;
+                }
+            }
+            Expr::Lambda(lambda) => walk(&lambda.body, obligations, false)?,
+            Expr::Member(member) => walk(&member.obj, obligations, false)?,
+            Expr::Index(index) => {
+                walk(&index.obj, obligations, false)?;
+                walk(&index.index, obligations, false)?;
+            }
+            Expr::Unary(unary) => walk(&unary.operand, obligations, false)?,
+            Expr::Binary(binary) => {
+                walk(&binary.lhs, obligations, false)?;
+                walk(&binary.rhs, obligations, false)?;
+            }
+            Expr::Tuple(tuple) => {
+                for item in &tuple.items {
+                    walk(item, obligations, false)?;
+                }
+            }
+            Expr::List(list) => {
+                let mut current = list;
+                loop {
+                    match current {
+                        crate::ast::ListExpr::Empty => break,
+                        crate::ast::ListExpr::Cells(cell) => {
+                            walk(&cell.head, obligations, false)?;
+                            current = &cell.tail;
+                        }
+                    }
+                }
+            }
+            Expr::Record(record) => {
+                for entry in &record.entries {
+                    let value = match entry {
+                        crate::ast::RecordValueEntry::Field(_, value)
+                        | crate::ast::RecordValueEntry::Spread(value) => value,
+                    };
+                    walk(value, obligations, false)?;
+                }
+            }
+            Expr::Block(block) => {
+                for statement in &block.body {
+                    match statement {
+                        Stmt::Expr(expression) => walk(expression, obligations, false)?,
+                        Stmt::Decl(Decl::Let(binding)) => {
+                            walk(&binding.value, obligations, false)?
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Expr::Ref(reference) => walk(&reference.inner, obligations, false)?,
+            Expr::Assign(assign) => {
+                walk(&assign.place, obligations, false)?;
+                walk(&assign.value, obligations, false)?;
+            }
+            Expr::Match(matched) => {
+                walk(&matched.scrutinee, obligations, false)?;
+                for arm in &matched.arms {
+                    if let Some(guard) = &arm.guard {
+                        walk(guard, obligations, false)?;
+                    }
+                    walk(&arm.body, obligations, false)?;
+                }
+            }
+            Expr::Lit(_) | Expr::Var(_) => {}
+        }
+        Ok(())
+    }
+
+    walk(expression, obligations, false)
+}
+
+fn flatten_call<'a>(call: &'a crate::ast::CallExpr) -> (&'a Expr, Vec<&'a Expr>) {
+    let mut args = call.args.iter().collect::<Vec<_>>();
+    let mut base = call.callee.as_ref();
+    while let Expr::Call(inner) = base {
+        args.splice(0..0, inner.args.iter().collect::<Vec<_>>());
+        base = inner.callee.as_ref();
+    }
+    (base, args)
+}
+
+fn collect_signature_binders(ty: &Ty, binders: &mut Vec<(Option<String>, Ty)>) {
+    match ty {
+        Ty::Arrow { from, to } => {
+            binders.push(signature_binder(from));
+            collect_signature_binders(to, binders);
+        }
+        other => binders.push(signature_binder(other)),
+    }
+}
+
+fn signature_binder(ty: &Ty) -> (Option<String>, Ty) {
+    match ty {
+        Ty::NamedBinder { name, ty } => (Some(name.clone()), (**ty).clone()),
+        other => (None, other.clone()),
+    }
+}
+
+fn collect_expr_names(expression: &Expr, names: &mut BTreeSet<String>) {
+    match expression {
+        Expr::Var(variable) => {
+            names.insert(variable.name.clone());
+        }
+        Expr::Call(call) => {
+            collect_expr_names(&call.callee, names);
+            for argument in &call.args {
+                collect_expr_names(argument, names);
+            }
+        }
+        Expr::Lambda(lambda) => collect_expr_names(&lambda.body, names),
+        Expr::Member(member) => collect_expr_names(&member.obj, names),
+        Expr::Index(index) => {
+            collect_expr_names(&index.obj, names);
+            collect_expr_names(&index.index, names);
+        }
+        Expr::Unary(unary) => collect_expr_names(&unary.operand, names),
+        Expr::Binary(binary) => {
+            collect_expr_names(&binary.lhs, names);
+            collect_expr_names(&binary.rhs, names);
+        }
+        Expr::Tuple(tuple) => {
+            for item in &tuple.items {
+                collect_expr_names(item, names);
+            }
+        }
+        Expr::List(list) => {
+            let mut current = list;
+            loop {
+                match current {
+                    crate::ast::ListExpr::Empty => break,
+                    crate::ast::ListExpr::Cells(cell) => {
+                        collect_expr_names(&cell.head, names);
+                        current = &cell.tail;
+                    }
+                }
+            }
+        }
+        Expr::Record(record) => {
+            for entry in &record.entries {
+                let value = match entry {
+                    crate::ast::RecordValueEntry::Field(_, value)
+                    | crate::ast::RecordValueEntry::Spread(value) => value,
+                };
+                collect_expr_names(value, names);
+            }
+        }
+        Expr::Block(block) => {
+            for statement in &block.body {
+                match statement {
+                    Stmt::Expr(expression) => collect_expr_names(expression, names),
+                    Stmt::Decl(Decl::Let(binding)) => {
+                        collect_expr_names(&binding.value, names)
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Expr::Ref(reference) => collect_expr_names(&reference.inner, names),
+        Expr::Assign(assign) => {
+            collect_expr_names(&assign.place, names);
+            collect_expr_names(&assign.value, names);
+        }
+        Expr::Match(matched) => {
+            collect_expr_names(&matched.scrutinee, names);
+            for arm in &matched.arms {
+                if let Some(guard) = &arm.guard {
+                    collect_expr_names(guard, names);
+                }
+                collect_expr_names(&arm.body, names);
+            }
+        }
+        Expr::Lit(_) => {}
+    }
+}
+
 
 fn seed_function_type(ctx: &mut InferCtx, group: &FunctionGroup) -> MonoType {
     let arity = group
