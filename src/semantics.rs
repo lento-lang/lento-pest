@@ -568,7 +568,7 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
                     ListExpr::Empty => ListExpr::Empty,
                     ListExpr::Cells(cell) => ListExpr::Cells(Box::new(ListCons {
                         head: Box::new(lower_typed_expr(
-                            children.lower_next(&mut children).expect("typed list child missing"),
+                            children.next().expect("typed list child missing"),
                         )),
                         tail: Box::new(lower_list(&cell.tail, children)),
                     })),
