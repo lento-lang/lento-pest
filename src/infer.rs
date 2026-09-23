@@ -145,6 +145,8 @@ impl Default for InferCtx {
 pub struct InferredClause {
     /// The curried clause type `P1 -> ... -> Pn -> R`.
     pub ty: MonoType,
+    /// The function body with a canonical type annotation at every expression node.
+    pub body: crate::semantics::TypedExpr,
     /// The parameter patterns, in order (value dispatch).
     pub patterns: Vec<Pattern>,
     /// Constraints arising from the clause body (e.g. from operators).
@@ -660,14 +662,14 @@ pub fn infer_clause(
         check_pattern(ctx, p, &pi, &mut local)?;
         param_tys.push(pi);
     }
-    let body_ty = infer_expr(ctx, &clause.body, &mut local)?;
+    let body = infer_typed_expr(ctx, &clause.body, &mut local)?;
     let result_ty = match &clause.ret {
         Some(ret) => {
             let declared = crate::types::lower_ty(ret, &BTreeMap::new());
-            ctx.unify(&body_ty, &declared)?;
+            ctx.unify(&body.ty, &declared)?;
             declared
         }
-        None => body_ty,
+        None => body.ty.clone(),
     };
     let mut ty = result_ty;
     for pt in param_tys.into_iter().rev() {
@@ -675,6 +677,7 @@ pub fn infer_clause(
     }
     Ok(InferredClause {
         ty,
+        body,
         patterns: clause.params.clone(),
         constraints: ctx.constraints.clone(),
     })
@@ -690,6 +693,8 @@ pub struct InferredGroup {
     pub clause_types: Vec<MonoType>,
     /// Per-clause patterns, in source order.
     pub clause_patterns: Vec<Vec<Pattern>>,
+    /// Per-clause recursively typed bodies, in source order.
+    pub clause_bodies: Vec<crate::semantics::TypedExpr>,
 }
 
 /// Infer every clause of a function group in a shared context.
@@ -704,18 +709,47 @@ pub fn infer_function_group(
 ) -> Result<InferredGroup, TypeError> {
     let mut clause_types = Vec::new();
     let mut clause_patterns = Vec::new();
+    let mut clause_bodies = Vec::new();
     for clause in &group.raw_clauses {
         let inferred = infer_clause(ctx, clause, env)?;
         clause_types.push(inferred.ty);
         clause_patterns.push(inferred.patterns);
+        clause_bodies.push(inferred.body);
     }
-    // Resolve through the accumulated substitution so callers see final types.
+    // Resolve every annotation through the final group substitution.
     let clause_types = clause_types.iter().map(|t| ctx.resolve(t)).collect();
+    for body in &mut clause_bodies {
+        resolve_typed_expr(ctx, body);
+    }
     Ok(InferredGroup {
         name: group.name.clone(),
         clause_types,
         clause_patterns,
+        clause_bodies,
     })
+}
+
+fn resolve_typed_expr(ctx: &InferCtx, expression: &mut crate::semantics::TypedExpr) {
+    use crate::semantics::TypedExprKind;
+    expression.ty = ctx.resolve(&expression.ty);
+    match &mut expression.kind {
+        TypedExprKind::Call { callee, args, .. } => {
+            resolve_typed_expr(ctx, callee);
+            for arg in args { resolve_typed_expr(ctx, arg); }
+        }
+        TypedExprKind::Lambda { body, .. } => resolve_typed_expr(ctx, body),
+        TypedExprKind::Match { scrutinee, arms } => {
+            resolve_typed_expr(ctx, scrutinee);
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard { resolve_typed_expr(ctx, guard); }
+                resolve_typed_expr(ctx, &mut arm.body);
+            }
+        }
+        TypedExprKind::Composite { children, .. } => {
+            for child in children { resolve_typed_expr(ctx, child); }
+        }
+        TypedExprKind::Lit(_) | TypedExprKind::Var(_) | TypedExprKind::Unresolved(_) => {}
+    }
 }
 
 /// Generalize a clause/group type relative to the ambient environment. This
