@@ -101,10 +101,14 @@ where r == x * x`) verify instantly.
 
 - Solver: **cvc5** via its official Rust bindings (`cvc5` crate). The solver
   binary on the system is not used.
-- Integers are 64-bit **bitvectors**, matching the runtime's `i64`:
-  decidable quantifier-free reasoning, `sdiv`/`srem` truncated semantics
-  match the evaluator. (One divergence: `INT_MIN / -1` is a runtime panic but
-  defined `INT_MIN` in bitvector semantics.)
+- Integers are 64-bit **bitvectors**. Signed comparisons and `sdiv`/`srem`
+  use the evaluator's truncation-toward-zero convention. The evaluator uses
+  checked integer arithmetic and reports overflow, while the solver's
+  bitvector arithmetic wraps. Therefore a proof does not establish that every
+  execution avoids overflow; this verifier currently proves partial
+  postconditions over the modeled bitvector semantics, not total correctness.
+  In particular, `INT_MIN / -1` is a runtime error but yields `INT_MIN` in
+  bitvector semantics.
 - Floats are IEEE 754 **double precision** (`FP64`).
 - Booleans are solver booleans.
 - Unsupported feature → compile error. The following cannot be encoded in v1
