@@ -135,3 +135,13 @@ fn canonical_analysis_exposes_class_dispatch_metadata() {
     assert_eq!(result.declarations.instances[0].class, "Comparable");
     assert_eq!(result.declarations.instances[0].methods, vec!["compare"]);
 }
+
+
+#[test]
+fn canonical_pipeline_rejects_partial_refinement_function_use() {
+    let error = analyze(
+        "spec positive:\n         (x: int) -> int\n         where\n             x > 0\n         let saved = positive\n",
+    )
+    .expect_err("refinement-bearing function must not escape as a value");
+    assert!(error.contains("partial application"), "{error}");
+}
