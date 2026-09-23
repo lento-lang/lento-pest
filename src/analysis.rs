@@ -656,7 +656,7 @@ fn resolve_typed_expr_calls(
             match matches.as_slice() {
                 [] => {}
                 [(_, id)] => *specialization = Some(*id),
-                [(best_score, id), (next_score, _), ..] if best_score == next_score => {
+                [(best_score, _id), (next_score, _), ..] if best_score == next_score => {
                     return Err(format!(
                         "ambiguous overload call to '{name}' for fully typed arguments"
                     ));
