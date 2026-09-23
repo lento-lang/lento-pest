@@ -657,6 +657,7 @@ fn resolve_typed_expr_calls(
             }
 
             let mut matches = Vec::new();
+            let mut rejections = Vec::new();
             for candidate in &set.specializations {
                 if callable_arity(&candidate.scheme.body) != args.len() {
                     continue;
@@ -664,21 +665,33 @@ fn resolve_typed_expr_calls(
                 let mut supply = TypeVarSupply::new();
                 let (candidate_type, constraints) = instantiate(&mut supply, &candidate.scheme);
                 let mut substitution = Substitution::new();
-                if unify(&mut substitution, &candidate_type, &applied_type).is_ok()
-                    && constraints.iter().all(|constraint| {
-                        let args = constraint
-                            .args
-                            .iter()
-                            .map(|argument| substitution.apply(argument))
-                            .collect::<Vec<_>>();
+                if unify(&mut substitution, &candidate_type, &applied_type).is_ok() {
+                    let resolved_constraints = constraints
+                        .iter()
+                        .map(|constraint| {
+                            (
+                                constraint.name.clone(),
+                                constraint
+                                    .args
+                                    .iter()
+                                    .map(|argument| substitution.apply(argument))
+                                    .collect::<Vec<_>>(),
+                            )
+                        })
+                        .collect::<Vec<_>>();
+                    let accepted = resolved_constraints.iter().all(|(class, args)| {
                         !args.iter().any(contains_type_variable)
                             && declarations.instances.iter().any(|instance| {
-                                instance.class == constraint.name
-                                    && instance.target == args
+                                instance.class == *class && instance.target == *args
                             })
-                    })
-                {
-                    matches.push((candidate_specificity(candidate), candidate.id));
+                    });
+                    if accepted {
+                        matches.push((candidate_specificity(candidate), candidate.id));
+                    } else {
+                        rejections.push(resolved_constraints);
+                    }
+                } else {
+                    rejections.push(vec![(candidate_type.to_string(), vec![applied_type.clone()])]);
                 }
             }
             matches.sort_by(|(left_score, left_id), (right_score, right_id)| {
@@ -696,7 +709,8 @@ fn resolve_typed_expr_calls(
                         })
                         .collect::<Vec<_>>();
                     return Err(format!(
-                        "no specialization of '{name}' accepts call type {applied_type:?}; candidates: {candidates:?}"
+                        "no specialization of '{name}' accepts call type {applied_type:?}; candidates: {candidates:?}; constraints rejected: {rejections:?}; instances: {:?}",
+                        declarations.instances
                     ));
                 }
                 [(_, id)] => *specialization = Some(*id),
