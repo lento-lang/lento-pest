@@ -8,11 +8,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{Decl, Expr, PatKind, Program, Stmt, SumAlt, Ty};
-use crate::infer::{base_env, check_pattern, infer_expr, InferCtx};
+use crate::infer::{base_env, check_pattern, infer_expr, infer_typed_expr, InferCtx};
 use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
 use crate::semantics::{
     collect_function_groups, FunctionGroup, SpecOrigin, TypedExpr, TypedExprKind,
-    TypedOverloadSet, TypedPatternClause, TypedProgram, TypedSpecialization,
+    TypedLet, TypedOverloadSet, TypedPatternClause, TypedProgram, TypedSpecialization,
 };
 use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
@@ -152,26 +152,35 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     }
 
     // Check ordinary top-level expressions and lets against the same
-    // environment. Type/class/instance declarations are intentionally kept in
-    // the AST for their dedicated semantic lowering; they are not ignored by
-    // evaluation.
-    for statement in &collected.statements {
+    // environment, retaining their recursive type annotations.
+    let mut typed_lets = Vec::new();
+    let mut typed_exprs = Vec::new();
+    for (source_index, statement) in program.statements.iter().enumerate() {
         match statement {
             Stmt::Decl(Decl::Let(binding)) => {
-                let value_ty = infer_expr(&mut ctx, &binding.value, &mut env)
+                let value = infer_typed_expr(&mut ctx, &binding.value, &mut env)
                     .map_err(|error| format!("top-level let inference failed: {error}"))?;
-                check_pattern(&mut ctx, &binding.pattern, &value_ty, &mut env)
+                check_pattern(&mut ctx, &binding.pattern, &value.ty, &mut env)
                     .map_err(|error| format!("top-level binding failed: {error}"))?;
                 if let PatKind::Var(name) = &binding.pattern.kind {
-                    let resolved = ctx.resolve(&value_ty);
+                    let resolved = ctx.resolve(&value.ty);
                     let scheme = generalize(&env, &resolved, ctx.constraints.clone());
                     env.insert(name.clone(), scheme);
                 }
+                typed_lets.push(TypedLet {
+                    mutable: binding.mutable,
+                    pattern: binding.pattern.clone(),
+                    annotation: binding.annotation.clone(),
+                    value,
+                });
+                let _ = source_index;
             }
             Stmt::Expr(expression) => {
                 validate_nested_matches(expression, "top-level")?;
-                infer_expr(&mut ctx, expression, &mut env)
-                    .map_err(|error| format!("top-level expression inference failed: {error}"))?;
+                typed_exprs.push(
+                    infer_typed_expr(&mut ctx, expression, &mut env)
+                        .map_err(|error| format!("top-level expression inference failed: {error}"))?,
+                );
             }
             Stmt::Decl(Decl::Type(_))
             | Stmt::Decl(Decl::Class(_))
@@ -182,7 +191,18 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     }
 
     validate_class_constraints(&ctx, &declarations)?;
-    let typed = build_typed_program(&collected.function_groups, &overloads)?;
+    for binding in &mut typed_lets {
+        crate::infer::resolve_typed_expr(&ctx, &mut binding.value);
+    }
+    for expression in &mut typed_exprs {
+        crate::infer::resolve_typed_expr(&ctx, expression);
+    }
+    let typed = build_typed_program(
+        &collected.function_groups,
+        &overloads,
+        typed_lets,
+        typed_exprs,
+    )?;
 
     Ok(Analysis {
         overloads,
@@ -561,6 +581,8 @@ fn curry_function_clause(clause: &crate::ast::FnDecl) -> Expr {
 fn build_typed_program(
     groups: &[FunctionGroup],
     overloads: &[OverloadSet],
+    lets: Vec<TypedLet>,
+    exprs: Vec<TypedExpr>,
 ) -> Result<TypedProgram, String> {
     let mut typed_sets = Vec::new();
     for set in overloads {
@@ -604,8 +626,8 @@ fn build_typed_program(
     }
     Ok(TypedProgram {
         overloads: typed_sets,
-        lets: Vec::new(),
-        exprs: Vec::new(),
+        lets,
+        exprs,
     })
 }
 
