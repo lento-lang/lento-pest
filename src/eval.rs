@@ -116,7 +116,15 @@ pub fn eval_program_with_declarations(
 ) -> Result<Value, String> {
     let mut env = initial_env();
     install_resolved_declarations(declarations, &mut env);
-    eval_program_in_env(program, &mut env)
+    let (statements, spans): (Vec<_>, Vec<_>) = program
+        .statements
+        .iter()
+        .cloned()
+        .zip(program.spans.iter().cloned())
+        .filter(|(statement, _)| !matches!(statement, Stmt::Decl(Decl::Type(_))))
+        .unzip();
+    let runtime_program = Program { statements, spans };
+    eval_program_in_env(&runtime_program, &mut env)
 }
 
 fn install_resolved_declarations(
