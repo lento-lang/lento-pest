@@ -21,7 +21,7 @@
 use std::fmt;
 
 use crate::ast::{
-    Decl, Expr, FnDecl, LetDecl, Lit, MatchArm, PatKind, Pattern, Program, SpecDecl, Stmt,
+    Decl, Expr, FnDecl, LetDecl, Lit, MatchArm, PatKind, Pattern, Program, SpecDecl, Stmt, Ty,
     TypeDecl,
 };
 
