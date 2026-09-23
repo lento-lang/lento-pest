@@ -196,6 +196,19 @@ fn canonical_typed_program_keeps_top_level_let_and_expression_types() {
 }
 
 #[test]
+fn canonical_pipeline_resolves_fully_typed_overload_calls() {
+    let result = analysis("fn id x = x\nlet value = id 1\n")
+        .expect("fully applied call should resolve");
+    let lento::semantics::TypedExprKind::Call {
+        specialization, ..
+    } = &result.typed.lets[0].value.kind
+    else {
+        panic!("top-level value should retain its call node");
+    };
+    assert_eq!(*specialization, Some(0));
+}
+
+#[test]
 fn canonical_pipeline_resolves_class_method_instances() {
     analyze(
         "class Eq a { spec eq : a -> a -> bool }\n         impl Eq int { fn eq x y = x == y }\n         assert (eq 1 1)\n",
