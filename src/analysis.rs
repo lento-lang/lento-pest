@@ -1159,7 +1159,7 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
                         ty: MonoType::Var(0),
                         body: TypedExpr {
                             ty: MonoType::Var(0),
-                            kind: TypedExprKind::Unresolved(Box::new(arm.body.clone())),
+                            kind: TypedExprKind::Unresolved(arm.body.clone()),
                         },
                         patterns: vec![arm.pattern.clone()],
                         source_index: index,
