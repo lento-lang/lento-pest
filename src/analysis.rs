@@ -158,7 +158,8 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     // environment, retaining their recursive type annotations.
     let mut typed_lets = Vec::new();
     let mut typed_exprs = Vec::new();
-    for statement in &collected.statements {
+    let mut typed_expr_source_indices = Vec::new();
+    for (source_index, statement) in program.statements.iter().enumerate() {
         match statement {
             Stmt::Decl(Decl::Let(binding)) => {
                 let value = infer_typed_expr(&mut ctx, &binding.value, &mut env)
@@ -171,6 +172,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                     env.insert(name.clone(), scheme);
                 }
                 typed_lets.push(TypedLet {
+                    source_index,
                     mutable: binding.mutable,
                     pattern: binding.pattern.clone(),
                     annotation: binding.annotation.clone(),
@@ -183,6 +185,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                     infer_typed_expr(&mut ctx, expression, &mut env)
                         .map_err(|error| format!("top-level expression inference failed: {error}"))?,
                 );
+                typed_expr_source_indices.push(source_index);
             }
             Stmt::Decl(Decl::Type(_))
             | Stmt::Decl(Decl::Class(_))
@@ -204,6 +207,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         &overloads,
         typed_lets,
         typed_exprs,
+        typed_expr_source_indices,
     )?;
     resolve_typed_program_calls(&mut typed, &overloads)?;
 
@@ -736,6 +740,7 @@ fn build_typed_program(
     overloads: &[OverloadSet],
     lets: Vec<TypedLet>,
     exprs: Vec<TypedExpr>,
+    expr_source_indices: Vec<usize>,
 ) -> Result<TypedProgram, String> {
     let mut typed_sets = Vec::new();
     for set in overloads {
@@ -774,6 +779,7 @@ fn build_typed_program(
         }
         typed_sets.push(TypedOverloadSet {
             name: set.name.clone(),
+            source_index: group.source_indices.first().copied().unwrap_or(group.source_span.0),
             specializations: typed_specializations,
         });
     }
@@ -781,6 +787,7 @@ fn build_typed_program(
         overloads: typed_sets,
         lets,
         exprs,
+        expr_source_indices,
     })
 }
 
