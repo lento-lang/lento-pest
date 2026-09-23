@@ -310,7 +310,7 @@ pub enum Verdict {
 }
 
 fn run_check(
-    solver: &cvc5::Solver,
+    solver: &mut cvc5::Solver<'_>,
     params: &[(Term, String)],
     negated: &Term,
 ) -> Result<Verdict, String> {
@@ -344,7 +344,7 @@ fn fmt_value(t: &Term) -> String {
 }
 
 fn new_solver(tm: &TermManager) -> cvc5::Solver<'_> {
-    let solver = cvc5::Solver::new(tm);
+    let mut solver = cvc5::Solver::new(tm);
     solver.set_option("produce-models", "true");
     solver.set_option("tlimit-per", "5000");
     solver
@@ -389,7 +389,7 @@ pub fn check_post(
         .insert(result.0.clone(), (body_term.copy(), result.1));
     named.push((body_term, result.0.clone()));
 
-    let solver = new_solver(&tm);
+    let mut solver = new_solver(&tm);
     for pre in pres {
         let t = enc
             .encode(pre)
@@ -400,7 +400,7 @@ pub fn check_post(
         .encode(post)
         .map_err(|e| format!("cannot verify postcondition: clause unsupported: {e}"))?;
     let negated = tm.mk_term(Kind::Not, &[post_t]);
-    run_check(&solver, &named, &negated)
+    run_check(&mut solver, &named, &negated)
 }
 
 /// Verify one precondition at a call site: the clause must hold for the
