@@ -322,6 +322,17 @@ fn verify_canonical_smt(
     let mut refinements = BTreeMap::<String, SmtRefinement>::new();
 
     for group in groups {
+        let refined_specs = group
+            .explicit_specs
+            .iter()
+            .filter(|parsed| parsed.decl.ty.where_.is_some())
+            .collect::<Vec<_>>();
+        if refined_specs.len() > 1 {
+            return Err(format!(
+                "cannot verify refinements for '{}': multiple refined specifications need overload-aware proof selection",
+                group.name
+            ));
+        }
         for parsed in &group.explicit_specs {
             let Some(clauses) = &parsed.decl.ty.where_ else {
                 continue;
@@ -409,6 +420,12 @@ fn verify_canonical_smt(
                 })
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if group.raw_clauses.len() != 1 {
+            return Err(format!(
+                "cannot verify postcondition for '{}': multi-clause function bodies need branch-aware proof lowering",
+                group.name
+            ));
+        }
         let body = curry_function_clause(&group.raw_clauses[0]);
         for post in &refinement.postconditions {
             match crate::smt::check_post(
