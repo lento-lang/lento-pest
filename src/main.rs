@@ -61,11 +61,11 @@ fn load_with_prelude(path: &std::path::Path) -> Result<lento::ast::Program, Stri
 }
 
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
-    lento::analysis::analyze_program(ast)?;
+    let analysis = lento::analysis::analyze_program(ast)?;
     let desugared = lento::ast::desugar_program(ast);
     #[cfg(feature = "legacy-typecheck")]
     lento::typecheck::check_program(&desugared)?;
-    let value = lento::eval::eval_program(&desugared)?;
+    let value = lento::eval::eval_program_with_declarations(&desugared, &analysis.declarations)?;
     if matches!(desugared.statements.last(), Some(lento::ast::Stmt::Expr(_)))
         && !matches!(value, lento::eval::Value::Unit)
     {
