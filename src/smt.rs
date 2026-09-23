@@ -448,12 +448,12 @@ pub fn check_pre(
         }
     }
 
-    let solver = new_solver(&tm);
+    let mut solver = new_solver(&tm);
     let pre_t = enc
         .encode(pre)
         .map_err(|e| format!("cannot verify precondition at call site: clause unsupported: {e}"))?;
     let negated = tm.mk_term(Kind::Not, &[pre_t]);
-    run_check(&solver, &named, &negated)
+    run_check(&mut solver, &named, &negated)
 }
 
 #[cfg(test)]
