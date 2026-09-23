@@ -16,7 +16,10 @@ use crate::semantics::{
 };
 use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
-use crate::types::{generalize, lower_ty, MonoType, TypeEnv, TypeScheme};
+use crate::types::{
+    generalize, instantiate, lower_ty, unify, MonoType, Substitution, TypeEnv, TypeScheme,
+    TypeVarSupply,
+};
 
 /// Resolved declaration metadata shared by analysis, lowering, and runtime.
 /// This is the canonical identity for user-defined types; the evaluator may
@@ -196,12 +199,13 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     for expression in &mut typed_exprs {
         crate::infer::resolve_typed_expr(&ctx, expression);
     }
-    let typed = build_typed_program(
+    let mut typed = build_typed_program(
         &collected.function_groups,
         &overloads,
         typed_lets,
         typed_exprs,
     )?;
+    resolve_typed_program_calls(&mut typed, &overloads)?;
 
     Ok(Analysis {
         overloads,
@@ -576,6 +580,156 @@ fn curry_function_clause(clause: &crate::ast::FnDecl) -> Expr {
 }
 
 
+
+
+fn resolve_typed_program_calls(
+    program: &mut TypedProgram,
+    overloads: &[OverloadSet],
+) -> Result<(), String> {
+    for set in &mut program.overloads {
+        for specialization in &mut set.specializations {
+            for clause in &mut specialization.clauses {
+                resolve_typed_expr_calls(&mut clause.body, overloads)?;
+            }
+        }
+    }
+    for binding in &mut program.lets {
+        resolve_typed_expr_calls(&mut binding.value, overloads)?;
+    }
+    for expression in &mut program.exprs {
+        resolve_typed_expr_calls(expression, overloads)?;
+    }
+    Ok(())
+}
+
+fn resolve_typed_expr_calls(
+    expression: &mut TypedExpr,
+    overloads: &[OverloadSet],
+) -> Result<(), String> {
+    match &mut expression.kind {
+        TypedExprKind::Call {
+            callee,
+            args,
+            specialization,
+        } => {
+            resolve_typed_expr_calls(callee, overloads)?;
+            for argument in args.iter_mut() {
+                resolve_typed_expr_calls(argument, overloads)?;
+            }
+            let TypedExprKind::Var(name) = &callee.kind else {
+                return Ok(());
+            };
+            let Some(set) = overloads.iter().find(|set| set.name == *name) else {
+                return Ok(());
+            };
+            let mut applied_type = expression.ty.clone();
+            for argument in args.iter().rev() {
+                applied_type = MonoType::Function(
+                    Box::new(argument.ty.clone()),
+                    Box::new(applied_type),
+                );
+            }
+            if contains_type_variable(&applied_type) {
+                return Ok(());
+            }
+
+            let mut matches = Vec::new();
+            for candidate in &set.specializations {
+                if callable_arity(&candidate.scheme.body) != args.len() {
+                    continue;
+                }
+                let mut supply = TypeVarSupply::new();
+                let (candidate_type, constraints) = instantiate(&mut supply, &candidate.scheme);
+                if !constraints.is_empty() {
+                    continue;
+                }
+                let mut substitution = Substitution::new();
+                if unify(&mut substitution, &candidate_type, &applied_type).is_ok() {
+                    matches.push((candidate_specificity(candidate), candidate.id));
+                }
+            }
+            matches.sort_by(|(left_score, left_id), (right_score, right_id)| {
+                right_score
+                    .cmp(left_score)
+                    .then_with(|| left_id.cmp(right_id))
+            });
+            match matches.as_slice() {
+                [] => {}
+                [(_, id)] => *specialization = Some(*id),
+                [(best_score, id), (next_score, _), ..] if best_score == next_score => {
+                    return Err(format!(
+                        "ambiguous overload call to '{name}' for fully typed arguments"
+                    ));
+                }
+                [(_, id), ..] => *specialization = Some(*id),
+            }
+        }
+        TypedExprKind::Lambda { body, .. } => resolve_typed_expr_calls(body, overloads)?,
+        TypedExprKind::Match { scrutinee, arms } => {
+            resolve_typed_expr_calls(scrutinee, overloads)?;
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    resolve_typed_expr_calls(guard, overloads)?;
+                }
+                resolve_typed_expr_calls(&mut arm.body, overloads)?;
+            }
+        }
+        TypedExprKind::Composite { children, .. } => {
+            for child in children {
+                resolve_typed_expr_calls(child, overloads)?;
+            }
+        }
+        TypedExprKind::Lit(_) | TypedExprKind::Var(_) | TypedExprKind::Unresolved(_) => {}
+    }
+    Ok(())
+}
+
+fn callable_arity(ty: &MonoType) -> usize {
+    match ty {
+        MonoType::Function(_, result) => 1 + callable_arity(result),
+        _ => 0,
+    }
+}
+
+fn contains_type_variable(ty: &MonoType) -> bool {
+    match ty {
+        MonoType::Var(_) => true,
+        MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
+            args.iter().any(contains_type_variable)
+        }
+        MonoType::Function(from, to) => {
+            contains_type_variable(from) || contains_type_variable(to)
+        }
+        MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
+            contains_type_variable(inner)
+        }
+    }
+}
+
+fn candidate_specificity(candidate: &crate::specialize::Specialization) -> (usize, usize) {
+    candidate
+        .declared_domain
+        .iter()
+        .flatten()
+        .map(|ty| {
+            fn size(ty: &MonoType) -> usize {
+                match ty {
+                    MonoType::Var(_) => 0,
+                    MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
+                        1 + args.iter().map(size).sum::<usize>()
+                    }
+                    MonoType::Function(from, to) => 1 + size(from) + size(to),
+                    MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
+                        1 + size(inner)
+                    }
+                }
+            }
+            (usize::from(!contains_type_variable(ty)), size(ty))
+        })
+        .fold((0, 0), |(count, total), (concrete, size)| {
+            (count + concrete, total + size)
+        })
+}
 
 fn build_typed_program(
     groups: &[FunctionGroup],
