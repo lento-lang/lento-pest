@@ -145,3 +145,18 @@ fn canonical_pipeline_rejects_partial_refinement_function_use() {
     .expect_err("refinement-bearing function must not escape as a value");
     assert!(error.contains("partial application"), "{error}");
 }
+
+
+#[test]
+fn canonical_analysis_populates_typed_bodies_and_schemes() {
+    let result = analysis("fn id x = x\n").expect("function should analyze");
+    let set = &result.typed.overloads[0];
+    let clause = &set.specializations[0].clauses[0];
+    assert_eq!(set.name, "id");
+    assert_eq!(clause.source_index, 0);
+    assert!(matches!(
+        clause.body.kind,
+        lento::semantics::TypedExprKind::Unresolved(_)
+    ));
+    assert!(!set.specializations[0].scheme.body.free_vars().is_empty());
+}
