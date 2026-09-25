@@ -1,0 +1,87 @@
+type Ordering = Less | Equal | Greater
+
+class Num a {
+    spec abs : a -> a
+}
+
+class Ord a {
+    spec compare : a -> a -> Ordering
+}
+
+class Eq a {
+    spec equal : a -> a -> bool
+}
+
+class Add a {
+    spec add : a -> a -> a
+}
+
+class Concat a {
+    spec concat : a -> a -> a
+}
+
+class Seq a {
+    spec take : int -> a -> a
+    spec drop : int -> a -> a
+    spec reverse : a -> a
+    spec slice : int -> int -> a -> a
+}
+
+class Len {
+    spec len : all e. [e] -> int
+}
+
+class Haystack h e {
+    spec contains : h -> e -> bool
+}
+
+impl Num int {
+    fn abs x = abs x
+}
+
+impl Num float {
+    fn abs x = abs x
+}
+
+impl Eq int {
+    fn equal x y = x == y
+}
+
+impl Eq float {
+    fn equal x y = x == y
+}
+
+impl Eq bool {
+    fn equal x y = x == y
+}
+
+impl Eq str {
+    fn equal x y = x == y
+}
+
+impl Add int {
+    fn add x y = x + y
+}
+
+impl Add float {
+    fn add x y = x + y
+}
+
+impl Concat str {
+    fn concat x y = concat x y
+}
+
+impl Seq [int] {
+    fn take n xs = take n xs
+    fn drop n xs = drop n xs
+    fn reverse xs = reverse xs
+    fn slice start stop xs = slice start stop xs
+}
+
+impl Len {
+    fn len xs = len xs
+}
+
+impl Haystack (str) (str) {
+    fn contains hay needle = contains hay needle
+}

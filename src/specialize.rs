@@ -31,6 +31,8 @@ use crate::types::{
 pub struct SpecializedClause {
     /// The clause's own inferred type (ungeneralized, resolved).
     pub ty: MonoType,
+    /// Canonically inferred body, including recursive expression annotations.
+    pub body: crate::semantics::TypedExpr,
     /// The clause's parameter patterns (value dispatch), in source order.
     pub patterns: Vec<crate::ast::Pattern>,
     /// Statement index of the source clause, for diagnostics.
@@ -257,7 +259,7 @@ fn same_specialization(
 ) -> bool {
     let _ = supply;
     // The semantic boundary: declared type restrictions must agree.
-    if !domains_compatible(a_domain, b_domain) {
+    if !domains_compatible(a_domain, b_domain) || a.constraints != b.constraints {
         return false;
     }
     if alpha_equiv(a, b) {
@@ -296,7 +298,11 @@ pub fn partition(
             .get(i)
             .map(declared_domain)
             .unwrap_or_default();
-        let scheme = canonicalize(&crate::types::generalize(env, clause_ty, vec![]));
+        let scheme = canonicalize(&crate::types::generalize(
+            env,
+            clause_ty,
+            inferred.clause_constraints[i].clone(),
+        ));
 
         let mut placed = false;
         for spec in specializations.iter_mut() {
@@ -307,6 +313,7 @@ pub fn partition(
             if same_specialization(&mut supply, &spec.scheme, &spec.declared_domain, &scheme, &domain) {
                 spec.clauses.push(SpecializedClause {
                     ty: clause_ty.clone(),
+                    body: inferred.clause_bodies[i].clone(),
                     patterns: inferred.clause_patterns[i].clone(),
                     source_index: group.source_indices.get(i).copied().unwrap_or(i),
                     declared_domain: domain.clone(),
@@ -323,6 +330,7 @@ pub fn partition(
                 declared_domain: domain.clone(),
                 clauses: vec![SpecializedClause {
                     ty: clause_ty.clone(),
+                    body: inferred.clause_bodies[i].clone(),
                     patterns: inferred.clause_patterns[i].clone(),
                     source_index: group.source_indices.get(i).copied().unwrap_or(i),
                     declared_domain: domain,

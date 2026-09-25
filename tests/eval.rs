@@ -88,7 +88,7 @@ fn grouped_function_clauses_evaluate_via_match() {
 #[test]
 fn list_spread_patterns_work_in_match_and_functions() {
     let value = eval(
-        "let len = xs => match xs {\n    [] => 0\n    [x, ...xs] => 1 + len xs\n}\nfn zip [] [] = []\nfn zip [x, ...xs] [y, ...ys] = {\n    let pair = [(x, y)]\n    let rest = zip xs ys\n    concat pair rest\n}\n(len [1, 2, 3], zip [1, 2] [3, 4])\n",
+        "let len = xs => match xs {\n    [] => 0,\n    [x, ...xs] => 1 + len xs\n}\nfn zip [] [] = []\nfn zip [x, ...xs] [y, ...ys] = {\n    let pair = [(x, y)]\n    let rest = zip xs ys\n    concat pair rest\n}\n(len [1, 2, 3], zip [1, 2] [3, 4])\n",
     )
     .unwrap();
     match value {
@@ -134,14 +134,10 @@ fn record_spread_pattern_binds_rest_record() {
 
 #[test]
 fn fn_block_syntax_evaluates_and_pretty_prints_in_block_form() {
-    // Destructuring parameters are parenthesized, and the block body is
-    // introduced with `=` so the header/body boundary is unambiguous.
-    let src = "fn pick_x ({x: x, ...rest}) = {\n    (x, rest)\n}\n";
+    let src = "fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\n";
     let ast = parse_program(src).unwrap();
     let printed = lento::pprint::format_program(&ast);
-    // The printer keeps the `fn` source form; the record parameter is
-    // parenthesized so it cannot be confused with the block body.
-    assert!(printed.contains("fn pick_x ({x: x, ...rest}) = {"));
+    assert!(printed.contains("fn pick_x {x: x, ...rest} {"));
 
     let mut env = lento::eval::initial_env();
     env.insert(
@@ -151,7 +147,7 @@ fn fn_block_syntax_evaluates_and_pretty_prints_in_block_form() {
             ("y".to_string(), Value::Int(9)),
         ]))),
     );
-    let value = eval_in_existing_env("fn pick_x ({x: x, ...rest}) = {\n    (x, rest)\n}\npick_x rec\n", &mut env).unwrap();
+    let value = eval_in_existing_env("fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\npick_x rec\n", &mut env).unwrap();
     match value {
         Value::Tuple(items) => {
             assert!(matches!(&items[0], Value::Int(7)));
@@ -385,4 +381,21 @@ fn range_descends_when_start_is_greater() {
 fn higher_order_intrinsics_report_predicate_errors() {
     let err = eval("any (x => x + 1) [1, 2]\n").unwrap_err();
     assert!(err.contains("any predicate must return bool"));
+}
+
+#[test]
+fn binary_operator_precedence() {
+    // Multiplication binds tighter than addition; comparison lower still.
+    assert_int(eval("1 + 2 * 3").unwrap(), 7);
+    assert_int(eval("2 * 3 + 4 * 5").unwrap(), 26);
+    assert_int(eval("(1 + 2) * 3").unwrap(), 9);
+    assert_int(eval("20 - 4 - 3").unwrap(), 13); // left-associative
+    match eval("1 + 1 == 2 && 2 < 3").unwrap() {
+        Value::Bool(true) => {}
+        other => panic!("expected true, got {other:?}"),
+    }
+    match eval("1 == 2 || 3 <= 3").unwrap() {
+        Value::Bool(true) => {}
+        other => panic!("expected true, got {other:?}"),
+    }
 }

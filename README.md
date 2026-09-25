@@ -1,134 +1,96 @@
 # Lento (pest)
 
-An experimental parser, formatter, type-analysis pipeline, and tree-walking interpreter for the Lento programming language, implemented in Rust with [pest](https://pest.rs/).
+A pest-based parser, Hindley–Milner type checker, and tree-walking interpreter
+for the Lento language.
 
-> [!IMPORTANT]
-> This repository is an early language prototype. The syntax and semantics are evolving, and it is not yet intended for production use.
-
-## Overview
-
-Lento is an expression-oriented language exploring concise functional syntax, pattern-directed function definitions, type inference, explicit specifications, and specialization.
-
-```lento
-spec factorial:
-    int -> int
-
-fn factorial 0 = 1
-fn factorial n = n * factorial (n - 1)
-
-let values = range 1 6
-let results = map factorial values
-
-assert (results == [1, 2, 6, 24, 120])
-println results
-```
-
-The current prototype includes:
-
-- A pest grammar and AST lowering
-- A source formatter with parse/format round-trip tests
-- A tree-walking interpreter and REPL
-- Curried functions, lambdas, recursion, and pattern matching
-- Hindley–Milner-style inference infrastructure
-- Function specs, overload partitioning, and specialization analysis
-- Exhaustiveness, duplicate-clause, and unreachable-clause diagnostics
-- Mutable bindings and an experimental `ref` model
-
-See [spec.md](spec.md) for the implemented language reference.
-
-## Getting started
-
-### Requirements
-
-- A recent stable Rust toolchain
-- Cargo
-
-Clone the repository and run the test suite:
+## Build & Run
 
 ```bash
-git clone https://github.com/lento-lang/lento-pest.git
-cd lento-pest
+cargo run -- path/to/file.lt         # parse, type-check, evaluate
+cargo run -- --fmt path/to/file.lt   # format in place
+cargo run -- --print-ast path/to/file.lt
+cargo run                            # REPL
+```
+
+Every run of a file type-checks first: ill-typed programs fail with a `type
+error:` message (line/column of the enclosing statement) before any evaluation.
+
+## Example
+
+```lento
+spec map:
+    all a, b.
+    (a -> b) -> [a] -> [b]
+
+fn map f [] = []
+fn map f [x, ...xs] = concat [f x] (map f xs)
+
+let xs = [1, 2, 3]
+let doubled = map (x => x * 2) xs
+assert (doubled == [2, 4, 6])
+println doubled
+```
+
+## Features
+
+- **Hindley–Milner type inference** with let-polymorphism (value restriction),
+  unification, and builtin constraint classes (`Num`, `Ord`, `Eq`, `Add`,
+  `Concat`, `Seq`, `Len`, `Haystack`) for the overloaded intrinsics and
+  operators
+- **User-defined types**:
+  - constructor sums: `type Option a = Some a | None` — constructors are
+    uppercase (`Some 5`, `None`) and matched by constructor patterns
+  - bare sums: `type Id = int | str` — members inject implicitly against an
+    annotated target and are matched with typed patterns (`(n : int) => ...`)
+  - record types: `type Point = { x: int, y: int }` with row-polymorphic field
+    access (`fn getx r = r.x`)
+  - synonyms: `type Meters = int`
+  - `[T]` remains the list-of-`T` type; sums with two or more alternatives use
+    `|` (bracketed `[a | b]` works in any type position)
+  - type application is juxtaposed: `Option int`, `Pair int str`
+- **Checked specs**: `spec` signatures are verified against their definitions
+  (skolemized conformance, including `::` constraint coverage)
+- **SMT-verified where-clauses**: `where` refinements on specs are checked
+  statically with cvc5 — preconditions are proven at every call site,
+  postconditions are proven against the definition (see
+  `docs/where-refinements.md`; unsupported or undecided clauses are compile
+  errors)
+- **Let bindings** with optional `mut` for mutation
+- **Functions** via curried `fn` clauses with pattern matching
+- **Lambdas** with `=>` syntax and optional type annotations
+- **Pattern matching** on literals, constructors, typed patterns, tuples,
+  lists (`[x, ...rest]`), and records (`{x: a, ...rest}`)
+- **Records** with field access and spread (`{...base, x: 1}`)
+- **Higher-order intrinsics**: `map`, `filter`, `foldl`, `any`, `all`, `range`
+- **Blocks** as expressions with block scoping (types may be declared per
+  block, shadowing outer ones)
+
+### Conventions and limitations
+
+- Constructor names must start with an uppercase letter; in unbracketed
+  `type` alternatives an uppercase identifier is always a constructor.
+- Numeric literals are monomorphic: `fn double x = x + x` is polymorphic, but
+  `x * 2` fixes `x : int`.
+- `ref`/`mut` are typed (`ref T`, `mut T`) but there is no borrow checking;
+  runtime checks remain the authority.
+- `where` refinements are checked with cvc5 over the encodable subset
+  (int/float/bool arithmetic, comparisons, logic); clauses needing strings,
+  lists, records, or reasoning beyond the solver's bounded budget are
+  compile errors, not silent acceptances. See `docs/where-refinements.md`.
+- Match exhaustiveness is checked statically (usefulness analysis over
+  constructors, typed alternatives, bool literals, lists, tuples, and
+  records; guarded arms cover nothing). For a scrutinee whose type is not
+  yet determined, completeness is judged against the shapes the arms
+  themselves admit.
+- Constructor names share one global namespace per scope; redeclaration at the
+  top level is an error, nested blocks may shadow.
+
+## Tests
+
+```bash
 cargo test
 ```
 
-Run a Lento source file:
-
-```bash
-cargo run -- path/to/program.lt
-```
-
-Start the parser REPL:
-
-```bash
-cargo run
-```
-
-## Command-line interface
-
-```text
-cargo run -- <file>               Parse and evaluate a file
-cargo run -- --print-ast <file>   Print the lowered AST
-cargo run -- --print-code <file>  Parse and pretty-print source
-cargo run -- --fmt <file>         Format a file in place
-cargo run -- --interactive        Start the REPL explicitly
-```
-
-The REPL currently prints parsed ASTs. File mode evaluates the program and prints the final non-unit expression.
-
-## Language at a glance
-
-```lento
-type user_id = int
-
-let users = [
-    {name: "Ada", active: true},
-    {name: "Grace", active: false},
-]
-
-fn status ({name: name, active: true}) = name + " is active"
-fn status ({name: name, active: false}) = name + " is inactive"
-
-let labels = map status users
-
-match labels {
-    [] => "no users"
-    [first, ...rest] => first
-}
-```
-
-Function application is curried and may be written with spaces or parentheses:
-
-```lento
-map (x => x * 2) [1, 2, 3]
-map(x => x * 2, [1, 2, 3])
-```
-
-## Repository layout
-
-| Path | Purpose |
-| --- | --- |
-| `src/grammar.pest` | Concrete grammar |
-| `src/parser.rs` | Parse-tree to AST lowering |
-| `src/ast.rs` | AST and function-clause desugaring |
-| `src/infer.rs`, `src/types.rs` | Type inference and type representation |
-| `src/semantics.rs`, `src/specialize.rs`, `src/specs.rs` | Function grouping, specialization, and spec association |
-| `src/patterns.rs` | Pattern usefulness and exhaustiveness analysis |
-| `src/eval.rs`, `src/intrinsics.rs` | Interpreter and built-in functions |
-| `src/pprint.rs` | Source formatter |
-| `tests/` | Parser, evaluator, inference, and semantic tests |
-
-## Development
-
-Before submitting a change, run:
-
-```bash
-cargo fmt --check
-cargo test
-cargo clippy --all-targets
-```
-
-When changing the language, update the grammar, implementation, tests, and [spec.md](spec.md) together. Small, focused changes with executable examples are easiest to review.
-
-## Project status
-
-The parser and interpreter support a useful experimental core, while the static semantics and memory model remain active design work. The reference describes the behavior implemented by this repository; future Lento design ideas may differ.
+The suite runs every `tests/samples/**/*.lt` through the full pipeline
+(parse → type-check → evaluate) plus targeted positive/negative type-checker
+tests in `tests/typecheck.rs`. See `SUM_TYPES_PLAN.md` for the design notes.

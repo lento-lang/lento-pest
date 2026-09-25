@@ -1,17 +1,17 @@
 // Literal patterns: booleans, strings, and integers.
 let flag = b => match b {
-    true => 1
+    true => 1,
     false => 0
 }
 
 let name = s => match s {
-    "hello" => 1
+    "hello" => 1,
     _ => 0
 }
 
 let classify = n => match n {
-    0 => "zero"
-    42 => "answer"
+    0 => "zero",
+    42 => "answer",
     _ => "other"
 }
 

@@ -13,10 +13,9 @@
 // 1. The parser folds all binary expressions flat and left-associative with
 //    no operator precedence. A mixed-precedence expression such as
 //    `1 + 2 * 3` binds as `(1 + 2) * 3`; the printer restores grouping with
-//    parentheses, but Lento has no transparent single-expression parens
-//    (a bare `(expr)` is a 1-tuple), so such a recovered tree cannot be
-//    re-encoded losslessly. Same-precedence and unambiguous programs
-//    round-trip exactly.
+//    parentheses, and since a single parenthesized expression `(e)` is a
+//    grouped expression (not a 1-tuple), such trees re-encode losslessly.
+//    Same-precedence and unambiguous programs round-trip exactly.
 // 2. A `fn` clause following a spec's `where` block is absorbed into the
 //    where conditions (no statement boundary after a where block), so such
 //    a program is not printer-round-trippable either.
@@ -44,12 +43,49 @@ fn format_stmt(out: &mut String, stmt: &Stmt) {
 
 fn format_decl(out: &mut String, decl: &Decl) {
     match decl {
+        Decl::Class(class) => {
+            let _ = write!(out, "class {}", class.name);
+            for param in &class.params {
+                let _ = write!(out, " {param}");
+            }
+            out.push_str(" {\n");
+            for spec in &class.specs {
+                let _ = writeln!(out, "    spec {}:", spec.name);
+                format_spec_type(out, &spec.ty);
+            }
+            out.push_str("}\n");
+        }
+        Decl::Impl(implementation) => {
+            let _ = write!(out, "impl {} ", implementation.class);
+            for (i, target) in implementation.target.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                format_type(out, target);
+            }
+            out.push_str(" {\n");
+            for method in &implementation.methods {
+                let _ = write!(out, "    fn {} ", method.name);
+                for param in &method.params {
+                    format_pattern(out, param);
+                    out.push(' ');
+                }
+                let _ = write!(out, "= ");
+                format_expr(out, &method.body, Prec::Top);
+                out.push('\n');
+            }
+            out.push_str("}\n");
+        }
         Decl::Spec(spec) => {
             let _ = writeln!(out, "spec {}:", spec.name);
             format_spec_type(out, &spec.ty);
         }
         Decl::Type(t) => {
-            let _ = write!(out, "type {} = ", t.name);
+            let _ = write!(out, "type {}", t.name);
+            for param in &t.params {
+                let _ = write!(out, " {param}");
+            }
+            let _ = write!(out, " = ");
             format_type(out, &t.ty);
             out.push('\n');
         }
@@ -73,7 +109,7 @@ fn format_decl(out: &mut String, decl: &Decl) {
         Decl::Fn(f) => {
             let _ = write!(out, "fn {} ", f.name);
             for p in &f.params {
-                format_fn_param(out, p);
+                format_pattern(out, p);
                 out.push(' ');
             }
             if let Some(ty) = &f.ret {
@@ -81,11 +117,12 @@ fn format_decl(out: &mut String, decl: &Decl) {
                 format_type(out, ty);
                 out.push(' ');
             }
-            // A block body still takes `=`: the header/body boundary must
-            // stay unambiguous (`fn f {` would misparse `{` as a record
-            // parameter).
-            let _ = write!(out, "= ");
-            format_expr(out, &f.body, Prec::Top);
+            if matches!(f.body, Expr::Block(_)) {
+                format_expr(out, &f.body, Prec::Top);
+            } else {
+                let _ = write!(out, "= ");
+                format_expr(out, &f.body, Prec::Top);
+            }
             out.push('\n');
         }
     }
@@ -169,6 +206,26 @@ fn format_type(out: &mut String, ty: &Ty) {
             format_type(out, ty);
             out.push(')');
         }
+        Ty::Sum(alts) => {
+            let parts: Vec<String> = alts
+                .iter()
+                .map(|alt| match alt {
+                    SumAlt::Ctor { name, payload } => match payload {
+                        Some(p) => format!("{name} {}", type_str(p)),
+                        None => name.clone(),
+                    },
+                    SumAlt::Bare(ty) => type_str(ty),
+                })
+                .collect();
+            let _ = write!(out, "[{}]", parts.join(" | "));
+        }
+        Ty::RecordType(fields) => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(name, ty)| format!("{name}: {}", type_str(ty)))
+                .collect();
+            let _ = write!(out, "{{{}}}", parts.join(", "));
+        }
     }
 }
 
@@ -182,19 +239,6 @@ fn arrow_domain_str(t: &Ty) -> String {
 
 fn format_pattern(out: &mut String, pat: &Pattern) {
     format_pat_kind(out, &pat.kind, pat.annotation.as_ref());
-}
-
-/// A `fn` parameter: record/list destructuring is parenthesized so it can
-/// never be confused with the block body (e.g. `fn f ({x: a}) = ...`).
-fn format_fn_param(out: &mut String, pat: &Pattern) {
-    match &pat.kind {
-        PatKind::Record { .. } | PatKind::List(_) if pat.annotation.is_none() => {
-            out.push('(');
-            format_pattern(out, pat);
-            out.push(')');
-        }
-        _ => format_pattern(out, pat),
-    }
 }
 
 fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
@@ -233,6 +277,13 @@ fn format_pat_kind(out: &mut String, kind: &PatKind, annotation: Option<&Ty>) {
             let body = format!("{{{}}}", inner.join(", "));
             render_pat_atom(out, &body, annotation);
         }
+        PatKind::Constructor { name, payload } => match payload {
+            Some(p) => {
+                let body = format!("{name} {}", pat_str(p));
+                render_pat_atom(out, &body, annotation);
+            }
+            None => render_pat_atom(out, name, annotation),
+        },
     }
 }
 
@@ -385,7 +436,7 @@ fn format_expr_inner(out: &mut String, expr: &Expr, ctx: Prec) {
             out.push_str("match ");
             format_expr(out, &m.scrutinee, Prec::Top);
             out.push_str(" {\n");
-            for arm in &m.arms {
+            for (i, arm) in m.arms.iter().enumerate() {
                 out.push_str("    ");
                 format_pattern(out, &arm.pattern);
                 if let Some(g) = &arm.guard {
@@ -394,6 +445,9 @@ fn format_expr_inner(out: &mut String, expr: &Expr, ctx: Prec) {
                 }
                 out.push_str(" => ");
                 format_expr(out, &arm.body, Prec::Top);
+                if i + 1 < m.arms.len() {
+                    out.push(',');
+                }
                 out.push('\n');
             }
             out.push('}');
@@ -425,9 +479,6 @@ fn format_call(out: &mut String, call: &CallExpr) {
     format_expr(out, base, Prec::Atom);
     for arg in args {
         out.push(' ');
-        // Records and blocks cannot be bare space-application arguments
-        // (the grammar reserves `f { ... }` so a `match`/`fn` brace body is
-        // unambiguous), so they are parenthesized like other compound args.
         let atomic = matches!(
             arg,
             Expr::Var(_)
@@ -436,6 +487,8 @@ fn format_call(out: &mut String, call: &CallExpr) {
                 | Expr::Index(_)
                 | Expr::Tuple(_)
                 | Expr::List(_)
+                | Expr::Record(_)
+                | Expr::Block(_)
                 | Expr::Match(_)
         );
         if atomic {
@@ -499,7 +552,8 @@ fn format_lit(lit: &Lit) -> String {
     match lit {
         Lit::Bool(b) => b.to_string(),
         Lit::Int(i) => i.to_string(),
-        Lit::Float(f) => f.to_string(),
+        // Debug formatting keeps a trailing `.0` so floats round-trip.
+        Lit::Float(f) => format!("{f:?}"),
         Lit::Str(s) => format!("\"{}\"", s),
     }
 }

@@ -11,30 +11,38 @@ fn roundtrip_ok(src: &str) -> bool {
     };
     let printed = format_program(&ast1);
     match parse_program(&printed) {
-        Ok(ast2) => ast1 == ast2,
+        // Compare statements only: spans record source positions and differ
+        // between the original and the normalized formatting.
+        Ok(ast2) => ast1.statements == ast2.statements,
         Err(_) => false,
     }
 }
 
 const SAMPLES: &[&str] = &[
-    "blocks",
-    "borrow",
-    "fn_blocks",
-    "functions",
-    "intrinsics",
-    "lambdas",
-    "let_and_mutation",
-    "match",
-    "match_literals",
-    "match_nested",
-    "match_records",
-    "match_tuples",
-    "mutation_spec",
-    "polymorphism",
-    "partial_application",
-    "records",
-    "spec_where",
-    "tuple_destructuring",
+    "basics/blocks",
+    "specs/borrow",
+    "basics/fn_blocks",
+    "basics/functions",
+    "basics/intrinsics",
+    "basics/lambdas",
+    "basics/let_and_mutation",
+    "matching/match",
+    "matching/exhaustiveness",
+    "matching/match_literals",
+    "matching/match_nested",
+    "matching/match_records",
+    "matching/match_tuples",
+    "specs/mutation_spec",
+    "specs/polymorphism",
+    "basics/partial_application",
+    "types/records",
+    "specs/spec_where",
+    "matching/tuple_destructuring",
+    "types/sum_types_constructors",
+    "types/sum_types_bare",
+    "types/record_types",
+    "types/type_synonyms",
+    "specs/spec_checked",
 ];
 
 #[test]

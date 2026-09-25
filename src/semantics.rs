@@ -25,6 +25,8 @@ use crate::ast::{
     TypeDecl,
 };
 
+pub use crate::types::{MonoType, TypeScheme};
+
 /// A source span as 0-based byte offsets into the program source.
 pub type Span = (usize, usize);
 
@@ -269,17 +271,6 @@ pub enum SpecOrigin {
     Inferred(Vec<Span>),
 }
 
-/// A callable type scheme. Quantified variables are `TypeVarId`s over a
-/// `MonoType` body (the internal inference representation from `types`);
-/// the legacy `ast::Ty`-bodied `TypeScheme` below is retained only until the
-/// inference pipeline switches the typed IR over.
-#[derive(Debug, Clone, PartialEq)]
-pub struct TypeScheme {
-    pub quantified: Vec<String>,
-    pub constraints: Vec<crate::ast::Constraint>,
-    pub body: Ty,
-}
-
 /// One clause after type checking: its patterns plus the inferred type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedPatternClause {
@@ -288,7 +279,7 @@ pub struct TypedPatternClause {
     /// The curried clause type `P1 -> ... -> Pn -> R` (type dispatch).
     /// Pattern dispatch and type dispatch are separate stages, so both are
     /// retained.
-    pub clause_ty: Ty,
+    pub clause_ty: MonoType,
     pub body: TypedExpr,
     /// Statement index of the source clause, for diagnostics.
     pub source_index: usize,
@@ -311,6 +302,8 @@ pub struct TypedSpecialization {
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedOverloadSet {
     pub name: String,
+    /// Source index of the first function clause in this overload set.
+    pub source_index: usize,
     pub specializations: Vec<TypedSpecialization>,
 }
 
@@ -318,7 +311,7 @@ pub struct TypedOverloadSet {
 /// record the overload resolution result.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedExpr {
-    pub ty: Ty,
+    pub ty: MonoType,
     pub kind: TypedExprKind,
 }
 
@@ -342,6 +335,12 @@ pub enum TypedExprKind {
         scrutinee: Box<TypedExpr>,
         arms: Vec<TypedMatchArm>,
     },
+    /// A recursively annotated expression whose dedicated node is still its
+    /// source AST form. Child order follows the source expression structure.
+    Composite {
+        source: Box<Expr>,
+        children: Vec<TypedExpr>,
+    },
     /// A construct not yet lowered into the typed IR; carries the parsed
     /// expression until its typed form is defined.
     Unresolved(Box<Expr>),
@@ -357,6 +356,7 @@ pub struct TypedMatchArm {
 /// A typed `let` binding.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TypedLet {
+    pub source_index: usize,
     pub mutable: bool,
     pub pattern: Pattern,
     pub annotation: Option<Ty>,
@@ -368,8 +368,9 @@ pub struct TypedLet {
 pub struct TypedProgram {
     pub overloads: Vec<TypedOverloadSet>,
     pub lets: Vec<TypedLet>,
-    /// Top-level expressions, in source order relative to `lets`.
+    /// Top-level expressions, in the same order as `expr_source_indices`.
     pub exprs: Vec<TypedExpr>,
+    pub expr_source_indices: Vec<usize>,
 }
 
 /// Lower a typed program back into the parsed AST shape the evaluator
@@ -381,27 +382,153 @@ pub struct TypedProgram {
 /// function, one match per specialization), not from name/arity adjacency
 /// while walking statements.
 pub fn lower_typed_program(program: &TypedProgram) -> Program {
+    enum Item<'a> {
+        Overload(&'a TypedOverloadSet),
+        Let(&'a TypedLet),
+        Expr(&'a TypedExpr),
+    }
+    let mut items = Vec::new();
+    items.extend(
+        program
+            .overloads
+            .iter()
+            .map(|set| (set.source_index, Item::Overload(set))),
+    );
+    items.extend(
+        program
+            .lets
+            .iter()
+            .map(|binding| (binding.source_index, Item::Let(binding))),
+    );
+    items.extend(
+        program
+            .exprs
+            .iter()
+            .zip(&program.expr_source_indices)
+            .map(|(expression, index)| (*index, Item::Expr(expression))),
+    );
+    items.sort_by_key(|(index, _)| *index);
+
+    let statements = items
+        .into_iter()
+        .map(|(_, item)| match item {
+            Item::Overload(set) => Stmt::Decl(Decl::Let(lower_overload_set(set))),
+            Item::Let(binding) => Stmt::Decl(Decl::Let(lower_typed_let(binding))),
+            Item::Expr(expression) => Stmt::Expr(lower_typed_expr(expression)),
+        })
+        .collect::<Vec<_>>();
+    let spans = statements
+        .iter()
+        .map(|_| crate::ast::Span { line: 0, col: 0 })
+        .collect();
+    Program { statements, spans }
+}
+
+
+/// Lower analyzed functions through the typed IR while preserving all
+/// non-function declarations and their source order for runtime setup.
+pub fn lower_analyzed_program(source: &Program, typed: &TypedProgram) -> Program {
+    let function_ir = TypedProgram {
+        overloads: typed.overloads.clone(),
+        lets: Vec::new(),
+        exprs: Vec::new(),
+        expr_source_indices: Vec::new(),
+    };
+    let lowered_functions = lower_typed_program(&function_ir);
+    let mut functions = std::collections::BTreeMap::new();
+    for statement in lowered_functions.statements {
+        if let Stmt::Decl(Decl::Let(binding)) = statement {
+            if let PatKind::Var(name) = &binding.pattern.kind {
+                functions.insert(name.clone(), binding);
+            }
+        }
+    }
+
+    let lets = typed
+        .lets
+        .iter()
+        .map(|binding| (binding.source_index, binding))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let expressions = typed
+        .exprs
+        .iter()
+        .zip(&typed.expr_source_indices)
+        .map(|(expression, index)| (*index, expression))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
     let mut statements = Vec::new();
-    for set in &program.overloads {
-        statements.push(Stmt::Decl(Decl::Let(lower_overload_set(set))));
+    let mut spans = Vec::new();
+    let mut emitted_functions = std::collections::BTreeSet::new();
+    for (index, statement) in source.statements.iter().enumerate() {
+        match statement {
+            Stmt::Decl(Decl::Fn(function)) => {
+                if emitted_functions.insert(function.name.clone()) {
+                    if let Some(binding) = functions.remove(&function.name) {
+                        statements.push(Stmt::Decl(Decl::Let(binding)));
+                        spans.push(source_span(source, index));
+                    }
+                }
+            }
+            Stmt::Decl(Decl::Spec(_)) => {}
+            Stmt::Decl(Decl::Let(_)) => {
+                if let Some(binding) = lets.get(&index) {
+                    statements.push(Stmt::Decl(Decl::Let(lower_typed_let(binding))));
+                    spans.push(source_span(source, index));
+                }
+            }
+            Stmt::Expr(_) => {
+                if let Some(expression) = expressions.get(&index) {
+                    statements.push(Stmt::Expr(lower_typed_expr(expression)));
+                    spans.push(source_span(source, index));
+                }
+            }
+            other => {
+                statements.push(other.clone());
+                spans.push(source_span(source, index));
+            }
+        }
     }
-    for l in &program.lets {
-        statements.push(Stmt::Decl(Decl::Let(lower_typed_let(l))));
-    }
-    for e in &program.exprs {
-        statements.push(Stmt::Expr(lower_typed_expr(e)));
-    }
-    Program { statements }
+    Program { statements, spans }
+}
+
+fn source_span(source: &Program, index: usize) -> crate::ast::Span {
+    source
+        .spans
+        .get(index)
+        .copied()
+        .unwrap_or(crate::ast::Span { line: 0, col: 0 })
 }
 
 fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
-    // Until multiple specializations share a runtime representation, each
-    // specialization lowers independently and a single-specialization set is
-    // just that specialization's dispatcher.
-    let value = match set.specializations.as_slice() {
-        [spec] => lower_specialization(&set.name, spec),
-        _ => unimplemented!("multi-specialization lowering arrives with overload resolution"),
+    let mut specializations = set.specializations.iter().collect::<Vec<_>>();
+    specializations.sort_by(|left, right| {
+        specialization_specificity(right)
+            .cmp(&specialization_specificity(left))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let first = specializations
+        .first()
+        .expect("an overload set must contain a specialization");
+    let mut clauses = specializations
+        .iter()
+        .flat_map(|specialization| {
+            specialization.clauses.iter().map(move |clause| {
+                (specialization_specificity(specialization), clause)
+            })
+        })
+        .collect::<Vec<_>>();
+    clauses.sort_by(|(left_specificity, left), (right_specificity, right)| {
+        right_specificity
+            .cmp(left_specificity)
+            .then_with(|| left.source_index.cmp(&right.source_index))
+    });
+    let merged = TypedSpecialization {
+        id: first.id,
+        scheme: first.scheme.clone(),
+        origin: first.origin.clone(),
+        clauses: clauses.into_iter().map(|(_, clause)| clause.clone()).collect(),
     };
+    let value = lower_specialization(&set.name, &merged);
     LetDecl {
         mutable: false,
         pattern: Pattern {
@@ -410,6 +537,49 @@ fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
         },
         annotation: None,
         value,
+    }
+}
+
+/// Specific type domains precede generic catch-all patterns in the shared
+/// runtime matcher. Source order remains the tie-breaker for equally specific
+/// clauses.
+fn specialization_specificity(specialization: &TypedSpecialization) -> (usize, usize) {
+    specialization
+        .clauses
+        .iter()
+        .flat_map(|clause| clause.patterns.iter())
+        .filter_map(|pattern| pattern.annotation.as_ref())
+        .map(|ty| {
+            let lowered = crate::types::lower_ty(ty, &std::collections::BTreeMap::new());
+            let nodes = type_nodes(&lowered);
+            (usize::from(!contains_type_variable(&lowered)), nodes)
+        })
+        .fold((0, 0), |(concrete, nodes), (is_concrete, size)| {
+            (concrete + is_concrete, nodes + size)
+        })
+}
+
+fn contains_type_variable(ty: &MonoType) -> bool {
+    match ty {
+        MonoType::Var(_) => true,
+        MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
+            args.iter().any(contains_type_variable)
+        }
+        MonoType::Function(from, to) => contains_type_variable(from) || contains_type_variable(to),
+        MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
+            contains_type_variable(inner)
+        }
+    }
+}
+
+fn type_nodes(ty: &MonoType) -> usize {
+    match ty {
+        MonoType::Var(_) => 1,
+        MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
+            1 + args.iter().map(type_nodes).sum::<usize>()
+        }
+        MonoType::Function(from, to) => 1 + type_nodes(from) + type_nodes(to),
+        MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => 1 + type_nodes(inner),
     }
 }
 
@@ -473,6 +643,86 @@ fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
     value
 }
 
+
+fn lower_next(children: &mut std::slice::Iter<'_, TypedExpr>) -> Expr {
+    lower_typed_expr(children.next().expect("typed child/source shape mismatch"))
+}
+fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
+    use crate::ast::{ListCons, ListExpr, RecordValueEntry};
+    let mut children = children.iter();
+    match source {
+        Expr::Unary(unary) => Expr::Unary(crate::ast::UnaryExpr {
+            op: unary.op.clone(),
+            operand: Box::new(lower_next(&mut children)),
+        }),
+        Expr::Binary(binary) => Expr::Binary(crate::ast::BinaryExpr {
+            op: binary.op.clone(),
+            lhs: Box::new(lower_next(&mut children)),
+            rhs: Box::new(lower_next(&mut children)),
+        }),
+        Expr::Tuple(tuple) => Expr::Tuple(crate::ast::TupleExpr {
+            items: tuple.items.iter().map(|_| lower_next(&mut children)).collect(),
+        }),
+        Expr::List(list) => {
+            fn lower_list(
+                list: &ListExpr,
+                children: &mut std::slice::Iter<'_, TypedExpr>,
+            ) -> ListExpr {
+                match list {
+                    ListExpr::Empty => ListExpr::Empty,
+                    ListExpr::Cells(cell) => ListExpr::Cells(Box::new(ListCons {
+                        head: Box::new(lower_typed_expr(
+                            children.next().expect("typed list child missing"),
+                        )),
+                        tail: Box::new(lower_list(&cell.tail, children)),
+                    })),
+                }
+            }
+            Expr::List(lower_list(list, &mut children))
+        }
+        Expr::Block(block) => {
+            let mut body = block.body.clone();
+            for statement in &mut body {
+                match statement {
+                    Stmt::Expr(_) => *statement = Stmt::Expr(lower_next(&mut children)),
+                    Stmt::Decl(Decl::Let(binding)) => binding.value = lower_next(&mut children),
+                    _ => {}
+                }
+            }
+            Expr::Block(crate::ast::BlockExpr { body })
+        }
+        Expr::Record(record) => {
+            let entries = record
+                .entries
+                .iter()
+                .map(|entry| match entry {
+                    RecordValueEntry::Field(name, _) => {
+                        RecordValueEntry::Field(name.clone(), lower_next(&mut children))
+                    }
+                    RecordValueEntry::Spread(_) => RecordValueEntry::Spread(lower_next(&mut children)),
+                })
+                .collect();
+            Expr::Record(crate::ast::RecordValueExpr { entries })
+        }
+        Expr::Member(member) => Expr::Member(crate::ast::MemberExpr {
+            obj: Box::new(lower_next(&mut children)),
+            field: member.field.clone(),
+        }),
+        Expr::Index(_) => Expr::Index(crate::ast::IndexExpr {
+            obj: Box::new(lower_next(&mut children)),
+            index: Box::new(lower_next(&mut children)),
+        }),
+        Expr::Ref(_) => Expr::Ref(crate::ast::RefExpr {
+            inner: Box::new(lower_next(&mut children)),
+        }),
+        Expr::Assign(_) => Expr::Assign(crate::ast::AssignExpr {
+            place: Box::new(lower_next(&mut children)),
+            value: Box::new(lower_next(&mut children)),
+        }),
+        _ => source.clone(),
+    }
+}
+
 fn lower_typed_let(l: &TypedLet) -> LetDecl {
     LetDecl {
         mutable: l.mutable,
@@ -505,6 +755,7 @@ fn lower_typed_expr(e: &TypedExpr) -> Expr {
                 })
                 .collect(),
         }),
+        TypedExprKind::Composite { source, children } => lower_composite_expr(source, children),
         TypedExprKind::Unresolved(expr) => (**expr).clone(),
     }
 }

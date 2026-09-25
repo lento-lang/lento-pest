@@ -1,0 +1,41 @@
+// Hybrid sums: bare member types inject implicitly and are matched with
+// typed patterns; constructors and bare alternatives can coexist. Both the
+// unbracketed (`int | str`) and bracketed (`[int | str]`) sum syntax work.
+type Id = int | str
+
+let num_id : Id = 42
+
+let text_id : Id = "hello"
+
+fn show_id id = match id {
+    (n : int) => concat "int " (to_string n),
+    (s : str) => concat "str " s
+}
+
+assert (show_id num_id == "int 42")
+assert (show_id text_id == "str hello")
+
+// The bracketed form is the same sum type syntax in any type position.
+type Bracketed = [int | str]
+let bracketed_id : Bracketed = 9
+assert (show_id bracketed_id == "int 9")
+
+type Answer = Yes | No | int
+
+let a_yes = Yes
+
+let a_no = No
+
+let a_num : Answer = 7
+
+fn show_answer ans = match ans {
+    Yes => "yes",
+    No => "no",
+    (n : int) => to_string n
+}
+
+assert (show_answer a_yes == "yes")
+assert (show_answer a_no == "no")
+assert (show_answer a_num == "7")
+println (show_id num_id)
+println (show_answer a_num)

@@ -1,13 +1,13 @@
 // Pattern matching: list spread destructuring, guards, list patterns, and
 // multi-clause `fn` grouping (which desugars into a lambda + `match`).
 let len = xs => match xs {
-    [] => 0
+    [] => 0,
     [x, ...xs] => 1 + len xs
 }
 
 let sign = n => match n {
-    n if n > 0 => 1
-    n if n < 0 => 0 - 1
+    n if n > 0 => 1,
+    n if n < 0 => 0 - 1,
     _ => 0
 }
 
@@ -20,6 +20,7 @@ fn zip [x, ...xs] [y, ...ys] = {
     let rest = zip xs ys
     concat pair rest
 }
+fn zip _ _ = []
 
 let five = 5
 let seven_neg = 0 - 7

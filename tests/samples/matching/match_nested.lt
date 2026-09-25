@@ -1,8 +1,8 @@
 // Nested match, match inside a lambda, and match arms returning tuples.
 let classify = n => match n {
-    0 => "zero"
+    0 => "zero",
     n => match n {
-        n if n > 10 => "big"
+        n if n > 10 => "big",
         _ => "small"
     }
 }
@@ -12,7 +12,7 @@ let apply = (f, x) => match (f, x) {
 }
 
 let describe = pair => match pair {
-    (0, 0) => ("origin", 0)
+    (0, 0) => ("origin", 0),
     (a, b) => ("point", a + b)
 }
 

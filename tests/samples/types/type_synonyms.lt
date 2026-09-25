@@ -1,0 +1,14 @@
+type Meters = int
+
+type Name = str
+
+let height : Meters = 180
+
+let who : Name = "ada"
+
+fn grow (h : Meters) = h + 1
+
+assert (grow height == 181)
+assert (height == 180)
+println (grow height)
+println (concat "hi " who)

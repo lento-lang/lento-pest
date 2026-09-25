@@ -1,0 +1,13 @@
+class Show a {
+    spec show : a -> int
+}
+
+impl Show int {
+    fn show x = x
+}
+
+impl Show str {
+    fn show x = 0
+}
+
+(show 7, show "hi")

@@ -10,36 +10,12 @@
 //   - `all a :: Ord.` quantifies type variables; `where` refines a whole signature.
 //   - Memory: `T` is logical value semantics; `ref T` shared borrow (inferred);
 //     `mut T` explicit exclusive mutable place; `ref x` materializes a borrow.
-//
-// Grammar notes:
-//   - Keywords are atomic tokens guarded by `!identifier_char`, so `refactor`
-//     can never lex as `ref actor`, `letter` never as `let ter`, etc.
-//   - Comments never consume their terminating newline: layout-significant
-//     newlines always survive lexical trivia.
-//   - `()` is unit, `(x)` is transparent grouping, and a tuple literal
-//     requires a comma: `(x, y)` or a singleton `(x,)`.
-//   - There is exactly one expression grammar. Contextual restrictions (e.g.
-//     a `match` scrutinee or an assignment place) are validated semantically
-//     during lowering, not by duplicating grammar rules.
-//   - `binop_expr` is deliberately flat (`operand (op operand)*`); operator
-//     precedence and associativity are established by the Pratt parser while
-//     lowering to `Expr` (see `parser.rs`).
 
 WHITESPACE            = _{ " " | "\t" | "\r" }
 COMMENT               = _{ multiline_comment | singleline_comment }
 multiline_comment     = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
-// The terminating newline belongs to the syntax (it is the statement
-// separator), never to the comment itself.
-singleline_comment    = _{ "//" ~ (!NEWLINE ~ ANY)* }
-// A statement boundary: a semicolon, one or more newlines, or the lookahead
-// end-of-input. `&EOI` never consumes input, so it must not appear inside a
-// repetition; repetitions use `line_break` instead.
-statement_sep         = _{ line_break | &EOI }
-line_break            = _{ (";" ~ NEWLINE*) | NEWLINE+ }
-
-// Inside delimiters, line breaks are insignificant: `soft_nl` may appear
-// after an opening delimiter, around separators, and before a closing one.
-soft_nl               = _{ NEWLINE* }
+singleline_comment    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI) }
+statement_sep         = _{ (";" ~ NEWLINE*) | NEWLINE+ | &EOI }
 
 // --------------------------------------------------------------------------
 // Lexical atoms
@@ -47,242 +23,189 @@ soft_nl               = _{ NEWLINE* }
 
 identifier_char_start  = { ASCII_ALPHA | "_" }
 identifier_char        = { ASCII_ALPHA | ASCII_DIGIT | "_" }
-
-// Keywords are real lexemes: an atomic token that cannot be a proper prefix
-// of an identifier (`refactor` never lexes as `ref actor`). They are atomic
-// so the `!identifier_char` boundary sees the following character directly;
-// the tokens still appear in the parse tree for spans, and parser.rs skips
-// them when walking children.
-// Reserved keywords: real lexemes that cannot be a proper prefix of an
-// identifier (`refactor` never lexes as `ref actor`). They are atomic so the
-// `!identifier_char` boundary sees the following character directly; the
-// tokens still appear in the parse tree for spans, and parser.rs skips them.
-//
-// `all` and `where` are *contextual* keywords: they introduce quantifiers
-// and refinements in spec-type position (a context that never holds an
-// expression), but remain ordinary identifiers elsewhere — `all` is also a
-// list intrinsic and `where`/`if` may be rebound. Only genuinely
-// statement/expression-leading keywords are reserved.
-kw_spec   = @{ "spec"  ~ !identifier_char }
-kw_type   = @{ "type"  ~ !identifier_char }
-kw_let    = @{ "let"   ~ !identifier_char }
-kw_fn     = @{ "fn"    ~ !identifier_char }
-kw_mut    = @{ "mut"   ~ !identifier_char }
-kw_ref    = @{ "ref"   ~ !identifier_char }
-kw_match  = @{ "match" ~ !identifier_char }
-kw_if     = @{ "if"    ~ !identifier_char }
-kw_all    = @{ "all"   ~ !identifier_char }
-kw_where  = @{ "where" ~ !identifier_char }
-boolean   = @{ ("true" | "false") ~ !identifier_char }
-keyword   = _{
-    kw_spec | kw_type | kw_let | kw_fn | kw_mut | kw_ref | kw_match | kw_if
-    | boolean
-}
-
-identifier = @{ !keyword ~ identifier_char_start ~ identifier_char* }
-integer    = @{ ASCII_DIGIT+ }
-float      = @{ integer ~ "." ~ integer }
-number     = _{ float | integer }
-
-// Strings are single-line and honor escape sequences; an escaped quote does
-// not terminate the literal.
-string = @{
-    "\""
-    ~ (escaped_char | !("\"" | "\\" | NEWLINE) ~ ANY)*
-    ~ "\""
-}
-escaped_char = _{ "\\" ~ ("n" | "r" | "t" | "0" | "\\" | "\"" | "'") }
+identifier             = @{ identifier_char_start ~ identifier_char* }
+integer                = @{ ASCII_DIGIT+ }
+float                  = @{ integer ~ "." ~ integer }
+number                 = _{ float | integer }
+boolean                = @{ "true" | "false" }
+escaped_char           = _{ "\\" ~ ("n" | "r" | "t" | "0" | "\\" | "\"" | "'") }
+string_inner           = @{ (!"\"" ~ ANY)* }
+string               = { "\"" ~ string_inner ~ "\"" }
 
 // --------------------------------------------------------------------------
 // Program / declaration structure
 // --------------------------------------------------------------------------
 
-// Blank lines (and whole-line comments) may appear between and around
-// statements, both at the top level and inside blocks.
-program = { SOI ~ line_break* ~ (statement ~ (line_break+ ~ statement)* ~ line_break*)? ~ EOI }
-body    = { line_break* ~ (statement ~ (line_break+ ~ statement)*)? ~ line_break* }
-block   = { "{" ~ body ~ "}" }
+program        = { SOI ~ (statement ~ statement_sep)* ~ EOI }
+body           = { NEWLINE* ~ ((statement ~ statement_sep)* ~ statement?)? ~ NEWLINE* }
+block          = { "{" ~ body ~ "}" }
 
-statement   = _{ declaration | expression }
+statement      = _{ declaration | expression }
 
-declaration = _{ spec_decl | type_decl | let_decl | fn_clause }
+declaration    = _{ class_decl | impl_decl | spec_decl | type_decl | let_decl | fn_clause }
+
+// A class is a named scope of required ordinary specs. Its type parameters
+// may be proper types or higher-kinded constructors; kinds are inferred later.
+class_decl     = { "class" ~ identifier ~ type_param* ~ "{" ~ NEWLINE* ~ (spec_decl ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+
+// An implementation explicitly associates a class with a type or type
+// constructor and supplies ordinary function definitions for its specs.
+impl_decl      = { "impl" ~ identifier ~ impl_target? ~ "{" ~ NEWLINE* ~ (fn_clause ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+impl_target    = { type_atom+ }
+class_member_sep = _{ (";" ~ NEWLINE*) | NEWLINE+ | &"}" }
 
 // `spec name : spec_type`
-spec_decl = { kw_spec ~ identifier ~ ":" ~ spec_type }
+spec_decl      = { "spec" ~ identifier ~ ":" ~ spec_type }
 
-// `type name = <type>`
-type_decl = { kw_type ~ identifier ~ "=" ~ ltype }
+// `type name params* = <type>` — the right-hand side is either a plain type
+// (a synonym), a `[alt | alt]` sum, or an unbracketed alternation
+// `alt | alt` (general sums: `int | str`; constructor sums: `Some a | None`).
+// In unbracketed alternations an uppercase identifier is always a
+// constructor; use the bracketed form for applied types as alternatives.
+type_decl      = { "type" ~ identifier ~ type_param* ~ "=" ~ ltype ~ ty_alt* }
+ty_alt         = { "|" ~ NEWLINE* ~ ltype }
+type_param     = @{ type_var }
 
-// `let [mut] pattern [: type] = expression`
-let_decl = { kw_let ~ let_mut? ~ pattern ~ (":" ~ ltype)? ~ "=" ~ expression }
-let_mut  = { kw_mut }
+// `let [mut] pattern [: type]  = expression`
+let_decl       = { "let" ~ let_mut? ~ pattern ~ (":" ~ ltype)? ~ "=" ~ expression }
+let_mut        = { "mut" }
 
 // `fn name function_pattern* [-> type] = expression`
 // or `fn name function_pattern* [-> type] { ... }`
-//
-// A block body must be introduced by `=`, and a destructuring parameter
-// (tuple/list/record) must be parenthesized, so a `{ ... }` body can never
-// be misread as an empty record parameter. For example:
-//
-//   fn f x = { x + 1 }        block body
-//   fn f ({x, y}) = x + y     record destructuring parameter
-fn_clause = { kw_fn ~ identifier ~ function_pattern* ~ ("->" ~ ltype)? ~ "=" ~ expression }
+fn_clause      = { "fn" ~ identifier ~ function_pattern* ~ ("->" ~ ltype)? ~ ("=" ~ expression | block) }
 
-// A function parameter: a bare name, wildcard or literal, or a parenthesized
-// destructuring (tuple/list/record with optional element annotations).
-function_pattern = {
-      tuple_param
-    | list_param
-    | record_param
-    | wildcard
-    | literal_pattern
-    | identifier
-}
-
-tuple_param  = { "(" ~ param_field ~ ("," ~ param_field)* ~ ","? ~ ")" }
-param_field  = { function_pattern ~ (":" ~ ltype)? }
-list_param   = { "[" ~ soft_nl ~ (pattern ~ ("," ~ soft_nl ~ pattern)* ~ ("," ~ soft_nl ~ spread_pattern | "," ~ soft_nl)? | spread_pattern)? ~ soft_nl ~ "]" }
-record_param = { "{" ~ soft_nl ~ (record_field ~ ("," ~ soft_nl ~ record_field)* ~ ("," ~ soft_nl ~ spread_pattern | "," ~ soft_nl)? | spread_pattern)? ~ soft_nl ~ "}" }
+function_pattern  = { pattern }
 
 // --------------------------------------------------------------------------
 // Spec types
 // --------------------------------------------------------------------------
 
-spec_type = _{ soft_nl ~ (quantifier* ~ arrow_type ~ where_clause?) }
+spec_type  = _{ NEWLINE* ~ (quantifier* ~ arrow_type ~ where_clause?) }
 
-quantifier  = { kw_all ~ type_var ~ ("," ~ soft_nl ~ type_var)* ~ constraints? ~ "." ~ soft_nl }
-type_var    = @{ ASCII_ALPHA_LOWER ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
-constraints = { "::" ~ constraint ~ ("," ~ constraint)* }
-constraint  = { identifier ~ type_atom* }
+quantifier   = { "all" ~ type_var ~ ("," ~ NEWLINE* ~ type_var)* ~ constraints? ~ "." ~ NEWLINE* }
+type_var     = @{ ASCII_ALPHA_LOWER ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
+constraints  = { ("::" | ":") ~ constraint ~ (("," | "+") ~ constraint)* }
+constraint   = { identifier ~ type_atom* }
 
 // Conditions are comma-separated and terminated by the newline: a `where`
 // clause never reaches across a line break (a newline without a preceding
 // comma ends the clause), so it cannot absorb a following declaration
 // (e.g. `fn divide ...` on the next line). A comma may sit at end-of-line
 // with the next condition starting on the following line.
-where_clause = { soft_nl ~ kw_where ~ soft_nl ~ expression ~ ("," ~ soft_nl ~ expression)* }
+where_clause  = { NEWLINE* ~ "where" ~ NEWLINE* ~ expression ~ ("," ~ NEWLINE* ~ expression)* }
 
 // Types are right-associative function arrows.
 ltype        = _{ arrow_type }
-arrow_type   = { type_domain ~ (soft_nl ~ "->" ~ soft_nl ~ arrow_type)? }
+arrow_type   = { type_domain ~ (NEWLINE* ~ "->" ~ NEWLINE* ~ arrow_type)? }
 type_domain  = _{ named_binder | type_atom }
 named_binder = { "(" ~ identifier ~ ":" ~ type_atom ~ ")" }
 
 type_atom    = _{ ty_ref | ty_mut | type_base }
-ty_ref       = { kw_ref ~ type_atom }
-ty_mut       = { kw_mut ~ type_atom }
-type_base    = { identifier ~ type_args? | "(" ~ soft_nl ~ arrow_type? ~ soft_nl ~ ")" | "[" ~ type_atom ~ "]" }
-type_args    = { "<" ~ soft_nl ~ type_atom ~ ("," ~ soft_nl ~ type_atom)* ~ ","? ~ soft_nl ~ ">" }
-
-// --------------------------------------------------------------------------
-// Patterns (left-value shapes: used in `let`, lambda params, and match
-// arms; `fn` parameters use the stricter `function_pattern` above). A
-// pattern is a single atom or a destructuring whose parts may carry optional
-// type annotations `(x : Int)`.
-// --------------------------------------------------------------------------
-
-pattern     = { pattern_alt }
-pattern_alt = {
-      "(" ~ soft_nl ~ pattern_elem ~ ("," ~ soft_nl ~ pattern_elem)+ ~ ","? ~ soft_nl ~ ")"  // tuple destructure: (a, b)
-    | "(" ~ soft_nl ~ pattern ~ soft_nl ~ ":" ~ soft_nl ~ ltype ~ soft_nl ~ ")"              // single annotated: (x : Int)
-    | atom_pattern
-    | "(" ~ soft_nl ~ pattern ~ soft_nl ~ ")"                                                 // grouped: (a)
+ty_ref       = { "ref" ~ type_atom }
+ty_mut       = { "mut" ~ type_atom }
+// Sum types `[int | str]` require at least one `|`, so `[T]` stays a list
+// type. A sum alternative is either an uppercase constructor `Name payload`
+// or a bare type. Record types `{ a: int, b: bool }` list named fields.
+type_base    = {
+      ty_sum
+    | identifier ~ type_args? ~ ty_app_args?
+    | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
+    | "[" ~ type_atom ~ "]"
+    | ty_record
 }
-atom_pattern    = _{ wildcard | identifier | literal_pattern | list_pattern | record_pattern }
-wildcard        = { "_" ~ !identifier_char }
+type_args    = { "<" ~ type_atom ~ ("," ~ type_atom)* ~ ">" }
+ty_app_args  = { type_atom+ }
+ty_sum       = {
+    "[" ~ NEWLINE* ~ sum_alternative
+        ~ (NEWLINE* ~ "|" ~ NEWLINE* ~ sum_alternative)+
+        ~ NEWLINE* ~ "]"
+}
+sum_alternative = _{ sum_ctor_alt | type_atom }
+sum_ctor_alt    = { constructor_name ~ type_atom }
+constructor_name = @{ 'A'..'Z' ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
+ty_record       = {
+    "{" ~ NEWLINE* ~ (ty_record_field ~ ("," ~ NEWLINE* ~ ty_record_field)*)? ~ NEWLINE* ~ "}"
+}
+ty_record_field = { identifier ~ ":" ~ type_atom }
+
+// --------------------------------------------------------------------------
+// Patterns (left-value shapes: used in `let`, function params, lambda params,
+// and match arms). A pattern is a single atom or a destructuring whose parts
+// may carry optional type annotations `(x : Int)`.
+// --------------------------------------------------------------------------
+
+pattern         = { pattern_alt }
+pattern_alt     = {
+      "(" ~ pattern_elem ~ ("," ~ pattern_elem)+ ~ ")"   // tuple destructure: (a, b)
+    | "(" ~ pattern ~ ":" ~ ltype ~ ")"                  // single annotated: (x : Int)
+    | atom_pattern
+    | "(" ~ pattern ~ ")"                                // grouped: (a)
+}
+// `boolean` must precede `identifier`: otherwise `true`/`false` parse as
+// variable patterns and the first literal arm always wins.
+atom_pattern    = _{ constructor_pattern | literal_pattern | identifier | "_" | list_pattern | record_pattern }
+// `Some x` — an uppercase constructor applied to one payload pattern. Bare
+// uppercase names (`None`) stay identifier patterns and are resolved against
+// the constructor table at check/eval time.
+constructor_pattern = { constructor_name ~ ctor_payload }
+ctor_payload        = _{ pattern }
 literal_pattern = _{ boolean | number | string }
 pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
-list_pattern    = { "[" ~ soft_nl ~ (pattern ~ ("," ~ soft_nl ~ pattern)* ~ ("," ~ soft_nl ~ spread_pattern | "," ~ soft_nl)? | spread_pattern)? ~ soft_nl ~ "]" }
+list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "]" }
 spread_pattern  = { "..." ~ identifier }
-record_pattern  = { "{" ~ soft_nl ~ (record_field ~ ("," ~ soft_nl ~ record_field)* ~ ("," ~ soft_nl ~ spread_pattern | "," ~ soft_nl)? | spread_pattern)? ~ soft_nl ~ "}" }
-record_field    = { identifier ~ ":" ~ soft_nl ~ pattern }
+record_pattern  = { "{" ~ (record_field ~ ("," ~ record_field)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "}" }
+record_field    = { identifier ~ ":" ~ pattern }
 
 // --------------------------------------------------------------------------
 // Expressions (application only here; `fn` LHS is never parsed as application)
-//
-// Hierarchy (loosest to tightest):
-//
-//   expression = assignment | lambda | binop
-//   binop      = applicative (infix_op applicative)*   (flat; Pratt-parsed)
-//   applicative = prefix+                              (space application)
-//   prefix     = prefix_op* postfix                    (ref / - / !)
-//   postfix    = atom postfix_op*                      (call/member/index)
-//   atom       = literal | tuple | list | block | record | match | ident | (e)
 // --------------------------------------------------------------------------
 
-expression = _{ assignment | lambda_expr | binop_expr }
+expression     = _{ assignment | lambda_expr | binop_expr }
 
-// `=` mutation: place := value. The place is parsed broadly as an
-// applicative; whether it is actually assignable (a variable, member or
-// index place) is a semantic check performed during evaluation.
-assignment = { applicative ~ "=" ~ expression }
+// `=` mutation: place := value
+assignment     = { place_expr ~ "=" ~ expression }
+place_expr     = { applicative }
 
 lambda_expr    = { lambda_pattern+ ~ "=>" ~ expression }
 lambda_pattern = { pattern }
 
-// Deliberately flat. Precedence and associativity are established by the
-// Pratt parser while lowering to `Expr` (see `parser.rs::binop_expr`).
-binop_expr = { applicative ~ (infix_op ~ applicative)* }
-infix_op   = @{ ("==" | "!=" | "<=" | ">=" | "&&" | "||" | "+" | "-" | "*" | "/" | "%" | "<" | ">") }
+binop_expr     = { applicative ~ (infix_op ~ applicative)* }
+match_scrutinee = { match_applicative ~ (infix_op ~ match_applicative)* }
+infix_op       = @{ ("==" | "!=" | "<=" | ">=" | "&&" | "||" | "+" | "-" | "*" | "/" | "%" | "<" | ">") }
 
-// Space-separated application: `f x y`. Application arguments are `arg_atom`s:
-// every atom except a bare block or record, so that `f { ... }` cannot be
-// misread as applying `f` to a block — this is what keeps a single expression
-// grammar unambiguous around `match scrutinee { ... }` (the scrutinee never
-// swallows its own brace-delimited body) and around `fn f x = { ... }`.
-// To pass a block/record as a space argument, parenthesize it: `f ({ ... })`.
-// Call-with-parens `f({ ... })` and record/block in every other position are
-// unaffected.
-applicative = _{ prefix ~ (arg_prefix)* }
-// A unary `-` never starts an application argument: `f - x` is infix
-// subtraction, matching the visual precedence (negate an argument with
-// `f (-x)`). `ref` and `!` are unambiguous and remain available.
-arg_prefix    = _{ arg_prefix_op* ~ arg_postfix }
-arg_prefix_op =  { kw_ref | "!" }
-arg_postfix   = _{ arg_atom ~ postfix_op* }
-arg_atom      = _{ literal | tuple | unit | list | match_expr | identifier | grouped_expr }
+applicative    = _{ postfix+ }
+match_applicative = _{ match_postfix+ }
+postfix        = _{ primary ~ postfix_op* }
+match_postfix  = _{ match_primary ~ postfix_op* }
+postfix_op     = _{ member_access | index_access }
+member_access  = { "." ~ identifier }
+index_access   = { "[" ~ expression ~ "]" }
 
-prefix     = _{ prefix_op* ~ postfix }
-prefix_op  =  { kw_ref | "-" | "!" }
+primary        = _{ literal | tuple | list | block | record_value | ref_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
+match_primary  = _{ literal | tuple | list | record_value | ref_match_expr | match_expr | call | identifier | "(" ~ expression ~ ")" }
+literal        = _{ boolean | number | string }
+ref_expr       = { "ref" ~ expression }
+ref_match_expr = { "ref" ~ match_scrutinee }
 
-postfix    = _{ atom ~ postfix_op* }
-postfix_op = _{ call_args | member_access | index_access }
-
-// Any expression may be called: `f(x)`, `obj.f(x)`, `factory()(x)`,
-// `(f)(x)`. Calls with parentheses and space-separated application both
-// lower to the same `Call` AST node.
-call_args     = { "(" ~ soft_nl ~ (expression ~ ("," ~ soft_nl ~ expression)* ~ ","?)? ~ soft_nl ~ ")" }
-member_access = { "." ~ identifier }
-index_access  = { "[" ~ soft_nl ~ expression ~ soft_nl ~ "]" }
-
-atom = _{ tuple | literal | unit | list | block | record_value | match_expr | identifier | grouped_expr }
-literal = _{ boolean | number | string }
-
-unit         = { "(" ~ soft_nl ~ ")" }
-tuple        = { "(" ~ soft_nl ~ expression ~ soft_nl ~ "," ~ soft_nl ~ (expression ~ ("," ~ soft_nl ~ expression)* ~ ","?)? ~ soft_nl ~ ")" }
-grouped_expr =  { "(" ~ soft_nl ~ expression ~ soft_nl ~ ")" }
-list         = { "[" ~ soft_nl ~ (expression ~ ("," ~ soft_nl ~ expression)* ~ ","?)? ~ soft_nl ~ "]" }
-
-// `match scrutinee { pattern [if guard] => body, ... }` — arms may be
-// separated by commas, semicolons, or newlines; `=>` maps a pattern to an
-// expression exactly as lambdas do (`->` stays reserved for type-level use).
-//
-// The scrutinee is any expression. Two layout rules keep a single
-// expression grammar unambiguous:
-//   1. Application never takes a bare block/record argument, so the
-//      scrutinee cannot swallow its own `{ ... }` body.
-//   2. The arm list opens with a newline (the idiomatic form); within it,
-//      guard conditions are infix-level (`binop_expr`) so a guard cannot
-//      contain `=`/`=>` and the `=>` boundary is always clear.
-match_expr     = { kw_match ~ soft_nl ~ expression ~ soft_nl ~ "{" ~ NEWLINE ~ soft_nl ~ match_arm_list ~ soft_nl ~ "}" }
-match_arm_list = _{ match_arm ~ (match_arm_sep ~ soft_nl ~ match_arm)* }
+// `match scrutinee { pattern [if guard] => body, ... }` — arms must be
+// separated by commas; a comma may sit at end-of-line with the next arm on
+// the following line. `=>` maps a pattern to an expression exactly as
+// lambdas do (`->` stays reserved for type-level use).
+match_expr     = { "match" ~ NEWLINE* ~ match_scrutinee ~ NEWLINE* ~ "{" ~ NEWLINE* ~ match_arm ~ (match_arm_sep ~ match_arm)* ~ NEWLINE* ~ "}" }
 match_arm      = { pattern ~ guard? ~ "=>" ~ expression }
-guard          = { kw_if ~ binop_expr }
-match_arm_sep  = _{ (";" ~ NEWLINE*) | NEWLINE+ | "," }
+guard          = { "if" ~ expression }
+match_arm_sep  = _{ "," ~ NEWLINE* }
 
-// `{ a: 1, ...r, b: 2 }` — record value literal. Records must have at least
-// one entry: a bare `{}` parses as a block (see `block`), never as a record.
-record_value       = { "{" ~ soft_nl ~ record_value_entry ~ ("," ~ soft_nl ~ record_value_entry)* ~ ","? ~ soft_nl ~ "}" }
+// `()` is the empty tuple (unit-ish); tuples need at least one comma, so a
+// single parenthesized expression `(e)` is a grouped expression, which lets
+// calls be passed as juxtaposed arguments: `concat "a" (to_string 1)`.
+call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+tuple          = { "(" ~ ")" | "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
+list           = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
+
+// `{ a: 1, ...r, b: 2 }` — record value literal. A bare `{}` is a block
+// (empty braces), never an empty record, so records must have an entry.
+record_value   = { "{" ~ (record_value_entry ~ ("," ~ record_value_entry)*)? ~ "}" }
 record_value_entry = _{ record_value_field | record_value_spread }
-record_value_field = { identifier ~ ":" ~ soft_nl ~ expression }
+record_value_field  = { identifier ~ ":" ~ expression }
 record_value_spread = { "..." ~ expression }

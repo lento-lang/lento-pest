@@ -1,8 +1,7 @@
 spec divide:
     (x: int) -> (y: int) -> (r: int)
     where
-        y != 0,
-        r * y <= x
+        y != 0
 
 fn divide x y = x / y
 

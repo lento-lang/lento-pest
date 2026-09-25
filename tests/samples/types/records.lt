@@ -10,8 +10,8 @@ let merged = { ...origin, z: 9, y: 1 }
 println merged
 assert (merged == { x: 0, y: 1, z: 9 })
 
-fn norm ({ x: a, y: b }) = (a, b)
-let (dx, dy) = norm({ x: 3, y: 4 })
+fn norm { x: a, y: b } = (a, b)
+let (dx, dy) = norm { x: 3, y: 4 }
 assert (dx == 3)
 assert (dy == 4)
 

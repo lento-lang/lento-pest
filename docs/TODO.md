@@ -1,0 +1,109 @@
+# TODO — lento-pest
+
+Working status doc. Completed work is at the top; remaining work below.
+Deferred-feature decisions live in `SUM_TYPES_PLAN.md` (non-goals list);
+where-clause design in `docs/where-refinements.md`.
+
+## Done
+
+### 2026-09 — type checker bug fixes (5 commits)
+
+All found by review; each has a regression test in `tests/typecheck.rs`.
+
+- Assignment never checked the assigned value against the binding's type
+  (`x = "hello"` after `let mut x = 5` checked clean). Mutable lets are
+  monomorphic, so the value is now unified with the binding's current type.
+- Parameterized type synonyms silently dropped their type arguments
+  (`Wrapper<int>` ≡ `Wrapper<str>`). Arguments now bind to the synonym's
+  parameters, mirroring `ctor_instance` for sums.
+- `generalize` dropped fully-concrete pending constraints unverified when a
+  let annotation bound the constraint's last free variable
+  (`let f : str -> str = x => x * x` checked clean). Pending constraints are
+  now re-solved after the annotation unify.
+- Spec conformance only fired when the named `let` was processed: specs
+  declared after their definition were never checked, and specs without any
+  definition passed silently. End-of-program sweep now verifies every
+  recorded spec.
+- `.len` on tuples/lists was rejected by member access while the `Len`
+  class and the runtime both accept it. `.len` on concrete tuples/lists now
+  type-checks; closed records intentionally stay plain field lookups
+  (matches `eval_member`).
+
+### 2026-09 — SMT-checked where-clause refinements
+
+`spec ... where ...` clauses were parsed but ignored. Now verified
+statically with cvc5 (official Rust bindings); see
+`docs/where-refinements.md` for the full design.
+
+- Clause classification: the spec's final named binder is the result
+  parameter; clauses referencing it are postconditions, the rest are
+  preconditions. Only named binders are referencable.
+- Preconditions are proven at every fully applied call site (caller
+  variables become solver constants of their inferred sorts); partial
+  application and first-class use of precondition-carrying functions are
+  compile errors.
+- Postconditions are proven against the definition body (result bound to
+  the encoded body, inputs universally quantified, preconditions assumed);
+  counterexamples carry witnesses.
+- Encoding: ints as 64-bit bitvectors (runtime `i64`), floats as IEEE-754
+  doubles, bools. Anything outside the subset (strings, lists, records,
+  match bodies, intrinsics) or a solver `unknown`/timeout is a strict
+  compile error — no runtime fallback.
+- Companion fix: parser applied no operator precedence (`1 + 2 * 3` was 9);
+  now precedence-climbing, `|| < && < cmp < +- < */%`.
+
+### 2026-09 — match exhaustiveness analysis
+
+Non-matching scrutinees were runtime errors. Matches are now checked
+statically; see `src/exhaustive.rs` module docs.
+
+- Maranget-style usefulness over a binding-erased pattern IR. Finite
+  signatures enumerate cases (sums, bool); lists split nil/cons with an
+  irrefutable-row dominance shortcut; tuples/records expand into columns.
+- Undetermined scrutinee columns are judged against the shapes the arms
+  admit (sound because the checker's deferred `Member` constraints pin the
+  column — verified empirically).
+- A scrutinee that is literally a constructor application pins the tag:
+  one unguarded arm must match it. Guarded arms cover nothing; typed
+  patterns with refutable inners claim nothing.
+- Missing-case errors name the case (`missing constructor 'None'`,
+  `missing an empty list`).
+- Grammar change: match arms must be separated by commas (may sit at
+  end-of-line; no trailing comma; `;` and bare-newline separators removed).
+  pprint emits commas; all samples and inline test programs updated.
+
+## Remaining
+
+Ordered by current priority. All were explicit non-goals in
+`SUM_TYPES_PLAN.md` unless noted.
+
+1. **User-defined type classes** — constraints are hardcoded to the eight
+   builtin classes (`Num Ord Eq Add Concat Seq Len Haystack`). Interfaces
+   for user classes would also let where-clauses reference user predicates
+   (currently builtin-only).
+2. **Modules** — single flat namespace; top-level declarations may shadow
+   in nested blocks only.
+3. **Polymorphic variants** — anonymous `[a | b]` sums are generative per
+   occurrence; no shared open variant types.
+4. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
+   runtime checks remain the authority.
+5. **Expression-level error spans** — errors report the enclosing
+   statement's line:col only.
+6. **Uppercase lambda-param collision** — `A b =>` parses as a constructor
+   pattern, not an annotated lambda param; documented convention
+   (lowercase params are the norm), unfixed.
+
+### Known limitations introduced with recent features
+
+- **Exhaustiveness, closed-world columns**: for a scrutinee whose type is
+  not yet determined, completeness is judged against the shapes the arms
+  admit. An unknown column whose arms name only one constructor of a
+  multi-alternative sum passes checking; other alternatives are not
+  demanded. Latent only: current typing rejects such callsites.
+- **Where-clauses, solver budget**: postconditions relating `sdiv` results
+  to inputs (`r * y <= x` for `x / y`) are true but exceed bounded
+  bit-blasting budgets (cvc5 and z3 both) → `cannot verify` compile error.
+  Verification is all-or-nothing; there is no runtime check and no
+  acceptance on `unknown`.
+- **REPL** is parse-only by design (no type checking in the REPL or
+  `--fmt` paths).
