@@ -185,10 +185,8 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
 
     env.insert("print".to_string(), mono(unary(var(a), ctor::unit())));
     env.insert("println".to_string(), mono(unary(var(a), ctor::unit())));
-    env.insert(
-        "assert".to_string(),
-        mono(unary(ctor::bool(), ctor::unit())),
-    );
+    env.insert("typeof".to_string(), poly(vec![a], unary(var(a), ctor::str())));
+    env.insert("assert".to_string(), mono(unary(ctor::bool(), ctor::unit())));
     env.insert(
         "concat".to_string(),
         poly(vec![a], binary(var(a), var(a), var(a))),
@@ -209,6 +207,50 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         "__str_len".to_string(),
         mono(unary(ctor::str(), ctor::int())),
     );
+    for (name, body) in [
+        ("__int_add", binary(ctor::int(), ctor::int(), ctor::int())),
+        ("__float_add", binary(ctor::float(), ctor::float(), ctor::float())),
+        ("__int_sub", binary(ctor::int(), ctor::int(), ctor::int())),
+        ("__float_sub", binary(ctor::float(), ctor::float(), ctor::float())),
+        ("__int_mul", binary(ctor::int(), ctor::int(), ctor::int())),
+        ("__float_mul", binary(ctor::float(), ctor::float(), ctor::float())),
+        ("__int_div", binary(ctor::int(), ctor::int(), ctor::int())),
+        ("__float_div", binary(ctor::float(), ctor::float(), ctor::float())),
+        ("__int_mod", binary(ctor::int(), ctor::int(), ctor::int())),
+        ("__int_abs", unary(ctor::int(), ctor::int())),
+        ("__float_abs", unary(ctor::float(), ctor::float())),
+        ("__int_equal", binary(ctor::int(), ctor::int(), ctor::bool())),
+        ("__float_equal", binary(ctor::float(), ctor::float(), ctor::bool())),
+        ("__bool_equal", binary(ctor::bool(), ctor::bool(), ctor::bool())),
+        ("__str_equal", binary(ctor::str(), ctor::str(), ctor::bool())),
+        ("__str_concat", binary(ctor::str(), ctor::str(), ctor::str())),
+        ("__str_contains", binary(ctor::str(), ctor::str(), ctor::bool())),
+        ("__int_to_string", unary(ctor::int(), ctor::str())),
+        ("__float_to_string", unary(ctor::float(), ctor::str())),
+        ("__bool_to_string", unary(ctor::bool(), ctor::str())),
+        ("__str_to_string", unary(ctor::str(), ctor::str())),
+        ("__bool_assert", unary(ctor::bool(), ctor::unit())),
+    ] {
+        env.insert(name.to_string(), mono(body));
+    }
+    for (name, body) in [
+        ("__list_concat", binary(list(var(a)), list(var(a)), list(var(a)))),
+        ("__list_contains", binary(list(var(a)), var(a), ctor::bool())),
+        ("__list_take", binary(ctor::int(), list(var(a)), list(var(a)))),
+        ("__list_drop", binary(ctor::int(), list(var(a)), list(var(a)))),
+        ("__list_reverse", unary(list(var(a)), list(var(a)))),
+        ("__list_slice", unary(ctor::int(), unary(ctor::int(), unary(list(var(a)), list(var(a)))))),
+    ] {
+        env.insert(name.to_string(), poly(vec![a], body));
+    }
+    for (name, body) in [
+        ("__str_take", binary(ctor::int(), ctor::str(), ctor::str())),
+        ("__str_drop", binary(ctor::int(), ctor::str(), ctor::str())),
+        ("__str_reverse", unary(ctor::str(), ctor::str())),
+        ("__str_slice", unary(ctor::int(), unary(ctor::int(), unary(ctor::str(), ctor::str())))),
+    ] {
+        env.insert(name.to_string(), mono(body));
+    }
     env.insert(
         "to_string".to_string(),
         poly(vec![a], unary(var(a), ctor::str())),

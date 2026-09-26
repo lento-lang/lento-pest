@@ -540,6 +540,9 @@ pub fn lower_ty(ty: &Ty, binders: &BTreeMap<String, MonoType>) -> MonoType {
                 if let Some(var) = binders.get(name) {
                     return var.clone();
                 }
+                if name == "unit" {
+                    return MonoType::Tuple(Vec::new());
+                }
             }
             MonoType::Constructor(
                 name.clone(),

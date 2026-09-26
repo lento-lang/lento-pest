@@ -12,8 +12,10 @@ pub struct Intrinsic {
 
 #[derive(Debug, Clone, Copy)]
 enum IntrinsicKind {
+    Native,
     Print,
     Println,
+    TypeOf,
     Len,
     ListLen,
     StrLen,
@@ -46,6 +48,7 @@ pub(crate) fn install_intrinsics(env: &mut Env) {
     for (name, kind, arity) in [
         ("print", IntrinsicKind::Print, 1),
         ("println", IntrinsicKind::Println, 1),
+        ("typeof", IntrinsicKind::TypeOf, 1),
         ("len", IntrinsicKind::Len, 1),
         ("__list_len", IntrinsicKind::ListLen, 1),
         ("__str_len", IntrinsicKind::StrLen, 1),
@@ -72,6 +75,38 @@ pub(crate) fn install_intrinsics(env: &mut Env) {
         ("any", IntrinsicKind::Any, 2),
         ("all", IntrinsicKind::All, 2),
         ("range", IntrinsicKind::Range, 2),
+        ("__bool_assert", IntrinsicKind::Native, 1),
+        ("__int_add", IntrinsicKind::Native, 2),
+        ("__float_add", IntrinsicKind::Native, 2),
+        ("__int_sub", IntrinsicKind::Native, 2),
+        ("__float_sub", IntrinsicKind::Native, 2),
+        ("__int_mul", IntrinsicKind::Native, 2),
+        ("__float_mul", IntrinsicKind::Native, 2),
+        ("__int_div", IntrinsicKind::Native, 2),
+        ("__float_div", IntrinsicKind::Native, 2),
+        ("__int_mod", IntrinsicKind::Native, 2),
+        ("__int_abs", IntrinsicKind::Native, 1),
+        ("__float_abs", IntrinsicKind::Native, 1),
+        ("__int_equal", IntrinsicKind::Native, 2),
+        ("__float_equal", IntrinsicKind::Native, 2),
+        ("__bool_equal", IntrinsicKind::Native, 2),
+        ("__str_equal", IntrinsicKind::Native, 2),
+        ("__str_concat", IntrinsicKind::Native, 2),
+        ("__list_concat", IntrinsicKind::Native, 2),
+        ("__list_take", IntrinsicKind::Native, 2),
+        ("__str_take", IntrinsicKind::Native, 2),
+        ("__list_drop", IntrinsicKind::Native, 2),
+        ("__str_drop", IntrinsicKind::Native, 2),
+        ("__list_reverse", IntrinsicKind::Native, 1),
+        ("__str_reverse", IntrinsicKind::Native, 1),
+        ("__list_slice", IntrinsicKind::Native, 3),
+        ("__str_slice", IntrinsicKind::Native, 3),
+        ("__str_contains", IntrinsicKind::Native, 2),
+        ("__list_contains", IntrinsicKind::Native, 2),
+        ("__int_to_string", IntrinsicKind::Native, 1),
+        ("__float_to_string", IntrinsicKind::Native, 1),
+        ("__bool_to_string", IntrinsicKind::Native, 1),
+        ("__str_to_string", IntrinsicKind::Native, 1),
     ] {
         env.insert(
             name.to_string(),
@@ -87,6 +122,7 @@ pub(crate) fn install_intrinsics(env: &mut Env) {
 
 pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
     match intrinsic.kind {
+        IntrinsicKind::Native => apply_native(intrinsic.name, &intrinsic.args),
         IntrinsicKind::Print => {
             print!("{}", intrinsic.args[0]);
             io::stdout().flush().map_err(|err| err.to_string())?;
@@ -96,6 +132,21 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
             println!("{}", intrinsic.args[0]);
             Ok(Value::Unit)
         }
+        IntrinsicKind::TypeOf => Ok(Value::Str(match &intrinsic.args[0] {
+            Value::Unit => "unit",
+            Value::Bool(_) => "bool",
+            Value::Int(_) => "int",
+            Value::Float(_) => "float",
+            Value::Str(_) => "str",
+            Value::Tuple(_) => "tuple",
+            Value::List(_) => "list",
+            Value::Record(_) => "record",
+            Value::Sum { .. } => "sum",
+            Value::Closure(_) => "function",
+            Value::Intrinsic(_) => "function",
+            Value::Ref(_) => "ref",
+        }
+        .to_string())),
         IntrinsicKind::Len => match &intrinsic.args[0] {
             Value::List(items) => Ok(Value::Int(items.len() as i64)),
             Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
@@ -318,6 +369,143 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
             }
             Ok(Value::List(out))
         }
+    }
+}
+
+fn apply_native(name: &str, args: &[Value]) -> Result<Value, String> {
+    match name {
+        "__bool_assert" => match args {
+            [Value::Bool(true)] => Ok(Value::Unit),
+            [Value::Bool(false)] => Err("assert failed".into()),
+            [value] => Err(format!("__bool_assert expects bool; got {value}")),
+            _ => unreachable!(),
+        },
+        "__int_add" => int_bin(args, |a, b| a.checked_add(b), "add"),
+        "__int_sub" => int_bin(args, |a, b| a.checked_sub(b), "sub"),
+        "__int_mul" => int_bin(args, |a, b| a.checked_mul(b), "mul"),
+        "__int_div" => int_bin(args, |a, b| a.checked_div(b), "div"),
+        "__int_mod" => int_bin(args, |a, b| a.checked_rem(b), "mod"),
+        "__int_abs" => match args {
+            [Value::Int(value)] => value
+                .checked_abs()
+                .map(Value::Int)
+                .ok_or_else(|| "integer overflow in abs".into()),
+            _ => Err("__int_abs expects int".into()),
+        },
+        "__float_add" => float_bin(args, |a, b| a + b),
+        "__float_sub" => float_bin(args, |a, b| a - b),
+        "__float_mul" => float_bin(args, |a, b| a * b),
+        "__float_div" => float_bin(args, |a, b| a / b),
+        "__float_abs" => match args {
+            [Value::Float(value)] => Ok(Value::Float(value.abs())),
+            _ => Err("__float_abs expects float".into()),
+        },
+        "__int_equal" | "__float_equal" | "__bool_equal" | "__str_equal" => {
+            equal_native(args)
+        }
+        "__str_concat" => match args {
+            [Value::Str(left), Value::Str(right)] => Ok(Value::Str(format!("{left}{right}"))),
+            _ => Err("__str_concat expects str, str".into()),
+        },
+        "__list_concat" => match args {
+            [Value::List(left), Value::List(right)] => {
+                let mut result = left.clone();
+                result.extend(right.iter().cloned());
+                Ok(Value::List(result))
+            }
+            _ => Err("__list_concat expects list, list".into()),
+        },
+        "__str_to_string" => exact_string(args),
+        "__int_to_string" | "__float_to_string" | "__bool_to_string" => match args {
+            [value] => Ok(Value::Str(value.to_string())),
+            _ => Err(format!("{name} expects one argument")),
+        },
+        "__str_contains" => match args {
+            [Value::Str(haystack), Value::Str(needle)] => Ok(Value::Bool(haystack.contains(needle))),
+            _ => Err("__str_contains expects str, str".into()),
+        },
+        "__list_contains" => match args {
+            [Value::List(items), needle] => Ok(Value::Bool(items.iter().any(|item| value_eq(item, needle)))),
+            _ => Err("__list_contains expects list, value".into()),
+        },
+        "__list_take" | "__list_drop" | "__list_reverse" | "__list_slice"
+        | "__str_take" | "__str_drop" | "__str_reverse" | "__str_slice" => {
+            apply_sequence_native(name, args)
+        }
+        _ => Err(format!("unknown native intrinsic {name}")),
+    }
+}
+
+fn int_bin(args: &[Value], op: impl FnOnce(i64, i64) -> Option<i64>, name: &str) -> Result<Value, String> {
+    match args {
+        [Value::Int(left), Value::Int(right)] => op(*left, *right)
+            .map(Value::Int)
+            .ok_or_else(|| format!("integer overflow or invalid {name}")),
+        _ => Err(format!("__int_{name} expects int, int")),
+    }
+}
+
+fn float_bin(args: &[Value], op: impl FnOnce(f64, f64) -> f64) -> Result<Value, String> {
+    match args {
+        [Value::Float(left), Value::Float(right)] => Ok(Value::Float(op(*left, *right))),
+        _ => Err("float native expects float, float".into()),
+    }
+}
+
+fn equal_native(args: &[Value]) -> Result<Value, String> {
+    match args {
+        [left, right] => Ok(Value::Bool(value_eq(left, right))),
+        _ => Err("equality native expects two arguments".into()),
+    }
+}
+
+fn exact_string(args: &[Value]) -> Result<Value, String> {
+    match args {
+        [Value::Str(value)] => Ok(Value::Str(value.clone())),
+        _ => Err("__str_to_string expects str".into()),
+    }
+}
+
+fn apply_sequence_native(name: &str, args: &[Value]) -> Result<Value, String> {
+    let is_string = name.starts_with("__str_");
+    let operation = &name[6..];
+    match (operation, args) {
+        ("take", [Value::Int(count), value]) | ("drop", [Value::Int(count), value])
+            if *count >= 0 => {
+            let count = *count as usize;
+            if is_string {
+                let Value::Str(text) = value else { return Err(format!("{name} expects str")); };
+                let chars: Vec<_> = text.chars().collect();
+                let range = if operation == "take" { 0..count.min(chars.len()) } else { count.min(chars.len())..chars.len() };
+                Ok(Value::Str(chars[range].iter().collect()))
+            } else {
+                let Value::List(items) = value else { return Err(format!("{name} expects list")); };
+                let range = if operation == "take" { 0..count.min(items.len()) } else { count.min(items.len())..items.len() };
+                Ok(Value::List(items[range].to_vec()))
+            }
+        }
+        ("reverse", [value]) => {
+            if is_string {
+                let Value::Str(text) = value else { return Err(format!("{name} expects str")); };
+                Ok(Value::Str(text.chars().rev().collect()))
+            } else {
+                let Value::List(items) = value else { return Err(format!("{name} expects list")); };
+                let mut result = items.clone();
+                result.reverse();
+                Ok(Value::List(result))
+            }
+        }
+        ("slice", [Value::Int(start), Value::Int(length), value]) if *start >= 0 && *length >= 0 => {
+            let (start, length) = (*start as usize, *length as usize);
+            if is_string {
+                let Value::Str(text) = value else { return Err(format!("{name} expects str")); };
+                Ok(Value::Str(text.chars().skip(start).take(length).collect()))
+            } else {
+                let Value::List(items) = value else { return Err(format!("{name} expects list")); };
+                Ok(Value::List(items.iter().skip(start).take(length).cloned().collect()))
+            }
+        }
+        _ => Err(format!("invalid arguments to {name}")),
     }
 }
 
