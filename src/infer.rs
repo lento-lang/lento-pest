@@ -468,6 +468,7 @@ pub fn infer_typed_expr(
                 result = ret;
                 args.push(arg);
             }
+            validate_intrinsic_call(ctx, &callee, &args)?;
             Ok(TypedExpr {
                 ty: result,
                 kind: TypedExprKind::Call {
@@ -641,6 +642,71 @@ pub fn infer_typed_expr(
             let place = infer_typed_expr(ctx, &a.place, env)?;
             Ok(composite(ctor::unit(), vec![place, value]))
         }
+    }
+}
+
+fn validate_intrinsic_call(
+    ctx: &InferCtx,
+    callee: &crate::semantics::TypedExpr,
+    args: &[crate::semantics::TypedExpr],
+) -> Result<(), TypeError> {
+    let Some((name, all_args)) = flatten_typed_call(callee, args) else {
+        return Ok(());
+    };
+    if all_args
+        .iter()
+        .any(|arg| matches!(ctx.resolve(&arg.ty), MonoType::Var(_)))
+    {
+        return Ok(());
+    }
+    let expected = match name.as_str() {
+        "abs" if all_args.len() == 1 => matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "int" || kind == "float"),
+        "concat" if all_args.len() == 2 => match (ctx.resolve(&all_args[0].ty), ctx.resolve(&all_args[1].ty)) {
+            (MonoType::Constructor(left, _), MonoType::Constructor(right, _)) => left == "str" && right == "str",
+            (MonoType::List(left), MonoType::List(right)) => left == right,
+            _ => false,
+        },
+        "contains" if all_args.len() == 2 => match (ctx.resolve(&all_args[0].ty), ctx.resolve(&all_args[1].ty)) {
+            (MonoType::Constructor(left, _), MonoType::Constructor(right, _)) => left == "str" && right == "str",
+            (MonoType::List(element), needle) => *element == needle,
+            _ => false,
+        },
+        "take" | "drop" if all_args.len() == 2 => matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "int")
+            && (matches!(ctx.resolve(&all_args[1].ty), MonoType::Constructor(kind, _) if kind == "str")
+                || matches!(ctx.resolve(&all_args[1].ty), MonoType::List(_))),
+        "reverse" if all_args.len() == 1 => matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "str")
+            || matches!(ctx.resolve(&all_args[0].ty), MonoType::List(_)),
+        "slice" if all_args.len() == 3 => all_args[..2]
+            .iter()
+            .all(|arg| matches!(ctx.resolve(&arg.ty), MonoType::Constructor(kind, _) if kind == "int"))
+            && (matches!(ctx.resolve(&all_args[2].ty), MonoType::Constructor(kind, _) if kind == "str")
+                || matches!(ctx.resolve(&all_args[2].ty), MonoType::List(_))),
+        _ => true,
+    };
+    if expected {
+        Ok(())
+    } else {
+        Err(TypeError {
+            kind: TypeErrorKind::BadOperator {
+                op: name.to_string(),
+                ty: all_args.last().map(|arg| ctx.resolve(&arg.ty)).unwrap_or_else(ctor::unit),
+            },
+        })
+    }
+}
+
+fn flatten_typed_call(
+    callee: &crate::semantics::TypedExpr,
+    args: &[crate::semantics::TypedExpr],
+) -> Option<(String, Vec<crate::semantics::TypedExpr>)> {
+    match &callee.kind {
+        crate::semantics::TypedExprKind::Var(name) => Some((name.clone(), args.to_vec())),
+        crate::semantics::TypedExprKind::Call { callee, args: prior, .. } => {
+            let (name, mut all_args) = flatten_typed_call(callee, prior)?;
+            all_args.extend_from_slice(args);
+            Some((name, all_args))
+        }
+        _ => None,
     }
 }
 

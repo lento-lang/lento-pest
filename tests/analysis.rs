@@ -46,6 +46,12 @@ fn canonical_pipeline_accepts_polymorphic_identity() {
 }
 
 #[test]
+fn canonical_pipeline_rejects_unsupported_intrinsic_types() {
+    let error = analyze("concat 1 2\n").expect_err("concat must reject integers");
+    assert!(error.contains("concat"), "{error}");
+}
+
+#[test]
 fn prelude_len_uses_type_specific_native_intrinsics() {
     let program = parse_program(include_str!("../src/prelude.lt")).expect("prelude should parse");
     let analysis = analyze_program(&program).expect("prelude should analyze");
