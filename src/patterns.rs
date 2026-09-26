@@ -112,6 +112,9 @@ fn simplify(p: &Pattern) -> Pat {
         }
     }
     match &p.kind {
+        PatKind::Var(name) if name.starts_with(|c: char| c.is_ascii_uppercase()) => {
+            Pat::Constructor(name.clone(), None)
+        }
         PatKind::Var(_) | PatKind::Wildcard => Pat::Wild,
         PatKind::Lit(l) => Pat::Lit(l.clone()),
         PatKind::Tuple(ps) => Pat::Tuple(ps.iter().map(simplify).collect()),

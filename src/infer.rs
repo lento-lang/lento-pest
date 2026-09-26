@@ -15,6 +15,7 @@
 // is processed (see `infer_function_group`), never per clause, so mutually
 // recursive clauses and multi-clause functions share one scope.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -134,6 +135,7 @@ pub struct InferCtx {
     /// type arguments concrete.
     pub pending_constraints: Vec<SchemeConstraint>,
     pub type_declarations: BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
+    anonymous_sum_supply: Cell<u32>,
 }
 
 impl InferCtx {
@@ -144,6 +146,7 @@ impl InferCtx {
             constraints: Vec::new(),
             pending_constraints: Vec::new(),
             type_declarations: BTreeMap::new(),
+            anonymous_sum_supply: Cell::new(0),
         }
     }
 
@@ -247,24 +250,30 @@ impl InferCtx {
                 MonoType::Mut(Box::new(self.lower_surface_ty(inner, binders)))
             }
             crate::ast::Ty::NamedBinder { ty, .. } => self.lower_surface_ty(ty, binders),
-            crate::ast::Ty::Sum(alts) => MonoType::Sum {
-                name: format!("<sum:{}>", alts.len()),
-                args: Vec::new(),
-                alts: alts
-                    .iter()
-                    .map(|alt| match alt {
-                        crate::ast::SumAlt::Ctor { name, payload } => MonoSumAlt::Constructor {
-                            name: name.clone(),
-                            payload: payload
-                                .as_ref()
-                                .map(|payload| self.lower_surface_ty(payload, binders)),
-                        },
-                        crate::ast::SumAlt::Bare(ty) => {
-                            MonoSumAlt::Bare(self.lower_surface_ty(ty, binders))
-                        }
-                    })
-                    .collect(),
-            },
+            crate::ast::Ty::Sum(alts) => {
+                let id = self.anonymous_sum_supply.get();
+                self.anonymous_sum_supply.set(id + 1);
+                MonoType::Sum {
+                    name: format!("<sum:{id}>"),
+                    args: Vec::new(),
+                    alts: alts
+                        .iter()
+                        .map(|alt| match alt {
+                            crate::ast::SumAlt::Ctor { name, payload } => {
+                                MonoSumAlt::Constructor {
+                                    name: name.clone(),
+                                    payload: payload
+                                        .as_ref()
+                                        .map(|payload| self.lower_surface_ty(payload, binders)),
+                                }
+                            }
+                            crate::ast::SumAlt::Bare(ty) => {
+                                MonoSumAlt::Bare(self.lower_surface_ty(ty, binders))
+                            }
+                        })
+                        .collect(),
+                }
+            }
             crate::ast::Ty::RecordType(fields) => MonoType::Record {
                 fields: fields
                     .iter()

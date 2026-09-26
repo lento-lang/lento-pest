@@ -128,6 +128,15 @@ fn typed_match_arms_contribute_to_exhaustiveness() {
 }
 
 #[test]
+fn anonymous_sum_annotations_are_generative() {
+    let error = analyze(
+        "let identity : [int | str] -> [int | str] = value => value\n",
+    )
+    .expect_err("separate anonymous sum annotations must not unify");
+    assert!(error.contains("unify") || error.contains("annotation"), "{error}");
+}
+
+#[test]
 fn canonical_pipeline_installs_sum_constructors() {
     analyze(
         "type Option a = Some a | None\n         fn get option = match option { Some value => value, None => 0 }\n         assert (get (Some 5) == 5)\n",
