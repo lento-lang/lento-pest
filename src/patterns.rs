@@ -106,6 +106,11 @@ enum Pat {
 }
 
 fn simplify(p: &Pattern) -> Pat {
+    if let Some(annotation) = &p.annotation {
+        if matches!(p.kind, PatKind::Var(_) | PatKind::Wildcard) {
+            return Pat::Constructor(type_pattern_name(annotation), None);
+        }
+    }
     match &p.kind {
         PatKind::Var(_) | PatKind::Wildcard => Pat::Wild,
         PatKind::Lit(l) => Pat::Lit(l.clone()),
@@ -139,6 +144,23 @@ fn simplify(p: &Pattern) -> Pat {
     }
 }
 
+fn type_pattern_name(ty: &crate::ast::Ty) -> String {
+    match ty {
+        crate::ast::Ty::Named { name, args } if args.is_empty() => format!("@type:{name}"),
+        _ => format!("@type:{ty:?}"),
+    }
+}
+
+fn type_pattern_covers_literal(name: &str, literal: &Lit) -> bool {
+    matches!(
+        (name, literal),
+        ("@type:int", Lit::Int(_))
+            | ("@type:float", Lit::Float(_))
+            | ("@type:str", Lit::Str(_))
+            | ("@type:bool", Lit::Bool(_))
+    )
+}
+
 // --------------------------------------------------------------------------
 // Usefulness / exhaustiveness (Maranget-style, specialized to Lento)
 // --------------------------------------------------------------------------
@@ -167,6 +189,8 @@ fn covers1(p: &Pat, q: &Pat) -> bool {
                     _ => false,
                 }
         }
+        (Pat::Constructor(name, None), Pat::Lit(literal))
+            if name.starts_with("@type:") => type_pattern_covers_literal(name, literal),
         (Pat::Constructor(..), Pat::Wild) => false,
         // List coverage: exact-length vs exact-length, and or-more handling.
         (Pat::List(n, a), Pat::List(m, b)) => {

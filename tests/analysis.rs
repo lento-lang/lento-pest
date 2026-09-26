@@ -122,6 +122,12 @@ fn canonical_pipeline_keeps_wip_exhaustiveness_errors() {
 }
 
 #[test]
+fn typed_match_arms_contribute_to_exhaustiveness() {
+    analyze("fn f value = match value { (n: int) => 1, (s: str) => 1 }\n")
+        .expect("typed arms should cover their declared domains");
+}
+
+#[test]
 fn canonical_pipeline_installs_sum_constructors() {
     analyze(
         "type Option a = Some a | None\n         fn get option = match option { Some value => value, None => 0 }\n         assert (get (Some 5) == 5)\n",

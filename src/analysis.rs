@@ -1536,16 +1536,6 @@ fn install_type_declarations(
 fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String> {
     match expression {
         Expr::Match(m) => {
-            if m.arms.iter().any(|arm| arm.pattern.annotation.is_some()) {
-                validate_nested_matches(&m.scrutinee, owner)?;
-                for arm in &m.arms {
-                    if let Some(guard) = &arm.guard {
-                        validate_nested_matches(guard, owner)?;
-                    }
-                    validate_nested_matches(&arm.body, owner)?;
-                }
-                return Ok(());
-            }
             let specialization = crate::specialize::Specialization {
                 id: 0,
                 scheme: TypeScheme::mono(MonoType::Var(0)),
