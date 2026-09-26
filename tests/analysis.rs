@@ -65,6 +65,20 @@ fn prelude_len_uses_type_specific_native_intrinsics() {
             .count(),
         2
     );
+    let generic_len = analysis
+        .declarations
+        .instances
+        .iter()
+        .find(|instance| instance.class == "Len" && !instance.quantified.is_empty())
+        .expect("list Len implementation should be polymorphic");
+    assert!(!generic_len.target.is_empty());
+}
+
+#[test]
+fn implementation_type_variables_require_impl_quantifiers() {
+    let error = analyze("class Seq a { spec reverse : a -> a }\nimpl Seq [a] { fn reverse xs = xs }\n")
+        .expect_err("unbound implementation type variable should fail");
+    assert!(error.contains("unknown implementation type 'a'"), "{error}");
 }
 
 #[test]

@@ -56,7 +56,11 @@ fn format_decl(out: &mut String, decl: &Decl) {
             out.push_str("}\n");
         }
         Decl::Impl(implementation) => {
-            let _ = write!(out, "impl {} ", implementation.class);
+            let _ = write!(out, "impl ");
+            for quantifier in &implementation.quantifiers {
+                let _ = write!(out, "all {}.", quantifier.vars.join(", "));
+            }
+            let _ = write!(out, "{} ", implementation.class);
             for (i, target) in implementation.target.iter().enumerate() {
                 if i > 0 {
                     out.push(' ');

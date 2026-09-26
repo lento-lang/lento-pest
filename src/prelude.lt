@@ -36,49 +36,56 @@ class Haystack h e {
 }
 
 impl Num int {
-    fn abs x = abs x
+    fn abs x = __int_abs x
 }
 
 impl Num float {
-    fn abs x = abs x
+    fn abs x = __float_abs x
 }
 
 impl Eq int {
-    fn equal x y = x == y
+    fn equal x y = __int_equal x y
 }
 
 impl Eq float {
-    fn equal x y = x == y
+    fn equal x y = __float_equal x y
 }
 
 impl Eq bool {
-    fn equal x y = x == y
+    fn equal x y = __bool_equal x y
 }
 
 impl Eq str {
-    fn equal x y = x == y
+    fn equal x y = __str_equal x y
 }
 
 impl Add int {
-    fn add x y = x + y
+    fn add x y = __int_add x y
 }
 
 impl Add float {
-    fn add x y = x + y
+    fn add x y = __float_add x y
 }
 
 impl Concat str {
-    fn concat x y = concat x y
+    fn concat x y = __str_concat x y
 }
 
-impl Seq [int] {
-    fn take n xs = take n xs
-    fn drop n xs = drop n xs
-    fn reverse xs = reverse xs
-    fn slice start stop xs = slice start stop xs
+impl all a. Seq [a] {
+    fn take n xs = __list_take n xs
+    fn drop n xs = __list_drop n xs
+    fn reverse xs = __list_reverse xs
+    fn slice start stop xs = __list_slice start stop xs
 }
 
-impl Len [a] {
+impl Seq str {
+    fn take n text = __str_take n text
+    fn drop n text = __str_drop n text
+    fn reverse text = __str_reverse text
+    fn slice start stop text = __str_slice start stop text
+}
+
+impl all a. Len [a] {
     fn len xs = __list_len xs
 }
 
@@ -87,5 +94,17 @@ impl Len str {
 }
 
 impl Haystack (str) (str) {
-    fn contains hay needle = contains hay needle
+    fn contains hay needle = __str_contains hay needle
 }
+
+spec assert : bool -> unit
+fn assert (value : bool) = __bool_assert value
+
+spec to_string : int -> str
+spec to_string : float -> str
+spec to_string : bool -> str
+spec to_string : str -> str
+fn to_string value = __int_to_string value
+fn to_string value = __float_to_string value
+fn to_string value = __bool_to_string value
+fn to_string value = __str_to_string value

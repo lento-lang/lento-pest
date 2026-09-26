@@ -120,18 +120,21 @@ fn class_decl(pair: Pair<'_, Rule>) -> ClassDecl {
 }
 
 fn impl_decl(pair: Pair<'_, Rule>) -> ImplDecl {
-    let mut inner = pair.into_inner();
-    let class = inner.next().unwrap().as_str().to_string();
+    let inner = pair.into_inner();
+    let mut quantifiers = Vec::new();
+    let mut class = String::new();
     let mut target = Vec::new();
     let mut methods = Vec::new();
     for child in inner {
         match child.as_rule() {
+            Rule::quantifier => quantifiers.push(quantifier(child)),
+            Rule::identifier if class.is_empty() => class = child.as_str().to_string(),
             Rule::impl_target => target.extend(child.into_inner().map(type_)),
             Rule::fn_clause => methods.push(fn_clause(child)),
             _ => {}
         }
     }
-    ImplDecl { class, target, methods }
+    ImplDecl { class, quantifiers, target, methods }
 }
 
 fn quantifier(pair: Pair<'_, Rule>) -> Quantifier {

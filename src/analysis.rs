@@ -58,6 +58,7 @@ pub struct ClassMetadata {
 #[derive(Debug, Clone, PartialEq)]
 pub struct InstanceMetadata {
     pub class: String,
+    pub quantified: Vec<u32>,
     pub target: Vec<MonoType>,
     pub methods: Vec<String>,
 }
@@ -690,7 +691,8 @@ fn resolve_typed_expr_calls(
                     let accepted = resolved_constraints.iter().all(|(class, args)| {
                         !args.iter().any(contains_type_variable)
                             && declarations.instances.iter().any(|instance| {
-                                instance.class == *class && instance.target == *args
+                                instance.class == *class
+                                    && instance_matches(&instance.target, args)
                             })
                     });
                     if accepted {
@@ -1283,6 +1285,7 @@ fn validate_class_constraints(
 
 fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMetadata {
     let mut declarations = DeclarationMetadata::default();
+    let mut next_impl_var = 2_000_000u32;
     for statement in &program.statements {
         let Stmt::Decl(Decl::Type(declaration)) = statement else {
             continue;
@@ -1349,12 +1352,23 @@ fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMet
                 });
             }
             Stmt::Decl(Decl::Impl(implementation)) => {
+                let mut binders = BTreeMap::new();
+                let mut quantified = Vec::new();
+                for quantifier in &implementation.quantifiers {
+                    for name in &quantifier.vars {
+                        let id = next_impl_var;
+                        next_impl_var += 1;
+                        binders.insert(name.clone(), MonoType::Var(id));
+                        quantified.push(id);
+                    }
+                }
                 declarations.instances.push(InstanceMetadata {
                     class: implementation.class.clone(),
+                    quantified,
                     target: implementation
                         .target
                         .iter()
-                        .map(|ty| lower_ty(ty, &BTreeMap::new()))
+                        .map(|ty| lower_ty(ty, &binders))
                         .collect(),
                     methods: implementation
                         .methods
@@ -1511,7 +1525,11 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
 
 
 fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
-    let mut type_names = BTreeSet::new();
+    let mut type_names = BTreeSet::from_iter(
+        ["int", "float", "str", "bool", "bytes", "unit", "char"]
+            .into_iter()
+            .map(String::from),
+    );
     let mut constructor_names = BTreeSet::new();
     let mut classes = BTreeMap::<String, (usize, BTreeSet<String>)>::new();
     let mut method_owners = BTreeMap::<String, String>::new();
@@ -1573,6 +1591,17 @@ fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
                         implementation.target.len()
                     ));
                 }
+                let mut binders = BTreeSet::new();
+                for quantifier in &implementation.quantifiers {
+                    for name in &quantifier.vars {
+                        if !binders.insert(name.clone()) {
+                            return Err(format!("duplicate implementation type variable '{name}'"));
+                        }
+                    }
+                }
+                for target in &implementation.target {
+                    validate_impl_type(target, &binders, &type_names)?;
+                }
                 let key = format!(
                     "{} {}",
                     implementation.class,
@@ -1613,4 +1642,63 @@ fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+fn validate_impl_type(
+    ty: &Ty,
+    binders: &BTreeSet<String>,
+    known_types: &BTreeSet<String>,
+) -> Result<(), String> {
+    match ty {
+        Ty::Named { name, args } => {
+            if !binders.contains(name) && !known_types.contains(name) {
+                return Err(format!("unknown implementation type '{name}'"));
+            }
+            for arg in args {
+                validate_impl_type(arg, binders, known_types)?;
+            }
+        }
+        Ty::Tuple(items) => {
+            for item in items {
+                validate_impl_type(item, binders, known_types)?;
+            }
+        }
+        Ty::List(inner) | Ty::Ref(inner) | Ty::Mut(inner) => {
+            validate_impl_type(inner, binders, known_types)?;
+        }
+        Ty::Arrow { from, to } => {
+            validate_impl_type(from, binders, known_types)?;
+            validate_impl_type(to, binders, known_types)?;
+        }
+        Ty::NamedBinder { ty, .. } => validate_impl_type(ty, binders, known_types)?,
+        Ty::Sum(alternatives) => {
+            for alternative in alternatives {
+                match alternative {
+                    SumAlt::Ctor { payload, .. } => {
+                        if let Some(payload) = payload {
+                            validate_impl_type(payload, binders, known_types)?;
+                        }
+                    }
+                    SumAlt::Bare(ty) => validate_impl_type(ty, binders, known_types)?,
+                }
+            }
+        }
+        Ty::RecordType(fields) => {
+            for (_, field) in fields {
+                validate_impl_type(field, binders, known_types)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn instance_matches(target: &[MonoType], arguments: &[MonoType]) -> bool {
+    if target.len() != arguments.len() {
+        return false;
+    }
+    let mut substitution = Substitution::new();
+    target
+        .iter()
+        .zip(arguments)
+        .all(|(target, argument)| unify(&mut substitution, target, argument).is_ok())
 }

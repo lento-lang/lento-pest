@@ -62,6 +62,7 @@ pub struct ClassDecl {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ImplDecl {
     pub class: String,
+    pub quantifiers: Vec<Quantifier>,
     pub target: Vec<Ty>,
     pub methods: Vec<FnDecl>,
 }

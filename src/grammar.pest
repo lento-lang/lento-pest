@@ -50,7 +50,7 @@ class_decl     = { "class" ~ identifier ~ type_param* ~ "{" ~ NEWLINE* ~ (spec_d
 
 // An implementation explicitly associates a class with a type or type
 // constructor and supplies ordinary function definitions for its specs.
-impl_decl      = { "impl" ~ identifier ~ impl_target? ~ "{" ~ NEWLINE* ~ (fn_clause ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+impl_decl      = { "impl" ~ quantifier* ~ identifier ~ impl_target? ~ "{" ~ NEWLINE* ~ (fn_clause ~ class_member_sep)* ~ NEWLINE* ~ "}" }
 impl_target    = { type_atom+ }
 class_member_sep = _{ (";" ~ NEWLINE*) | NEWLINE+ | &"}" }
 
