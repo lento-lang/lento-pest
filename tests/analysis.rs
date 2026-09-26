@@ -136,6 +136,64 @@ fn anonymous_sum_annotations_are_structural() {
 }
 
 #[test]
+fn bracketed_union_is_a_mixed_list_element_type() {
+    analyze("let values : [int | str] = [1, \"hi\"]\n")
+        .expect("bracketed unions should type-check mixed lists");
+}
+
+#[test]
+fn untyped_record_rest_binding_infers_an_open_row() {
+    analyze(
+        "let record = { name: \"hi\", count: 1 }\n\
+         let { name, ...other } = record\n\
+         name\n",
+    )
+    .expect("record rest bindings should infer an open row");
+}
+
+#[test]
+fn untyped_function_rest_pattern_accepts_extra_fields() {
+    analyze(
+        "fn add_on_a { a: a, ...rest } = a\n\
+         add_on_a { a: 1, extra: \"ok\" }\n",
+    )
+    .expect("function rest patterns should accept extra fields");
+}
+
+#[test]
+fn quantified_record_rows_preserve_extra_fields() {
+    analyze(
+        "spec keep_name:\n\
+             all rest. (value: { name: str, ...rest }) -> { name: str, ...rest }\n\
+         fn keep_name value = value\n\
+         keep_name { name: \"hi\", count: 1 }\n",
+    )
+    .expect("quantified record rows should preserve extra fields");
+}
+
+#[test]
+fn quantified_variant_rows_accept_extra_constructors() {
+    analyze(
+        "type Option = Some int | None\n\
+         spec unwrap:\n\
+             all rest. (value: Some int | None | ...rest) -> Some int | None | ...rest\n\
+         fn unwrap value = value\n\
+         unwrap (Some 1)\n",
+    )
+    .expect("quantified variant rows should accept extra constructors");
+}
+
+#[test]
+fn record_subtyping_accepts_extra_fields_at_calls() {
+    analyze(
+        "spec get_x: { x: int } -> int\n\
+         fn get_x value = value.x\n\
+         get_x { x: 1, y: \"extra\" }\n",
+    )
+    .expect("a function requiring x should accept records with extra fields");
+}
+
+#[test]
 fn inline_module_use_imports_names_directly() {
     analyze(
         "mod math {\n\

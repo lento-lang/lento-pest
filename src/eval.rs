@@ -43,7 +43,7 @@ pub enum Value {
     List(Vec<Value>),
     Record(HashMap<String, Value>),
     /// A constructor-tagged sum value: `Some 5` -> tag "Some", payload `5`.
-    /// Bare sum alternatives (`type X = [int | str]`) stay untagged.
+    /// Bare sum alternatives (`type X = int | str`) stay untagged.
     Sum { tag: String, payload: Rc<Value> },
     Closure(Rc<Closure>),
     Intrinsic(Intrinsic),
@@ -1012,9 +1012,11 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
                         Ty::Sum(alts) => match value {
                             Value::Sum { tag, .. } => alts.iter().any(|alt| {
                                 matches!(alt, SumAlt::Ctor { name, .. } if name == tag)
+                                    || matches!(alt, SumAlt::Row(_))
                             }),
                             other => alts.iter().any(|alt| {
                                 matches!(alt, SumAlt::Bare(t) if value_matches_ty(other, t, env))
+                                    || matches!(alt, SumAlt::Row(_))
                             }),
                         },
                         other => {
@@ -1040,6 +1042,12 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
             _ => false,
         },
         Ty::RecordType(fields) => match value {
+            Value::Record(fs) => fields.iter().all(|(name, t)| {
+                fs.get(name).map(|v| value_matches_ty(v, t, env)).unwrap_or(false)
+            }),
+            _ => false,
+        },
+        Ty::OpenRecordType { fields, .. } => match value {
             Value::Record(fs) => fields.iter().all(|(name, t)| {
                 fs.get(name).map(|v| value_matches_ty(v, t, env)).unwrap_or(false)
             }),
@@ -1081,6 +1089,14 @@ fn value_matches_ty_open(ty: &Ty, value: &Value, params: &[String], args: &[Ty],
             _ => false,
         },
         Ty::RecordType(fields) => match value {
+            Value::Record(fs) => fields.iter().all(|(name, t)| {
+                fs.get(name)
+                    .map(|v| value_matches_ty_open(t, v, params, args, env))
+                    .unwrap_or(false)
+            }),
+            _ => false,
+        },
+        Ty::OpenRecordType { fields, .. } => match value {
             Value::Record(fs) => fields.iter().all(|(name, t)| {
                 fs.get(name)
                     .map(|v| value_matches_ty_open(t, v, params, args, env))

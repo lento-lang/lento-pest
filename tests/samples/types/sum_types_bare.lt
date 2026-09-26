@@ -1,6 +1,6 @@
 // Hybrid sums: bare member types inject implicitly and are matched with
 // typed patterns; constructors and bare alternatives can coexist. Both the
-// unbracketed (`int | str`) and bracketed (`[int | str]`) sum syntax work.
+// unbracketed (`int | str`) sum syntax; brackets always denote lists.
 type Id = int | str
 
 let num_id : Id = 42
@@ -16,7 +16,7 @@ assert (show_id num_id == "int 42")
 assert (show_id text_id == "str hello")
 
 // The bracketed form is the same sum type syntax in any type position.
-type Bracketed = [int | str]
+type Bracketed = int | str
 let bracketed_id : Bracketed = 9
 assert (show_id bracketed_id == "int 9")
 

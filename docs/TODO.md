@@ -90,18 +90,24 @@ statically; see `src/exhaustive.rs` module docs.
 - Root declarations shadow imported names.
 - All top-level module declarations are exported initially.
 
+### 2026-09 — row-polymorphic records and variants
+
+- `[T]` is reserved for lists; `[int | str]` is a list of union elements.
+- Quantified record rows use `{ x: int, ...rest }`.
+- Quantified variant rows use `Some int | None | ...rest`.
+- Closed record parameters accept wider records with extra fields.
+- Untyped record and list rest patterns infer open row information.
+
 ## Remaining
 
 Ordered by current priority. All were explicit non-goals in
 `SUM_TYPES_PLAN.md` unless noted.
 
-1. **Polymorphic variants** — anonymous `[a | b]` sums are structural and
-   closed; no shared open variant types or row-polymorphic variants.
-2. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
+1. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
    runtime checks remain the authority.
-3. **Expression-level error spans** — errors report the enclosing
+2. **Expression-level error spans** — errors report the enclosing
    statement's line:col only.
-4. **Uppercase lambda-param collision** — `A b =>` parses as a constructor
+3. **Uppercase lambda-param collision** — `A b =>` parses as a constructor
    pattern, not an annotated lambda param; documented convention
    (lowercase params are the norm), unfixed.
 

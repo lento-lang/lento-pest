@@ -265,6 +265,12 @@ impl InferCtx {
                             crate::ast::SumAlt::Bare(ty) => {
                                 MonoSumAlt::Bare(self.lower_surface_ty(ty, binders))
                             }
+                            crate::ast::SumAlt::Row(name) => MonoSumAlt::Row(
+                                binders
+                                    .get(name)
+                                    .cloned()
+                                    .unwrap_or_else(|| MonoType::Constructor(name.clone(), Vec::new())),
+                            ),
                         })
                         .collect(),
                 }
@@ -275,6 +281,16 @@ impl InferCtx {
                     .map(|(name, ty)| (name.clone(), self.lower_surface_ty(ty, binders)))
                     .collect(),
                 rest: None,
+            },
+            crate::ast::Ty::OpenRecordType { fields, row } => MonoType::Record {
+                fields: fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), self.lower_surface_ty(ty, binders)))
+                    .collect(),
+                rest: match binders.get(row) {
+                    Some(MonoType::Var(id)) => Some(*id),
+                    _ => None,
+                },
             },
         }
     }
@@ -562,6 +578,38 @@ pub fn check_pattern(
 // --------------------------------------------------------------------------
 
 /// Infer an expression and retain annotations for every nested expression.
+fn infer_list_element_type(ctx: &mut InferCtx, types: &[MonoType]) -> Result<MonoType, TypeError> {
+    let element = ctx.fresh();
+    let snapshot = ctx.subst.clone();
+    let mut compatible = true;
+    for ty in types {
+        if ctx.unify(&element, ty).is_err() {
+            compatible = false;
+            break;
+        }
+    }
+    if compatible {
+        return Ok(ctx.resolve(&element));
+    }
+    ctx.subst = snapshot;
+
+    let mut alternatives = Vec::new();
+    for ty in types {
+        let ty = ctx.resolve(ty);
+        if !alternatives.contains(&ty) {
+            alternatives.push(ty);
+        }
+    }
+    if alternatives.len() == 1 {
+        return Ok(alternatives.remove(0));
+    }
+    Ok(MonoType::Sum {
+        name: "<list-union>".to_string(),
+        args: Vec::new(),
+        alts: alternatives.into_iter().map(MonoSumAlt::Bare).collect(),
+    })
+}
+
 pub fn infer_typed_expr(
     ctx: &mut InferCtx,
     expr: &Expr,
@@ -687,7 +735,6 @@ pub fn infer_typed_expr(
             ))
         }
         Expr::List(l) => {
-            let elem = ctx.fresh();
             let mut current = l;
             let mut children = Vec::new();
             loop {
@@ -695,13 +742,17 @@ pub fn infer_typed_expr(
                     crate::ast::ListExpr::Empty => break,
                     crate::ast::ListExpr::Cells(cell) => {
                         let head = infer_typed_expr(ctx, &cell.head, env)?;
-                        ctx.unify(&elem, &head.ty)?;
                         children.push(head);
                         current = &cell.tail;
                     }
                 }
             }
-            Ok(composite(MonoType::List(Box::new(elem)), children))
+            let element_types = children
+                .iter()
+                .map(|child| child.ty.clone())
+                .collect::<Vec<_>>();
+            let element = infer_list_element_type(ctx, &element_types)?;
+            Ok(composite(MonoType::List(Box::new(element)), children))
         }
         Expr::Block(b) => {
             let mut local = env.clone();

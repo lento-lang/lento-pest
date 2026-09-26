@@ -77,6 +77,7 @@ pub enum MonoType {
 pub enum MonoSumAlt {
     Constructor { name: String, payload: Option<MonoType> },
     Bare(MonoType),
+    Row(MonoType),
 }
 
 /// A type scheme: quantified variables with their constraints over a
@@ -194,6 +195,7 @@ impl MonoType {
                             }
                         }
                         MonoSumAlt::Bare(ty) => ty.collect_free_vars(seen, out),
+                        MonoSumAlt::Row(ty) => ty.collect_free_vars(seen, out),
                     }
                 }
             }
@@ -307,6 +309,7 @@ impl Substitution {
                             payload: payload.as_ref().map(|ty| self.apply(ty)),
                         },
                         MonoSumAlt::Bare(ty) => MonoSumAlt::Bare(self.apply(ty)),
+                        MonoSumAlt::Row(ty) => MonoSumAlt::Row(self.apply(ty)),
                     })
                     .collect(),
             },
@@ -457,13 +460,15 @@ pub fn unify(
                 alts: right_alts,
             },
         ) => {
-            if left_name != right_name && left_alts != right_alts {
-                return Err(UnifyError::Mismatch { left, right });
-            }
-            for (left, right) in left_args.iter().zip(right_args) {
-                unify(subst, left, right)?;
-            }
-            Ok(())
+            unify_sums(
+                subst,
+                left_name,
+                left_args,
+                left_alts,
+                right_name,
+                right_args,
+                right_alts,
+            )
         }
         (MonoType::Sum { alts, .. }, other) => unify_sum_member(subst, alts, &other),
         (other, MonoType::Sum { alts, .. }) => unify_sum_member(subst, alts, &other),
@@ -477,8 +482,17 @@ fn unify_sum_member(
     other: &MonoType,
 ) -> Result<(), UnifyError> {
     for alt in alts {
-        let MonoSumAlt::Bare(candidate) = alt else {
-            continue;
+        let candidate = match alt {
+            MonoSumAlt::Bare(candidate) => candidate,
+            MonoSumAlt::Row(row) => {
+                let snapshot = subst.clone();
+                if unify(subst, row, other).is_ok() {
+                    return Ok(());
+                }
+                *subst = snapshot;
+                continue;
+            }
+            MonoSumAlt::Constructor { .. } => continue,
         };
         let snapshot = subst.clone();
         if unify(subst, other, candidate).is_ok() {
@@ -494,6 +508,62 @@ fn unify_sum_member(
             alts: alts.to_vec(),
         },
     })
+}
+
+fn unify_sums(
+    subst: &mut Substitution,
+    left_name: &str,
+    left_args: &[MonoType],
+    left_alts: &[MonoSumAlt],
+    right_name: &str,
+    right_args: &[MonoType],
+    right_alts: &[MonoSumAlt],
+) -> Result<(), UnifyError> {
+    let left_rows = left_alts.iter().filter_map(|alt| match alt {
+        MonoSumAlt::Row(row) => Some(row),
+        _ => None,
+    }).collect::<Vec<_>>();
+    let right_rows = right_alts.iter().filter_map(|alt| match alt {
+        MonoSumAlt::Row(row) => Some(row),
+        _ => None,
+    }).collect::<Vec<_>>();
+    let left_known = left_alts.iter().filter(|alt| !matches!(alt, MonoSumAlt::Row(_))).collect::<Vec<_>>();
+    let right_known = right_alts.iter().filter(|alt| !matches!(alt, MonoSumAlt::Row(_))).collect::<Vec<_>>();
+    if left_name != right_name && left_rows.is_empty() && right_rows.is_empty() && left_known != right_known {
+        return Err(UnifyError::Mismatch {
+            left: MonoType::Sum { name: left_name.to_string(), args: left_args.to_vec(), alts: left_alts.to_vec() },
+            right: MonoType::Sum { name: right_name.to_string(), args: right_args.to_vec(), alts: right_alts.to_vec() },
+        });
+    }
+    for (left, right) in left_args.iter().zip(right_args) {
+        unify(subst, left, right)?;
+    }
+    if left_name == right_name {
+        return Ok(());
+    }
+    if left_known.iter().any(|alt| !right_known.contains(alt)) {
+        let Some(row) = right_rows.first() else {
+            return Err(UnifyError::Mismatch {
+                left: MonoType::Sum { name: left_name.to_string(), args: left_args.to_vec(), alts: left_alts.to_vec() },
+                right: MonoType::Sum { name: right_name.to_string(), args: right_args.to_vec(), alts: right_alts.to_vec() },
+            });
+        };
+        unify(subst, row, &sum_row(left_known.iter().filter(|alt| !right_known.contains(alt)).cloned().cloned().collect()))?;
+    }
+    if right_known.iter().any(|alt| !left_known.contains(alt)) {
+        let Some(row) = left_rows.first() else {
+            return Err(UnifyError::Mismatch {
+                left: MonoType::Sum { name: left_name.to_string(), args: left_args.to_vec(), alts: left_alts.to_vec() },
+                right: MonoType::Sum { name: right_name.to_string(), args: right_args.to_vec(), alts: right_alts.to_vec() },
+            });
+        };
+        unify(subst, row, &sum_row(right_known.iter().filter(|alt| !left_known.contains(alt)).cloned().cloned().collect()))?;
+    }
+    Ok(())
+}
+
+fn sum_row(alts: Vec<MonoSumAlt>) -> MonoType {
+    MonoType::Sum { name: "<row>".to_string(), args: Vec::new(), alts }
 }
 
 fn unify_records(
@@ -778,7 +848,8 @@ fn rename_vars(ty: &MonoType, renaming: &BTreeMap<TypeVarId, TypeVarId>) -> Mono
                         name: name.clone(),
                         payload: payload.as_ref().map(|ty| rename_vars(ty, renaming)),
                     },
-                    MonoSumAlt::Bare(ty) => MonoSumAlt::Bare(rename_vars(ty, renaming)),
+                        MonoSumAlt::Bare(ty) => MonoSumAlt::Bare(rename_vars(ty, renaming)),
+                        MonoSumAlt::Row(ty) => MonoSumAlt::Row(rename_vars(ty, renaming)),
                 })
                 .collect(),
         },
@@ -842,27 +913,42 @@ pub fn lower_ty(ty: &Ty, binders: &BTreeMap<String, MonoType>) -> MonoType {
         Ty::Mut(inner) => MonoType::Mut(Box::new(lower_ty(inner, binders))),
         // `name: T` named binders are transparent at the type level.
         Ty::NamedBinder { ty, .. } => lower_ty(ty, binders),
-        Ty::Sum(alts) => MonoType::Constructor(
-            "sum".to_string(),
-            alts.iter()
+        Ty::Sum(alts) => MonoType::Sum {
+            name: "<surface-sum>".to_string(),
+            args: Vec::new(),
+            alts: alts
+                .iter()
                 .map(|alt| match alt {
-                    crate::ast::SumAlt::Ctor { name, payload } => MonoType::Constructor(
-                        name.clone(),
-                        payload
-                            .as_ref()
-                            .map(|ty| vec![lower_ty(ty, binders)])
-                            .unwrap_or_default(),
+                    crate::ast::SumAlt::Ctor { name, payload } => MonoSumAlt::Constructor {
+                        name: name.clone(),
+                        payload: payload.as_ref().map(|ty| lower_ty(ty, binders)),
+                    },
+                    crate::ast::SumAlt::Bare(ty) => MonoSumAlt::Bare(lower_ty(ty, binders)),
+                    crate::ast::SumAlt::Row(name) => MonoSumAlt::Row(
+                        binders
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| MonoType::Constructor(name.clone(), Vec::new())),
                     ),
-                    crate::ast::SumAlt::Bare(ty) => lower_ty(ty, binders),
                 })
                 .collect(),
-        ),
+        },
         Ty::RecordType(fields) => MonoType::Record {
             fields: fields
                 .iter()
                 .map(|(name, ty)| (name.clone(), lower_ty(ty, binders)))
                 .collect(),
             rest: None,
+        },
+        Ty::OpenRecordType { fields, row } => MonoType::Record {
+            fields: fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), lower_ty(ty, binders)))
+                .collect(),
+            rest: match binders.get(row) {
+                Some(MonoType::Var(id)) => Some(*id),
+                _ => None,
+            },
         },
     }
 }
@@ -992,6 +1078,42 @@ fn matches(
         }
         (MonoType::Mut(inner), other) | (other, MonoType::Mut(inner)) => {
             matches(inner, other, matchable, subst)
+        }
+        (
+            MonoType::Record {
+                fields: left_fields,
+                rest: left_rest,
+            },
+            MonoType::Record {
+                fields: right_fields,
+                rest: right_rest,
+            },
+        ) => {
+            let fields_match = right_fields.iter().all(|(name, right)| {
+                left_fields
+                    .iter()
+                    .find(|(left_name, _)| left_name == name)
+                    .is_some_and(|(_, left)| matches(left, right, matchable, subst))
+            });
+            fields_match && (right_rest.is_none() || left_rest.is_some())
+        }
+        (MonoType::Sum { alts: left, .. }, MonoType::Sum { alts: right, .. }) => {
+            let left_rows = left.iter().any(|alt| matches!(alt, MonoSumAlt::Row(_)));
+            right.iter().all(|required| match required {
+                MonoSumAlt::Row(_) => left_rows,
+                MonoSumAlt::Constructor { name, payload } => left.iter().any(|candidate| {
+                    matches!(candidate, MonoSumAlt::Constructor { name: candidate_name, payload: candidate_payload }
+                        if candidate_name == name
+                            && match (candidate_payload, payload) {
+                                (Some(candidate), Some(required)) => matches(candidate, required, matchable, subst),
+                                (None, None) => true,
+                                _ => false,
+                            })
+                }),
+                MonoSumAlt::Bare(required) => left.iter().any(|candidate| {
+                    matches!(candidate, MonoSumAlt::Bare(candidate) if matches(candidate, required, matchable, subst))
+                }),
+            })
         }
         _ => false,
     }

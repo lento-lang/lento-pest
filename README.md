@@ -45,8 +45,10 @@ println doubled
   - record types: `type Point = { x: int, y: int }` with row-polymorphic field
     access (`fn getx r = r.x`)
   - synonyms: `type Meters = int`
-  - `[T]` remains the list-of-`T` type; sums with two or more alternatives use
-    `|` (bracketed `[a | b]` works in any type position)
+  - `[T]` always means a list; `[int | str]` means a mixed list whose elements
+    are `int | str`, while sums use unbracketed `|`
+  - open record and variant rows use quantified spreads such as
+    `all rest. { x: int, ...rest }` and `all rest. Some int | ...rest`
   - type application is juxtaposed: `Option int`, `Pair int str`
 - **Checked specs**: `spec` signatures are verified against their definitions
   (skolemized conformance, including `::` constraint coverage)

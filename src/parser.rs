@@ -263,8 +263,8 @@ fn type_decl(pair: Pair<'_, Rule>) -> TypeDecl {
             Rule::identifier => name = inner.as_str().to_string(),
             Rule::type_param => params.push(inner.as_str().to_string()),
             Rule::ty_alt => {
-                let alt = type_(inner.into_inner().next().unwrap());
-                extra_alts.push(alt);
+                let alt = inner.into_inner().next().unwrap();
+                extra_alts.push(type_(alt));
             }
             _ => {
                 if ty.is_none() {
@@ -294,6 +294,9 @@ fn type_decl(pair: Pair<'_, Rule>) -> TypeDecl {
 /// alternative: `Some`, `Some a` are constructors; `int` is a bare member.
 fn alternative_from_ty(ty: Ty) -> SumAlt {
     match ty {
+        Ty::Named { name, args } if name.starts_with("...") && args.is_empty() => {
+            SumAlt::Row(name.trim_start_matches("...").to_string())
+        }
         Ty::Named { name, args }
             if name.starts_with(|c: char| c.is_ascii_uppercase()) =>
         {
@@ -500,6 +503,16 @@ fn record_pattern(pair: Pair<'_, Rule>) -> Pattern {
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::record_field => fields.push(record_field(inner)),
+            Rule::record_bind => {
+                let name = inner.as_str().to_string();
+                fields.push(RecordField {
+                    name: name.clone(),
+                    pattern: Pattern {
+                        annotation: None,
+                        kind: PatKind::Var(name),
+                    },
+                });
+            }
             Rule::spread_pattern => {
                 rest = Some(inner.into_inner().next().unwrap().as_str().to_string())
             }
@@ -879,6 +892,7 @@ fn is_type(rule: Rule) -> bool {
             | Rule::ty_mut
             | Rule::type_atom
             | Rule::named_binder
+            | Rule::variant_type
     )
 }
 
@@ -889,6 +903,7 @@ fn type_(pair: Pair<'_, Rule>) -> Ty {
         Rule::arrow_type => arrow_type(pair),
         Rule::type_base => type_base(pair),
         Rule::named_binder => named_binder(pair),
+        Rule::variant_type => variant_type(pair),
         other => panic!("unexpected type rule: {other:?}"),
     }
 }
@@ -922,7 +937,7 @@ fn type_base(pair: Pair<'_, Rule>) -> Ty {
         None => return Ty::Tuple(Vec::new()), // unit `()` — `type_base` with no kids
     };
     match first.as_rule() {
-        Rule::ty_sum => ty_sum(first.clone()),
+        Rule::list_union => list_union(first.clone()),
         Rule::ty_record => ty_record(first.clone()),
         Rule::identifier => {
             let name = first.as_str().to_string();
@@ -950,42 +965,50 @@ fn type_base(pair: Pair<'_, Rule>) -> Ty {
     }
 }
 
-/// `[int | str]`, `[Some a | None]` — alternatives separated by `|`.
-///
-/// A bare uppercase identifier cannot be distinguished from a nullary
-/// constructor by the grammar, so uppercase alternatives are always
-/// constructors (`None`), and bare member types are lowercase/builtin names.
-fn ty_sum(pair: Pair<'_, Rule>) -> Ty {
+/// `[int | str]` — a list whose element type is a structural union.
+fn list_union(pair: Pair<'_, Rule>) -> Ty {
     let alts = pair
         .into_inner()
-        .map(|alt| match alt.as_rule() {
-            Rule::sum_ctor_alt => {
-                let mut inner = alt.into_inner();
-                let name = inner.next().unwrap().as_str().to_string();
-                let payload = inner.next().map(type_);
-                SumAlt::Ctor { name, payload }
+        .map(|alt| alternative_from_ty(type_(alt)))
+        .collect();
+    Ty::List(Box::new(Ty::Sum(alts)))
+}
+
+fn variant_type(pair: Pair<'_, Rule>) -> Ty {
+    let alternatives = pair
+        .into_inner()
+        .map(|alt| {
+            if alt.as_rule() == Rule::sum_row {
+                SumAlt::Row(alt.into_inner().next().unwrap().as_str().to_string())
+            } else {
+                alternative_from_ty(type_(alt))
             }
-            _ => match type_(alt) {
-                Ty::Named { name, args } if name.starts_with(|c: char| c.is_ascii_uppercase()) && args.is_empty() => {
-                    SumAlt::Ctor { name, payload: None }
-                }
-                bare => SumAlt::Bare(bare),
-            },
         })
         .collect();
-    Ty::Sum(alts)
+    Ty::Sum(alternatives)
 }
 
 /// `{ a: int, b: bool }` — a record type.
 fn ty_record(pair: Pair<'_, Rule>) -> Ty {
-    let fields = pair
-        .into_inner()
-        .map(|field| {
-            let mut inner = field.into_inner();
-            let name = inner.next().unwrap().as_str().to_string();
-            let ty = type_(inner.next().unwrap());
-            (name, ty)
-        })
-        .collect();
-    Ty::RecordType(fields)
+    let mut fields = Vec::new();
+    let mut row = None;
+    for field in pair.into_inner() {
+        match field.as_rule() {
+            Rule::ty_record_field => {
+                let mut inner = field.into_inner();
+                fields.push((
+                    inner.next().unwrap().as_str().to_string(),
+                    type_(inner.next().unwrap()),
+                ));
+            }
+            Rule::record_row => {
+                row = Some(field.into_inner().next().unwrap().as_str().to_string());
+            }
+            _ => {}
+        }
+    }
+    match row {
+        Some(row) => Ty::OpenRecordType { fields, row },
+        None => Ty::RecordType(fields),
+    }
 }

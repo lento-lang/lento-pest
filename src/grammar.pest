@@ -67,6 +67,7 @@ spec_decl      = { "spec" ~ identifier ~ ":" ~ spec_type }
 // constructor; use the bracketed form for applied types as alternatives.
 type_decl      = { "type" ~ identifier ~ type_param* ~ "=" ~ ltype ~ ty_alt* }
 ty_alt         = { "|" ~ NEWLINE* ~ ltype }
+sum_row        = { "..." ~ type_var }
 type_param     = @{ type_var }
 
 // `let [mut] pattern [: type]  = expression`
@@ -100,17 +101,18 @@ where_clause  = { NEWLINE* ~ "where" ~ NEWLINE* ~ expression ~ ("," ~ NEWLINE* ~
 // Types are right-associative function arrows.
 ltype        = _{ arrow_type }
 arrow_type   = { type_domain ~ (NEWLINE* ~ "->" ~ NEWLINE* ~ arrow_type)? }
-type_domain  = _{ named_binder | type_atom }
-named_binder = { "(" ~ identifier ~ ":" ~ type_atom ~ ")" }
+type_domain  = _{ named_binder | variant_type | type_atom }
+named_binder = { "(" ~ identifier ~ ":" ~ (variant_type | type_atom) ~ ")" }
+variant_type = { type_atom ~ (NEWLINE* ~ "|" ~ NEWLINE* ~ (sum_row | type_atom))+ }
 
 type_atom    = _{ ty_ref | ty_mut | type_base }
 ty_ref       = { "ref" ~ type_atom }
 ty_mut       = { "mut" ~ type_atom }
-// Sum types `[int | str]` require at least one `|`, so `[T]` stays a list
-// type. A sum alternative is either an uppercase constructor `Name payload`
-// or a bare type. Record types `{ a: int, b: bool }` list named fields.
+// Brackets always denote lists. A list element may be a structural union,
+// such as `[int | str]`. Named sums use unbracketed declaration syntax.
+// Record types `{ a: int, b: bool }` list named fields.
 type_base    = {
-      ty_sum
+      list_union
     | identifier ~ type_args? ~ ty_app_args?
     | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
     | "[" ~ type_atom ~ "]"
@@ -118,18 +120,18 @@ type_base    = {
 }
 type_args    = { "<" ~ type_atom ~ ("," ~ type_atom)* ~ ">" }
 ty_app_args  = { type_atom+ }
-ty_sum       = {
-    "[" ~ NEWLINE* ~ sum_alternative
-        ~ (NEWLINE* ~ "|" ~ NEWLINE* ~ sum_alternative)+
+list_union    = {
+    "[" ~ NEWLINE* ~ type_atom
+        ~ (NEWLINE* ~ "|" ~ NEWLINE* ~ type_atom)+
         ~ NEWLINE* ~ "]"
 }
-sum_alternative = _{ sum_ctor_alt | type_atom }
-sum_ctor_alt    = { constructor_name ~ type_atom }
 constructor_name = @{ 'A'..'Z' ~ (ASCII_ALPHA | ASCII_DIGIT | "_")* }
 ty_record       = {
-    "{" ~ NEWLINE* ~ (ty_record_field ~ ("," ~ NEWLINE* ~ ty_record_field)*)? ~ NEWLINE* ~ "}"
+      "{" ~ NEWLINE* ~ (ty_record_field ~ ("," ~ NEWLINE* ~ ty_record_field)*)?
+          ~ ("," ~ NEWLINE* ~ record_row)? ~ NEWLINE* ~ "}"
 }
 ty_record_field = { identifier ~ ":" ~ type_atom }
+record_row      = { "..." ~ type_var }
 
 // --------------------------------------------------------------------------
 // Patterns (left-value shapes: used in `let`, function params, lambda params,
@@ -156,7 +158,9 @@ literal_pattern = _{ boolean | number | string }
 pattern_elem    = { pattern ~ (":" ~ ltype)? }             // tuple element, optionally annotated
 list_pattern    = { "[" ~ (pattern ~ ("," ~ pattern)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "]" }
 spread_pattern  = { "..." ~ identifier }
-record_pattern  = { "{" ~ (record_field ~ ("," ~ record_field)* ~ ("," ~ spread_pattern)? | spread_pattern)? ~ "}" }
+record_pattern  = { "{" ~ (record_item ~ ("," ~ record_item)*)? ~ "}" }
+record_item     = _{ record_field | record_bind | spread_pattern }
+record_bind     = { identifier }
 record_field    = { identifier ~ ":" ~ pattern }
 
 // --------------------------------------------------------------------------

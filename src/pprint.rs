@@ -230,14 +230,23 @@ fn format_type(out: &mut String, ty: &Ty) {
                         None => name.clone(),
                     },
                     SumAlt::Bare(ty) => type_str(ty),
+                    SumAlt::Row(name) => format!("...{name}"),
                 })
                 .collect();
-            let _ = write!(out, "[{}]", parts.join(" | "));
+            let _ = write!(out, "{}", parts.join(" | "));
         }
         Ty::RecordType(fields) => {
             let parts: Vec<String> = fields
                 .iter()
                 .map(|(name, ty)| format!("{name}: {}", type_str(ty)))
+                .collect();
+            let _ = write!(out, "{{{}}}", parts.join(", "));
+        }
+        Ty::OpenRecordType { fields, row } => {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|(name, ty)| format!("{name}: {}", type_str(ty)))
+                .chain(std::iter::once(format!("...{row}")))
                 .collect();
             let _ = write!(out, "{{{}}}", parts.join(", "));
         }

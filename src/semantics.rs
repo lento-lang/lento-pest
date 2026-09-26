@@ -579,6 +579,7 @@ fn contains_type_variable(ty: &MonoType) -> bool {
                         payload.as_ref().is_some_and(contains_type_variable)
                     }
                     crate::types::MonoSumAlt::Bare(ty) => contains_type_variable(ty),
+                    crate::types::MonoSumAlt::Row(ty) => contains_type_variable(ty),
                 })
         }
     }
@@ -603,7 +604,8 @@ fn type_nodes(ty: &MonoType) -> usize {
                         crate::types::MonoSumAlt::Constructor { payload, .. } => {
                             payload.as_ref().map_or(0, type_nodes)
                         }
-                        crate::types::MonoSumAlt::Bare(ty) => type_nodes(ty),
+                    crate::types::MonoSumAlt::Bare(ty) => type_nodes(ty),
+                    crate::types::MonoSumAlt::Row(ty) => type_nodes(ty),
                     })
                     .sum::<usize>()
         }

@@ -426,10 +426,16 @@ fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
                         }
                     }
                     SumAlt::Bare(ty) => collect_named_binders(ty, binders),
+                    SumAlt::Row(_) => {}
                 }
             }
         }
         Ty::RecordType(fields) => {
+            for (_, ty) in fields {
+                collect_named_binders(ty, binders);
+            }
+        }
+        Ty::OpenRecordType { fields, .. } => {
             for (_, ty) in fields {
                 collect_named_binders(ty, binders);
             }
@@ -942,6 +948,7 @@ fn contains_type_variable(ty: &MonoType) -> bool {
                         payload.as_ref().is_some_and(contains_type_variable)
                     }
                     MonoSumAlt::Bare(ty) => contains_type_variable(ty),
+                    MonoSumAlt::Row(ty) => contains_type_variable(ty),
                 })
         }
     }
@@ -975,6 +982,7 @@ fn candidate_specificity(candidate: &crate::specialize::Specialization) -> (usiz
                                         payload.as_ref().map_or(0, size)
                                     }
                                     MonoSumAlt::Bare(ty) => size(ty),
+                                    MonoSumAlt::Row(ty) => size(ty),
                                 })
                                 .sum::<usize>()
                     }
@@ -1490,10 +1498,17 @@ fn resolve_declarations(
                             format!("member{}", metadata.fields.len()),
                             lower_ty(ty, &binders),
                         )),
+                        SumAlt::Row(_) => {}
                     }
                 }
             }
             Ty::RecordType(fields) => {
+                metadata.fields = fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), lower_ty(ty, &binders)))
+                    .collect();
+            }
+            Ty::OpenRecordType { fields, .. } => {
                 metadata.fields = fields
                     .iter()
                     .map(|(name, ty)| (name.clone(), lower_ty(ty, &binders)))
@@ -1596,6 +1611,17 @@ fn install_type_declarations(
                                 .zip(declaration.parameter_ids.iter().copied().map(MonoType::Var))
                                 .collect(),
                         )),
+                        SumAlt::Row(name) => MonoSumAlt::Row(
+                            declaration
+                                .parameters
+                                .iter()
+                                .cloned()
+                                .zip(declaration.parameter_ids.iter().copied().map(MonoType::Var))
+                                .collect::<BTreeMap<_, _>>()
+                                .get(name)
+                                .cloned()
+                                .unwrap_or_else(|| MonoType::Constructor(name.clone(), Vec::new())),
+                        ),
                     })
                     .collect(),
             },
@@ -1899,12 +1925,24 @@ fn validate_impl_type(
                         }
                     }
                     SumAlt::Bare(ty) => validate_impl_type(ty, binders, known_types)?,
+                    SumAlt::Row(name) if !binders.contains(name) => {
+                        return Err(format!("unknown implementation row '{name}'"));
+                    }
+                    SumAlt::Row(_) => {}
                 }
             }
         }
         Ty::RecordType(fields) => {
             for (_, field) in fields {
                 validate_impl_type(field, binders, known_types)?;
+            }
+        }
+        Ty::OpenRecordType { fields, row } => {
+            for (_, field) in fields {
+                validate_impl_type(field, binders, known_types)?;
+            }
+            if !binders.contains(row) {
+                return Err(format!("unknown implementation row '{row}'"));
             }
         }
     }

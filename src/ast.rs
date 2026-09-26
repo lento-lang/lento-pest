@@ -154,10 +154,15 @@ pub enum Ty {
     Ref(Box<Ty>),
     Mut(Box<Ty>),
     NamedBinder { name: String, ty: Box<Ty> },
-    /// `[int | str]` or `[Some a | None]` — a sum type declaration body.
+    /// `int | str` or `Some a | None` — a sum type declaration body.
     Sum(Vec<SumAlt>),
     /// `{ a: int, b: bool }` — a record type.
     RecordType(Vec<(String, Ty)>),
+    /// `{ a: int, ...rest }` — an open record type.
+    OpenRecordType {
+        fields: Vec<(String, Ty)>,
+        row: String,
+    },
 }
 
 /// One alternative of a sum type: an uppercase constructor with an optional
@@ -169,6 +174,8 @@ pub enum SumAlt {
         payload: Option<Ty>,
     },
     Bare(Ty),
+    /// `...r` — an open row of additional alternatives.
+    Row(String),
 }
 
 /// A left-value pattern: a shape that a value is matched or bound against.
