@@ -125,7 +125,7 @@ impl InferCtx {
         self.supply.fresh()
     }
 
-    fn unify(&mut self, a: &MonoType, b: &MonoType) -> Result<(), TypeError> {
+    pub(crate) fn unify(&mut self, a: &MonoType, b: &MonoType) -> Result<(), TypeError> {
         Ok(unify(&mut self.subst, a, b)?)
     }
 
@@ -684,7 +684,17 @@ pub fn infer_typed_expr(
                         children.push(value);
                     }
                     Stmt::Decl(crate::ast::Decl::Let(binding)) => {
+                        let recursive = if let PatKind::Var(name) = &binding.pattern.kind {
+                            let ty = ctx.fresh();
+                            local.insert(name.clone(), TypeScheme::mono(ty.clone()));
+                            Some(ty)
+                        } else {
+                            None
+                        };
                         let value = infer_typed_expr(ctx, &binding.value, &mut local)?;
+                        if let Some(recursive) = recursive {
+                            ctx.unify(&recursive, &value.ty)?;
+                        }
                         check_pattern(ctx, &binding.pattern, &value.ty, &mut local)?;
                         children.push(value);
                     }

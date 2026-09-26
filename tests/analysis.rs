@@ -313,6 +313,12 @@ fn canonical_typed_program_keeps_top_level_let_and_expression_types() {
 }
 
 #[test]
+fn canonical_pipeline_prebinds_recursive_lets() {
+    analyze("let loop = x => loop x\n")
+        .expect("recursive ordinary let should be visible while inferring its value");
+}
+
+#[test]
 fn canonical_pipeline_resolves_fully_typed_overload_calls() {
     let result = analysis("fn id x = x\nlet value = id 1\n")
         .expect("fully applied call should resolve");

@@ -170,8 +170,19 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     for (source_index, statement) in program.statements.iter().enumerate() {
         match statement {
             Stmt::Decl(Decl::Let(binding)) => {
+                let recursive = if let PatKind::Var(name) = &binding.pattern.kind {
+                    let ty = ctx.supply.fresh();
+                    env.insert(name.clone(), crate::types::TypeScheme::mono(ty.clone()));
+                    Some(ty)
+                } else {
+                    None
+                };
                 let value = infer_typed_expr(&mut ctx, &binding.value, &mut env)
                     .map_err(|error| format!("top-level let inference failed: {error}"))?;
+                if let Some(recursive) = recursive {
+                    ctx.unify(&recursive, &value.ty)
+                        .map_err(|error| format!("recursive top-level binding failed: {error}"))?;
+                }
                 check_pattern(&mut ctx, &binding.pattern, &value.ty, &mut env)
                     .map_err(|error| format!("top-level binding failed: {error}"))?;
                 if let PatKind::Var(name) = &binding.pattern.kind {
