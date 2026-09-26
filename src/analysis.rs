@@ -98,6 +98,13 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let mut env = base_env(&mut ctx.supply);
 
     let declarations = resolve_declarations(program, &mut ctx)?;
+    for declaration in &declarations.types {
+        ctx.register_type_declaration(
+            declaration.name.clone(),
+            declaration.parameters.clone(),
+            declaration.source.clone(),
+        );
+    }
     install_type_declarations(&mut env, &declarations);
     install_class_methods(&mut env, &mut ctx, program);
     validate_spec_refinements(program, &mut ctx, &env)?;

@@ -175,7 +175,7 @@ fn least_generalization(
 /// annotations: one `Option<MonoType>` per parameter. An annotation that
 /// lowers to a bare variable (`(x : a)`) induces NO restriction (`None`) — it
 /// is a redundant generic annotation, not a boundary.
-fn declared_domain(clause: &crate::ast::FnDecl) -> Vec<Option<MonoType>> {
+fn declared_domain(ctx: &InferCtx, clause: &crate::ast::FnDecl) -> Vec<Option<MonoType>> {
     clause
         .params
         .iter()
@@ -191,7 +191,7 @@ fn declared_domain(clause: &crate::ast::FnDecl) -> Vec<Option<MonoType>> {
                         return None;
                     }
                 }
-                let lowered = crate::types::lower_ty(ann, &BTreeMap::new());
+                let lowered = ctx.lower_surface_ty(ann, &BTreeMap::new());
                 // A bare type variable is not a restriction.
                 match lowered {
                     MonoType::Var(_) => None,
@@ -296,7 +296,7 @@ pub fn partition(
         let domain = group
             .raw_clauses
             .get(i)
-            .map(declared_domain)
+            .map(|clause| declared_domain(ctx, clause))
             .unwrap_or_default();
         let scheme = canonicalize(&crate::types::generalize(
             env,

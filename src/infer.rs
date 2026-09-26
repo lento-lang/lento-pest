@@ -108,6 +108,7 @@ pub struct InferCtx {
     pub supply: TypeVarSupply,
     pub subst: Substitution,
     pub constraints: Vec<SchemeConstraint>,
+    pub type_declarations: BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
 }
 
 impl InferCtx {
@@ -116,6 +117,7 @@ impl InferCtx {
             supply: TypeVarSupply::new(),
             subst: Substitution::new(),
             constraints: Vec::new(),
+            type_declarations: BTreeMap::new(),
         }
     }
 
@@ -130,6 +132,91 @@ impl InferCtx {
     /// Resolve a type through the current substitution.
     pub fn resolve(&self, ty: &MonoType) -> MonoType {
         self.subst.apply(ty)
+    }
+
+    pub fn register_type_declaration(
+        &mut self,
+        name: String,
+        parameters: Vec<String>,
+        source: crate::ast::Ty,
+    ) {
+        self.type_declarations.insert(name, (parameters, source));
+    }
+
+    pub fn lower_surface_ty(
+        &self,
+        ty: &crate::ast::Ty,
+        binders: &BTreeMap<String, MonoType>,
+    ) -> MonoType {
+        match ty {
+            crate::ast::Ty::Named { name, args } => {
+                if args.is_empty() {
+                    if let Some(bound) = binders.get(name) {
+                        return bound.clone();
+                    }
+                }
+                if let Some((parameters, source)) = self.type_declarations.get(name) {
+                    if !matches!(source, crate::ast::Ty::Sum(_)) && parameters.len() == args.len() {
+                        let mapping = parameters
+                            .iter()
+                            .zip(args)
+                            .map(|(parameter, argument)| {
+                                (parameter.clone(), self.lower_surface_ty(argument, binders))
+                            })
+                            .collect();
+                        return self.lower_surface_ty(source, &mapping);
+                    }
+                }
+                MonoType::Constructor(
+                    name.clone(),
+                    args.iter()
+                        .map(|argument| self.lower_surface_ty(argument, binders))
+                        .collect(),
+                )
+            }
+            crate::ast::Ty::Tuple(items) => MonoType::Tuple(
+                items
+                    .iter()
+                    .map(|item| self.lower_surface_ty(item, binders))
+                    .collect(),
+            ),
+            crate::ast::Ty::List(inner) => {
+                MonoType::List(Box::new(self.lower_surface_ty(inner, binders)))
+            }
+            crate::ast::Ty::Arrow { from, to } => MonoType::Function(
+                Box::new(self.lower_surface_ty(from, binders)),
+                Box::new(self.lower_surface_ty(to, binders)),
+            ),
+            crate::ast::Ty::Ref(inner) => {
+                MonoType::Ref(Box::new(self.lower_surface_ty(inner, binders)))
+            }
+            crate::ast::Ty::Mut(inner) => {
+                MonoType::Mut(Box::new(self.lower_surface_ty(inner, binders)))
+            }
+            crate::ast::Ty::NamedBinder { ty, .. } => self.lower_surface_ty(ty, binders),
+            crate::ast::Ty::Sum(alts) => MonoType::Constructor(
+                format!("<sum:{}>", alts.len()),
+                alts.iter()
+                    .map(|alt| match alt {
+                        crate::ast::SumAlt::Ctor { name, payload } => MonoType::Constructor(
+                            name.clone(),
+                            payload
+                                .as_ref()
+                                .map(|payload| vec![self.lower_surface_ty(payload, binders)])
+                                .unwrap_or_default(),
+                        ),
+                        crate::ast::SumAlt::Bare(ty) => self.lower_surface_ty(ty, binders),
+                    })
+                    .collect(),
+            ),
+            crate::ast::Ty::RecordType(fields) => MonoType::Record {
+                fields: fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), self.lower_surface_ty(ty, binders)))
+                    .collect(),
+                rest: None,
+            },
+        }
     }
 }
 
@@ -302,7 +389,7 @@ pub fn check_pattern(
 ) -> Result<(), TypeError> {
     // An explicit annotation unifies with the expected type first.
     if let Some(annotation) = &pat.annotation {
-        let ann = crate::types::lower_ty(annotation, &BTreeMap::new());
+        let ann = ctx.lower_surface_ty(annotation, &BTreeMap::new());
         ctx.unify(expected, &ann)?;
     }
     match &pat.kind {
@@ -783,7 +870,7 @@ pub fn infer_clause(
     let body = infer_typed_expr(ctx, &clause.body, &mut local)?;
     let result_ty = match &clause.ret {
         Some(ret) => {
-            let declared = crate::types::lower_ty(ret, &BTreeMap::new());
+            let declared = ctx.lower_surface_ty(ret, &BTreeMap::new());
             ctx.unify(&body.ty, &declared)?;
             declared
         }
