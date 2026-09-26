@@ -1,15 +1,11 @@
-#![cfg(feature = "legacy-typecheck")]
-
 // Full-pipeline sample tests: every `tests/samples/**/*.lt` must parse,
-// type-check, and evaluate without error. Samples are organized into
+// load and evaluate without error through the default CLI. Samples are
+// organized into
 // categorical subdirectories (basics, matching, types, specs); the walk
 // here is recursive, so new categories need no harness changes.
 
 use std::fs;
 use std::path::{Path, PathBuf};
-
-use lento::ast::desugar_program;
-use lento::parser::parse_program;
 
 #[test]
 fn samples_parse_check_and_evaluate() {
@@ -58,8 +54,19 @@ fn collect_samples(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn run(source: &str) -> Result<(), String> {
-    let ast = parse_program(source).map_err(|e| format!("parse error: {e}"))?;
-    let desugared = desugar_program(&ast);
-    lento::typecheck::check_program(&desugared)?;
-    lento::eval::eval_program(&desugared).map(|_| ())
+    let path = std::env::temp_dir().join(format!(
+        "lento-parser-sample-{}.lt",
+        std::process::id()
+    ));
+    std::fs::write(&path, source).map_err(|e| format!("write sample: {e}"))?;
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_lento_rust"))
+        .arg(&path)
+        .output()
+        .map_err(|e| format!("run CLI: {e}"))?;
+    let _ = std::fs::remove_file(&path);
+    if result.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&result.stderr).into_owned())
+    }
 }

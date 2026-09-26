@@ -49,23 +49,9 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
     parse_program(&src).map_err(|e| format!("Parse error in {}:\n{}", path.display(), e))
 }
 
-fn load_with_prelude(path: &std::path::Path) -> Result<lento::ast::Program, String> {
-    let prelude = parse_program(include_str!("prelude.lt"))
-        .map_err(|e| format!("Parse error in prelude.lt:\n{}", e))?;
-    let user = load(path)?;
-    let mut statements = prelude.statements;
-    statements.extend(user.statements);
-    let mut spans = prelude.spans;
-    spans.extend(user.spans);
-    Ok(lento::ast::Program { statements, spans })
-}
-
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
-    let analysis = lento::analysis::analyze_program(ast)?;
-    let desugared = lento::semantics::lower_analyzed_program(ast, &analysis.typed);
-    #[cfg(feature = "legacy-typecheck")]
-    lento::typecheck::check_program(&desugared)?;
-    let value = lento::eval::eval_program_with_declarations(&desugared, &analysis.declarations)?;
+    let desugared = lento::ast::desugar_program(ast);
+    let value = lento::eval::eval_program(&desugared)?;
     if matches!(desugared.statements.last(), Some(lento::ast::Stmt::Expr(_)))
         && !matches!(value, lento::eval::Value::Unit)
     {
@@ -96,7 +82,7 @@ fn main() -> Result<(), String> {
                     .map_err(|e| format!("Error writing {}: {}", path.display(), e))?;
                 Ok(())
             } else {
-                let ast = load_with_prelude(path)?;
+                let ast = load(path)?;
                 interpret(&ast)
             }
         }
