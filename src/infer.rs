@@ -419,7 +419,14 @@ pub fn check_pattern(
             let elem = ctx.fresh();
             ctx.unify(expected, &MonoType::List(Box::new(elem.clone())))?;
             for p in parts {
-                check_pattern(ctx, p, &elem, env)?;
+                if let PatKind::Spread(name) = &p.kind {
+                    env.insert(
+                        name.clone(),
+                        TypeScheme::mono(MonoType::List(Box::new(elem.clone()))),
+                    );
+                } else {
+                    check_pattern(ctx, p, &elem, env)?;
+                }
             }
             Ok(())
         }
