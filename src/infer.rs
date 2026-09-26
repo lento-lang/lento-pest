@@ -166,71 +166,81 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
     let b = 1_000_001u32;
     let mut env = TypeEnv::new();
     let mono = |t: MonoType| TypeScheme::mono(t);
-    // A couple of representative polymorphic intrinsics; the full table grows
-    // as the evaluator's intrinsics are typed.
+    // Intrinsics use broad schemes here.  Class declarations in the prelude
+    // replace overloaded names with their constrained schemes; the fallback
+    // schemes keep standalone programs and the canonical CLI pipeline typed.
+    let unary = |input: MonoType, output: MonoType| {
+        MonoType::Function(Box::new(input), Box::new(output))
+    };
+    let binary = |left: MonoType, right: MonoType, output: MonoType| {
+        unary(left, unary(right, output))
+    };
+    let list = |element: MonoType| MonoType::List(Box::new(element));
+    let var = |id| MonoType::Var(id);
+    let poly = |quantified: Vec<u32>, body| TypeScheme {
+        quantified,
+        constraints: vec![],
+        body,
+    };
+
+    env.insert("print".to_string(), mono(unary(var(a), ctor::unit())));
+    env.insert("println".to_string(), mono(unary(var(a), ctor::unit())));
     env.insert(
         "assert".to_string(),
-        TypeScheme::mono(MonoType::Function(
-            Box::new(ctor::bool()),
-            Box::new(ctor::unit()),
-        )),
+        mono(unary(ctor::bool(), ctor::unit())),
     );
     env.insert(
         "concat".to_string(),
-        TypeScheme {
-            quantified: vec![a],
-            constraints: vec![],
-            body: MonoType::Function(
-                Box::new(MonoType::List(Box::new(MonoType::Var(a)))),
-                Box::new(MonoType::Function(
-                    Box::new(MonoType::List(Box::new(MonoType::Var(a)))),
-                    Box::new(MonoType::List(Box::new(MonoType::Var(a)))),
-                )),
-            ),
-        },
+        poly(vec![a], binary(var(a), var(a), var(a))),
     );
     env.insert(
         "head".to_string(),
-        TypeScheme {
-            quantified: vec![a],
-            constraints: vec![],
-            body: MonoType::Function(
-                Box::new(MonoType::List(Box::new(MonoType::Var(a)))),
-                Box::new(MonoType::Var(a)),
-            ),
-        },
-    );
-    env.insert(
-        "map".to_string(),
-        TypeScheme {
-            quantified: vec![a, b],
-            constraints: vec![],
-            body: MonoType::Function(
-                Box::new(MonoType::Function(
-                    Box::new(MonoType::Var(a)),
-                    Box::new(MonoType::Var(b)),
-                )),
-                Box::new(MonoType::Function(
-                    Box::new(MonoType::List(Box::new(MonoType::Var(a)))),
-                    Box::new(MonoType::List(Box::new(MonoType::Var(b)))),
-                )),
-            ),
-        },
+        poly(vec![a], unary(list(var(a)), var(a))),
     );
     env.insert(
         "len".to_string(),
-        mono(MonoType::Function(
-            Box::new(MonoType::List(Box::new(MonoType::Var(a)))),
-            Box::new(ctor::int()),
-        )),
+        poly(vec![a], unary(var(a), ctor::int())),
+    );
+    env.insert(
+        "__list_len".to_string(),
+        poly(vec![a], unary(list(var(a)), ctor::int())),
+    );
+    env.insert(
+        "__str_len".to_string(),
+        mono(unary(ctor::str(), ctor::int())),
     );
     env.insert(
         "to_string".to_string(),
-        mono(MonoType::Function(
-            Box::new(MonoType::Var(a)),
-            Box::new(ctor::str()),
-        )),
+        poly(vec![a], unary(var(a), ctor::str())),
     );
+    env.insert("tail".to_string(), poly(vec![a], unary(list(var(a)), list(var(a)))));
+    env.insert("is_empty".to_string(), poly(vec![a], unary(list(var(a)), ctor::bool())));
+    env.insert("abs".to_string(), poly(vec![a], unary(var(a), var(a))));
+    env.insert("min".to_string(), poly(vec![a], binary(var(a), var(a), var(a))));
+    env.insert("max".to_string(), poly(vec![a], binary(var(a), var(a), var(a))));
+    env.insert("parse_int".to_string(), mono(unary(ctor::str(), ctor::int())));
+    env.insert("contains".to_string(), poly(vec![a, b], binary(var(a), var(b), ctor::bool())));
+    env.insert("take".to_string(), poly(vec![a], binary(ctor::int(), var(a), var(a))));
+    env.insert("drop".to_string(), poly(vec![a], binary(ctor::int(), var(a), var(a))));
+    env.insert("reverse".to_string(), poly(vec![a], unary(var(a), var(a))));
+    env.insert("slice".to_string(), poly(vec![a], unary(ctor::int(), unary(ctor::int(), unary(var(a), var(a))))));
+    env.insert("join".to_string(), mono(binary(ctor::str(), list(ctor::str()), ctor::str())));
+    env.insert("split".to_string(), mono(binary(ctor::str(), ctor::str(), list(ctor::str()))));
+    env.insert(
+        "map".to_string(),
+        poly(vec![a, b], binary(unary(var(a), var(b)), list(var(a)), list(var(b)))),
+    );
+    env.insert(
+        "filter".to_string(),
+        poly(vec![a], binary(unary(var(a), ctor::bool()), list(var(a)), list(var(a)))),
+    );
+    env.insert(
+        "foldl".to_string(),
+        poly(vec![a, b], binary(unary(var(a), unary(var(b), var(a))), var(a), unary(list(var(b)), var(a)))),
+    );
+    env.insert("any".to_string(), poly(vec![a], binary(unary(var(a), ctor::bool()), list(var(a)), ctor::bool())));
+    env.insert("all".to_string(), poly(vec![a], binary(unary(var(a), ctor::bool()), list(var(a)), ctor::bool())));
+    env.insert("range".to_string(), mono(binary(ctor::int(), ctor::int(), list(ctor::int()))));
     let _ = b;
     env
 }

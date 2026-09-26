@@ -205,6 +205,18 @@ fn len_intrinsic_works_on_list_tuple_and_string() {
 }
 
 #[test]
+fn type_specific_len_intrinsics_are_not_recursive() {
+    let value = eval("(__list_len [1, 2], __str_len \"abc\")\n").unwrap();
+    match value {
+        Value::Tuple(items) => {
+            assert!(matches!(&items[0], Value::Int(2)));
+            assert!(matches!(&items[1], Value::Int(3)));
+        }
+        other => panic!("expected tuple, got {other:?}"),
+    }
+}
+
+#[test]
 fn divide_and_mod_by_zero_return_errors_not_panics() {
     let div_err = eval("1 / 0\n").unwrap_err();
     assert!(div_err.contains("integer error in /"));

@@ -27,8 +27,8 @@ class Seq a {
     spec slice : int -> int -> a -> a
 }
 
-class Len {
-    spec len : all e. [e] -> int
+class Len e {
+    spec len : e -> int
 }
 
 class Haystack h e {
@@ -78,8 +78,12 @@ impl Seq [int] {
     fn slice start stop xs = slice start stop xs
 }
 
-impl Len {
-    fn len xs = len xs
+impl Len [a] {
+    fn len xs = __list_len xs
+}
+
+impl Len str {
+    fn len text = __str_len text
 }
 
 impl Haystack (str) (str) {

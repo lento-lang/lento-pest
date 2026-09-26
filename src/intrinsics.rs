@@ -15,6 +15,8 @@ enum IntrinsicKind {
     Print,
     Println,
     Len,
+    ListLen,
+    StrLen,
     Assert,
     Concat,
     Head,
@@ -45,6 +47,8 @@ pub(crate) fn install_intrinsics(env: &mut Env) {
         ("print", IntrinsicKind::Print, 1),
         ("println", IntrinsicKind::Println, 1),
         ("len", IntrinsicKind::Len, 1),
+        ("__list_len", IntrinsicKind::ListLen, 1),
+        ("__str_len", IntrinsicKind::StrLen, 1),
         ("assert", IntrinsicKind::Assert, 1),
         ("concat", IntrinsicKind::Concat, 2),
         ("head", IntrinsicKind::Head, 1),
@@ -98,6 +102,14 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
             Value::Str(text) => Ok(Value::Int(text.chars().count() as i64)),
             Value::Record(fields) => Ok(Value::Int(fields.len() as i64)),
             value => Err(format!("len expects list, tuple, record, or string; got {value}")),
+        },
+        IntrinsicKind::ListLen => match &intrinsic.args[0] {
+            Value::List(items) => Ok(Value::Int(items.len() as i64)),
+            value => Err(format!("__list_len expects a list; got {value}")),
+        },
+        IntrinsicKind::StrLen => match &intrinsic.args[0] {
+            Value::Str(text) => Ok(Value::Int(text.chars().count() as i64)),
+            value => Err(format!("__str_len expects a string; got {value}")),
         },
         IntrinsicKind::Assert => match &intrinsic.args[0] {
             Value::Bool(true) => Ok(Value::Unit),

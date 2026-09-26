@@ -46,6 +46,28 @@ fn canonical_pipeline_accepts_polymorphic_identity() {
 }
 
 #[test]
+fn prelude_len_uses_type_specific_native_intrinsics() {
+    let program = parse_program(include_str!("../src/prelude.lt")).expect("prelude should parse");
+    let analysis = analyze_program(&program).expect("prelude should analyze");
+    let len = analysis
+        .declarations
+        .classes
+        .iter()
+        .find(|class| class.name == "Len")
+        .expect("Len class should exist");
+    assert_eq!(len.parameters, vec!["e"]);
+    assert_eq!(
+        analysis
+            .declarations
+            .instances
+            .iter()
+            .filter(|instance| instance.class == "Len")
+            .count(),
+        2
+    );
+}
+
+#[test]
 fn canonical_pipeline_keeps_wip_exhaustiveness_errors() {
     let error = analyze("fn f b = match b { true => 1 }\n").expect_err("match is incomplete");
     assert!(error.contains("non-exhaustive"), "{error}");
