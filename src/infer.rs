@@ -183,8 +183,8 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         body,
     };
 
-    env.insert("print".to_string(), mono(unary(var(a), ctor::unit())));
-    env.insert("println".to_string(), mono(unary(var(a), ctor::unit())));
+    env.insert("print".to_string(), poly(vec![a], unary(var(a), ctor::unit())));
+    env.insert("println".to_string(), poly(vec![a], unary(var(a), ctor::unit())));
     env.insert("typeof".to_string(), poly(vec![a], unary(var(a), ctor::str())));
     env.insert("assert".to_string(), mono(unary(ctor::bool(), ctor::unit())));
     env.insert(
