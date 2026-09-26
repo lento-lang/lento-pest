@@ -9,7 +9,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
-legacy-typecheck = ["dep:cvc5"]
 canonical-smt = ["dep:cvc5"]
 
 [dependencies]
