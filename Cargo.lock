@@ -175,6 +175,7 @@ dependencies = [
  "bindgen",
  "cc",
  "convert_case",
+ "glob",
  "toml",
 ]
 
