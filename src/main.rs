@@ -50,9 +50,10 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
 }
 
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
-    let desugared = lento::ast::desugar_program(ast);
-    let value = lento::eval::eval_program(&desugared)?;
-    if matches!(desugared.statements.last(), Some(lento::ast::Stmt::Expr(_)))
+    let analysis = lento::analysis::analyze_program(ast)?;
+    let lowered = lento::semantics::lower_analyzed_program(ast, &analysis.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)?;
+    if matches!(lowered.statements.last(), Some(lento::ast::Stmt::Expr(_)))
         && !matches!(value, lento::eval::Value::Unit)
     {
         println!("{value}");
