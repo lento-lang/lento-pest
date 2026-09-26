@@ -6,9 +6,10 @@ where-clause design in `docs/where-refinements.md`.
 
 ## Done
 
-### 2026-09 — type checker bug fixes (5 commits)
+### 2026-09 — canonical type-checker migration
 
-All found by review; each has a regression test in `tests/typecheck.rs`.
+All found by review; regression coverage lives in `tests/analysis.rs`,
+`tests/infer.rs`, and the focused subsystem test files.
 
 - Assignment never checked the assigned value against the binding's type
   (`x = "hello"` after `let mut x = 5` checked clean). Mutable lets are
@@ -16,10 +17,8 @@ All found by review; each has a regression test in `tests/typecheck.rs`.
 - Parameterized type synonyms silently dropped their type arguments
   (`Wrapper<int>` ≡ `Wrapper<str>`). Arguments now bind to the synonym's
   parameters, mirroring `ctor_instance` for sums.
-- `generalize` dropped fully-concrete pending constraints unverified when a
-  let annotation bound the constraint's last free variable
-  (`let f : str -> str = x => x * x` checked clean). Pending constraints are
-  now re-solved after the annotation unify.
+- Let annotations now unify before pending class constraints are solved;
+  concrete unsatisfied constraints are rejected.
 - Spec conformance only fired when the named `let` was processed: specs
   declared after their definition were never checked, and specs without any
   definition passed silently. End-of-program sweep now verifies every
@@ -68,6 +67,8 @@ statically; see `src/exhaustive.rs` module docs.
   patterns with refutable inners claim nothing.
 - Missing-case errors name the case (`missing constructor 'None'`,
   `missing an empty list`).
+- Typed pattern annotations contribute their declared domains to coverage;
+  uppercase constructor patterns retain constructor identity.
 - Grammar change: match arms must be separated by commas (may sit at
   end-of-line; no trailing comma; `;` and bare-newline separators removed).
   pprint emits commas; all samples and inline test programs updated.
@@ -83,8 +84,8 @@ Ordered by current priority. All were explicit non-goals in
    (currently builtin-only).
 2. **Modules** — single flat namespace; top-level declarations may shadow
    in nested blocks only.
-3. **Polymorphic variants** — anonymous `[a | b]` sums are generative per
-   occurrence; no shared open variant types.
+3. **Polymorphic variants** — anonymous `[a | b]` sums are structural and
+   closed; no shared open variant types or row-polymorphic variants.
 4. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
    runtime checks remain the authority.
 5. **Expression-level error spans** — errors report the enclosing
