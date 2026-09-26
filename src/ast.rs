@@ -7,7 +7,7 @@
 ///
 /// `spans` holds one source position per statement (line, col, both 1-based),
 /// aligned with `statements`. It is used by the type checker for error
-/// locations; `desugar_program` preserves the alignment.
+/// locations; runtime lowering preserves the alignment.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub statements: Vec<Stmt>,
@@ -415,137 +415,6 @@ impl FnDecl {
             annotation,
             value,
         }
-    }
-}
-
-/// Desugar every `fn` clause in a program into the `let` bindings the
-/// evaluator expects, so that interpreting never sees an `FnDecl`.
-///
-/// Consecutive `fn` clauses of the same name and arity are grouped into a
-/// single `let f = v1 => v2 => ... => match (v1, ..., vk) { ... }` (a lone
-/// clause desugars to plain curried lambdas). Statements that are not `fn`
-/// pass through unchanged.
-pub fn desugar_program(program: &Program) -> Program {
-    let stmts = &program.statements;
-    let mut out = Vec::with_capacity(stmts.len());
-    let mut spans = Vec::with_capacity(program.spans.len());
-    let mut i = 0;
-    while i < stmts.len() {
-        // Only top-level `fn` clauses are considered for grouping.
-        match &stmts[i] {
-            Stmt::Decl(Decl::Fn(f)) => {
-                let span = program.spans.get(i).copied().unwrap_or(Span { line: 0, col: 0 });
-                let name = f.name.clone();
-                let arity = f.params.len();
-                let mut clauses = vec![(f.params.clone(), f.ret.clone(), f.body.clone())];
-                let mut j = i + 1;
-                while j < stmts.len() {
-                    if let Stmt::Decl(Decl::Fn(g)) = &stmts[j] {
-                        if g.name == name && g.params.len() == arity {
-                            clauses.push((g.params.clone(), g.ret.clone(), g.body.clone()));
-                            j += 1;
-                            continue;
-                        }
-                    }
-                    break;
-                }
-                let letdecl = if clauses.len() == 1 {
-                    let (params, ret, body) = clauses.remove(0);
-                    FnDecl {
-                        name,
-                        params,
-                        ret,
-                        body,
-                    }
-                    .desugar()
-                } else {
-                    grouped_fn(name, clauses)
-                };
-                out.push(Stmt::Decl(Decl::Let(letdecl)));
-                spans.push(span);
-                i = j;
-            }
-            _ => {
-                out.push(stmts[i].clone());
-                spans.push(program.spans.get(i).copied().unwrap_or(Span { line: 0, col: 0 }));
-                i += 1;
-            }
-        }
-    }
-    Program { statements: out, spans }
-}
-
-/// Group multiple `fn` clauses of the same name and arity into a single
-/// `let f = v1 => v2 => ... => match (v1, ..., vk) { pat1 => body1, ... }`.
-///
-/// Each clause becomes one arm of the match; a k-parameter clause (k >= 2)
-/// matches on a tuple of its parameters, and a single parameter is matched
-/// directly (following the design doc's `n => match n { ... }`).
-fn grouped_fn(name: String, clauses: Vec<(Vec<Pattern>, Option<Ty>, Expr)>) -> LetDecl {
-    let k = clauses[0].0.len();
-    // Reuse the first clause's plain-Var parameter names when available; fall
-    // back to generated names otherwise.
-    let bind: Vec<String> = (0..k)
-        .map(|i| match clauses[0].0[i].kind {
-            PatKind::Var(ref n) => n.clone(),
-            _ => format!("__l{name}{i}"),
-        })
-        .collect();
-
-    let scrutinee = if k == 1 {
-        Expr::Var(VarExpr {
-            name: bind[0].clone(),
-        })
-    } else {
-        Expr::Tuple(TupleExpr {
-            items: bind
-                .iter()
-                .map(|f| Expr::Var(VarExpr { name: f.clone() }))
-                .collect(),
-        })
-    };
-
-    let arms = clauses
-        .into_iter()
-        .map(|(params, _, body)| {
-            let pattern = if params.len() == 1 {
-                params.into_iter().next().unwrap()
-            } else {
-                Pattern {
-                    annotation: None,
-                    kind: PatKind::Tuple(params),
-                }
-            };
-            MatchArm {
-                pattern,
-                guard: None,
-                body: Box::new(body),
-            }
-        })
-        .collect();
-
-    let mut value = Expr::Match(MatchExpr {
-        scrutinee: Box::new(scrutinee),
-        arms,
-    });
-    for f in bind.iter().rev() {
-        value = Expr::Lambda(LambdaExpr {
-            params: vec![Pattern {
-                annotation: None,
-                kind: PatKind::Var(f.clone()),
-            }],
-            body: Box::new(value),
-        });
-    }
-
-    LetDecl {
-        mutable: false,
-        pattern: Pattern {
-            annotation: None,
-            kind: PatKind::Var(name.clone()),
-        },
-        annotation: None,
-        value,
     }
 }
 

@@ -70,7 +70,7 @@ fn stmt(pair: Pair<'_, Rule>) -> Option<Stmt> {
         Rule::type_decl => Some(Stmt::Decl(Decl::Type(type_decl(pair)))),
         Rule::let_decl => Some(Stmt::Decl(Decl::Let(let_decl(pair)))),
         // `fn` is kept as its own node in the AST so the source round-trips;
-        // the evaluator desugars it via `desugar_program`/`desugar_fn`.
+        // runtime lowering desugars it before evaluation.
         Rule::fn_clause => Some(Stmt::Decl(Decl::Fn(fn_clause(pair)))),
         _ => Some(Stmt::Expr(expression(pair))),
     }

@@ -1,27 +1,24 @@
 use std::collections::HashMap;
 
-use lento::ast::desugar_program;
 use lento::eval::{Binding, Env, Value};
 use lento::parser::parse_program;
 
 fn eval(src: &str) -> Result<Value, String> {
     let ast = parse_program(src).map_err(|e| e.to_string())?;
-    let desugared = desugar_program(&ast);
-    lento::eval::eval_program(&desugared)
+    let mut env = lento::eval::initial_env();
+    lento::eval::eval_program_in_env(&ast, &mut env)
 }
 
 fn eval_with_env(src: &str) -> Result<(Value, Env), String> {
     let ast = parse_program(src).map_err(|e| e.to_string())?;
-    let desugared = desugar_program(&ast);
     let mut env = lento::eval::initial_env();
-    let value = lento::eval::eval_program_in_env(&desugared, &mut env)?;
+    let value = lento::eval::eval_program_in_env(&ast, &mut env)?;
     Ok((value, env))
 }
 
 fn eval_in_existing_env(src: &str, env: &mut Env) -> Result<Value, String> {
     let ast = parse_program(src).map_err(|e| e.to_string())?;
-    let desugared = desugar_program(&ast);
-    lento::eval::eval_program_in_env(&desugared, env)
+    lento::eval::eval_program_in_env(&ast, env)
 }
 
 fn assert_int(value: Value, expected: i64) {

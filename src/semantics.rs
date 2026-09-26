@@ -16,7 +16,7 @@
 //      here so later phases (type inference, specialization, overload
 //      resolution) have a stable IR to fill in. `FnDecl` is never rewritten
 //      into `LetDecl` to encode overloading; the typed IR replaces the
-//      `grouped_fn`/`desugar_program` path after typing.
+//      runtime function grouping path after typing.
 
 use std::fmt;
 
@@ -377,7 +377,7 @@ pub struct TypedProgram {
 /// understands: each overload set becomes one curried `let` whose body
 /// pattern-matches on its specialization's clauses.
 ///
-/// This is the typed replacement for `ast::grouped_fn`/`desugar_program`:
+/// This is the typed replacement for runtime function grouping:
 /// grouping decisions come from type checking (one `TypedOverloadSet` per
 /// function, one match per specialization), not from name/arity adjacency
 /// while walking statements.

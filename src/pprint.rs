@@ -108,7 +108,7 @@ fn format_decl(out: &mut String, decl: &Decl) {
             out.push('\n');
         }
         // `fn` prints in its source form, one clause per declaration. The
-        // evaluator desugars it (see `desugar_program`), but the printer is
+        // runtime lowering desugars it before evaluation, but the printer is
         // faithful to what the user wrote so files round-trip.
         Decl::Fn(f) => {
             let _ = write!(out, "fn {} ", f.name);

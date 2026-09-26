@@ -4,8 +4,9 @@ use std::fmt;
 use std::rc::Rc;
 
 use crate::ast::{
-    BinaryOp, BlockExpr, Decl, Expr, LetDecl, Lit, MatchArm, PatKind, Pattern, Program, SumAlt,
-    RecordValueExpr, Stmt, Ty, UnaryOp,
+    BinaryOp, BlockExpr, Decl, Expr, FnDecl, LambdaExpr, LetDecl, Lit, MatchArm, MatchExpr,
+    PatKind, Pattern, Program, RecordValueExpr, Span, Stmt, SumAlt, Ty, TupleExpr, UnaryOp,
+    VarExpr,
 };
 use crate::intrinsics::{apply_intrinsic, install_intrinsics, Intrinsic};
 
@@ -159,11 +160,6 @@ fn install_resolved_declarations(
     }
 }
 
-pub fn eval_program(program: &Program) -> Result<Value, String> {
-    let mut env = initial_env();
-    eval_program_in_env(program, &mut env)
-}
-
 pub fn initial_env() -> Env {
     let mut env = Env::new();
     install_intrinsics(&mut env);
@@ -171,11 +167,90 @@ pub fn initial_env() -> Env {
 }
 
 pub fn eval_program_in_env(program: &Program, env: &mut Env) -> Result<Value, String> {
+    let program = prepare_runtime_program(program);
     let mut last = Value::Unit;
     for stmt in &program.statements {
         last = eval_stmt(stmt, env)?;
     }
     Ok(last)
+}
+
+fn prepare_runtime_program(program: &Program) -> Program {
+    let mut statements = Vec::with_capacity(program.statements.len());
+    let mut spans = Vec::with_capacity(program.spans.len());
+    let mut index = 0;
+    while index < program.statements.len() {
+        let Stmt::Decl(Decl::Fn(first)) = &program.statements[index] else {
+            statements.push(program.statements[index].clone());
+            spans.push(program.spans.get(index).copied().unwrap_or(Span { line: 0, col: 0 }));
+            index += 1;
+            continue;
+        };
+
+        let name = first.name.clone();
+        let arity = first.params.len();
+        let mut clauses = vec![(first.params.clone(), first.body.clone())];
+        let mut end = index + 1;
+        while end < program.statements.len() {
+            let Stmt::Decl(Decl::Fn(next)) = &program.statements[end] else { break };
+            if next.name != name || next.params.len() != arity { break; }
+            clauses.push((next.params.clone(), next.body.clone()));
+            end += 1;
+        }
+        let let_decl = if clauses.len() == 1 {
+            FnDecl {
+                name: name.clone(),
+                params: clauses[0].0.clone(),
+                ret: first.ret.clone(),
+                body: clauses[0].1.clone(),
+            }.desugar()
+        } else {
+            grouped_runtime_fn(name, clauses)
+        };
+        statements.push(Stmt::Decl(Decl::Let(let_decl)));
+        spans.push(program.spans.get(index).copied().unwrap_or(Span { line: 0, col: 0 }));
+        index = end;
+    }
+    Program { statements, spans }
+}
+
+fn grouped_runtime_fn(name: String, clauses: Vec<(Vec<Pattern>, Expr)>) -> LetDecl {
+    let arity = clauses[0].0.len();
+    let bind: Vec<String> = (0..arity)
+        .map(|index| match clauses[0].0[index].kind {
+            PatKind::Var(ref name) => name.clone(),
+            _ => format!("__l{name}{index}"),
+        })
+        .collect();
+    let scrutinee = if arity == 1 {
+        Expr::Var(VarExpr { name: bind[0].clone() })
+    } else {
+        Expr::Tuple(TupleExpr {
+            items: bind.iter().map(|name| Expr::Var(VarExpr { name: name.clone() })).collect(),
+        })
+    };
+    let arms = clauses.into_iter().map(|(params, body)| MatchArm {
+        pattern: if params.len() == 1 {
+            params.into_iter().next().unwrap()
+        } else {
+            Pattern { annotation: None, kind: PatKind::Tuple(params) }
+        },
+        guard: None,
+        body: Box::new(body),
+    }).collect();
+    let mut value = Expr::Match(MatchExpr { scrutinee: Box::new(scrutinee), arms });
+    for name in bind.iter().rev() {
+        value = Expr::Lambda(LambdaExpr {
+            params: vec![Pattern { annotation: None, kind: PatKind::Var(name.clone()) }],
+            body: Box::new(value),
+        });
+    }
+    LetDecl {
+        mutable: false,
+        pattern: Pattern { annotation: None, kind: PatKind::Var(name) },
+        annotation: None,
+        value,
+    }
 }
 
 fn eval_stmt(stmt: &Stmt, env: &mut Env) -> Result<Value, String> {
