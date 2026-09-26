@@ -129,6 +129,17 @@ fn format_decl(out: &mut String, decl: &Decl) {
             }
             out.push('\n');
         }
+        Decl::Mod(module) => {
+            let _ = writeln!(out, "mod {} {{", module.name);
+            for statement in &module.body {
+                out.push_str("    ");
+                format_stmt(out, statement);
+            }
+            out.push_str("}\n");
+        }
+        Decl::Use(usage) => {
+            let _ = writeln!(out, "use {}", usage.path.join("."));
+        }
     }
 }
 

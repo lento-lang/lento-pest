@@ -136,6 +136,96 @@ fn anonymous_sum_annotations_are_structural() {
 }
 
 #[test]
+fn inline_module_use_imports_names_directly() {
+    analyze(
+        "mod math {\n\
+             fn sqrt value = value\n\
+         }\n\
+         use math\n\
+         sqrt 9\n",
+    )
+    .expect("use should import module declarations directly");
+}
+
+#[test]
+fn inline_module_use_lowers_and_evaluates() {
+    let program = parse_program(
+        "mod math {\n\
+             fn sqrt value = value\n\
+         }\n\
+         use math\n\
+         sqrt 9\n",
+    )
+    .expect("module source should parse");
+    let result = analysis(
+        "mod math {\n\
+             fn sqrt value = value\n\
+         }\n\
+         use math\n\
+         sqrt 9\n",
+    )
+    .expect("module source should analyze");
+    let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
+        .expect("module source should evaluate");
+    assert_eq!(value.to_string(), "9");
+    assert_eq!(program.statements.len(), 3);
+}
+
+#[test]
+fn top_level_declarations_shadow_imported_names() {
+    analyze(
+        "mod math {\n\
+             fn value = 1\n\
+         }\n\
+         use math\n\
+         let value = 2\n\
+         value\n",
+    )
+    .expect("root declarations should shadow imported names");
+}
+
+#[test]
+fn dotted_use_imports_nested_module_names() {
+    analyze(
+        "mod math {\n\
+             mod integer {\n\
+                 fn identity value = value\n\
+             }\n\
+         }\n\
+         use math.integer\n\
+         identity 9\n",
+    )
+    .expect("dotted use should resolve nested modules");
+}
+
+#[test]
+fn sibling_files_are_automatic_modules() {
+    let directory = std::env::temp_dir().join(format!("lento-modules-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("temporary module directory should be created");
+    let root = directory.join("main.lt");
+    std::fs::write(
+        &root,
+        "use math\n\
+         sqrt 9\n",
+    )
+    .expect("root module should be written");
+    std::fs::write(
+        directory.join("math.lt"),
+        "fn sqrt value = value\n",
+    )
+    .expect("sibling module should be written");
+
+    let program = lento::parser::parse_file(&root).expect("file modules should parse");
+    let result = lento::analysis::analyze_program(&program).expect("file modules should analyze");
+    let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
+        .expect("file modules should evaluate");
+    assert_eq!(value.to_string(), "9");
+    std::fs::remove_dir_all(directory).expect("temporary module directory should be removed");
+}
+
+#[test]
 fn canonical_pipeline_installs_sum_constructors() {
     analyze(
         "type Option a = Some a | None\n         fn get option = match option { Some value => value, None => 0 }\n         assert (get (Some 5) == 5)\n",

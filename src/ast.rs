@@ -48,6 +48,21 @@ pub enum Decl {
     /// function definition. Kept as its own node so `fn` source round-trips
     /// through the pretty printer (see the evaluator note below).
     Fn(FnDecl),
+    /// `mod name { ... }` — an inline module.
+    Mod(ModDecl),
+    /// `use name.subname` — imports every declaration from a module directly.
+    Use(UseDecl),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModDecl {
+    pub name: String,
+    pub body: Vec<Stmt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct UseDecl {
+    pub path: Vec<String>,
 }
 
 /// `class name params* { spec ... }`

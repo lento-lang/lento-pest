@@ -44,14 +44,12 @@ fn run_repl() {
 }
 
 fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
-    let src = std::fs::read_to_string(path)
-        .map_err(|e| format!("Error reading {}: {}", path.display(), e))?;
-    parse_program(&src).map_err(|e| format!("Parse error in {}:\n{}", path.display(), e))
+    lento::parser::parse_file(path)
 }
 
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
     let analysis = lento::analysis::analyze_program(ast)?;
-    let lowered = lento::semantics::lower_analyzed_program(ast, &analysis.typed);
+    let lowered = lento::semantics::lower_analyzed_program(&analysis.source, &analysis.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)?;
     if matches!(lowered.statements.last(), Some(lento::ast::Stmt::Expr(_)))
         && !matches!(value, lento::eval::Value::Unit)

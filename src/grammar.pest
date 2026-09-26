@@ -42,7 +42,10 @@ block          = { "{" ~ body ~ "}" }
 
 statement      = _{ declaration | expression }
 
-declaration    = _{ class_decl | impl_decl | spec_decl | type_decl | let_decl | fn_clause }
+declaration    = _{ mod_decl | use_decl | class_decl | impl_decl | spec_decl | type_decl | let_decl | fn_clause }
+
+mod_decl       = { "mod" ~ identifier ~ block }
+use_decl       = { "use" ~ identifier ~ ("." ~ identifier)* }
 
 // A class is a named scope of required ordinary specs. Its type parameters
 // may be proper types or higher-kinded constructors; kinds are inferred later.

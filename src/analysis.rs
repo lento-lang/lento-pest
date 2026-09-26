@@ -77,6 +77,8 @@ pub struct RefinementMetadata {
 /// in the source program until their dedicated lowering is complete.
 #[derive(Debug)]
 pub struct Analysis {
+    /// Module-expanded source consumed by typed lowering and evaluation.
+    pub source: Program,
     pub overloads: Vec<OverloadSet>,
     pub declarations: DeclarationMetadata,
     pub refinements: Vec<RefinementMetadata>,
@@ -91,6 +93,8 @@ pub struct Analysis {
 /// - class/instance declarations are preserved for the dedicated class
 ///   lowering phase instead of being silently desugared away.
 pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
+    let expanded = expand_modules(program)?;
+    let program = &expanded;
     let collected = collect_function_groups(program)
         .map_err(|error| format!("declaration collection failed: {error}"))?;
     validate_advanced_declarations(program)?;
@@ -228,7 +232,9 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
             | Stmt::Decl(Decl::Class(_))
             | Stmt::Decl(Decl::Impl(_))
             | Stmt::Decl(Decl::Spec(_))
-            | Stmt::Decl(Decl::Fn(_)) => {}
+            | Stmt::Decl(Decl::Fn(_))
+            | Stmt::Decl(Decl::Mod(_))
+            | Stmt::Decl(Decl::Use(_)) => {}
         }
     }
 
@@ -249,11 +255,101 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     resolve_typed_program_calls(&mut typed, &overloads, &declarations)?;
 
     Ok(Analysis {
+        source: expanded,
         overloads,
         declarations,
         refinements,
         typed,
     })
+}
+
+/// Resolve inline modules and direct imports before ordinary semantic phases.
+/// Imported names are placed in the root scope first; declarations written in
+/// the root scope then shadow them by name.
+fn expand_modules(program: &Program) -> Result<Program, String> {
+    let mut modules = BTreeMap::<Vec<String>, Vec<Stmt>>::new();
+    collect_modules(&program.statements, &mut Vec::new(), &mut modules);
+    let root = modules.get(&Vec::new()).cloned().unwrap_or_default();
+    let local_names = root.iter().filter_map(statement_name).collect::<BTreeSet<_>>();
+    let mut statements = Vec::new();
+    for statement in &root {
+        let Stmt::Decl(Decl::Use(usage)) = statement else { continue };
+        let path = usage.path.clone();
+        let imported = module_exports(&path, &modules)?;
+        for imported in imported {
+            if let Some(name) = statement_name(&imported) {
+                if !local_names.contains(&name) {
+                    statements.push(imported);
+                }
+            }
+        }
+    }
+    statements.extend(root.into_iter().filter(|statement| {
+        !matches!(statement, Stmt::Decl(Decl::Use(_)))
+    }));
+    Ok(Program {
+        spans: vec![crate::ast::Span { line: 1, col: 1 }; statements.len()],
+        statements,
+    })
+}
+
+fn collect_modules(
+    statements: &[Stmt],
+    prefix: &mut Vec<String>,
+    modules: &mut BTreeMap<Vec<String>, Vec<Stmt>>,
+) {
+    let mut ordinary = Vec::new();
+    for statement in statements {
+        match statement {
+            Stmt::Decl(Decl::Mod(module)) => {
+                prefix.push(module.name.clone());
+                collect_modules(&module.body, prefix, modules);
+                prefix.pop();
+            }
+            _ => ordinary.push(statement.clone()),
+        }
+    }
+    modules.insert(prefix.clone(), ordinary);
+}
+
+fn module_exports(
+    path: &[String],
+    modules: &BTreeMap<Vec<String>, Vec<Stmt>>,
+) -> Result<Vec<Stmt>, String> {
+    let Some(statements) = modules.get(path) else {
+        return Err(format!("unknown module '{}'", path.join(".")));
+    };
+    let local_names = statements.iter().filter_map(statement_name).collect::<BTreeSet<_>>();
+    let mut result = Vec::new();
+    for statement in statements {
+        let Stmt::Decl(Decl::Use(usage)) = statement else { continue };
+        for imported in module_exports(&usage.path, modules)? {
+            if statement_name(&imported)
+                .is_some_and(|name| !local_names.contains(&name))
+            {
+                result.push(imported);
+            }
+        }
+    }
+    result.extend(statements.iter().filter(|statement| {
+        !matches!(statement, Stmt::Decl(Decl::Use(_)))
+    }).cloned());
+    Ok(result)
+}
+
+fn statement_name(statement: &Stmt) -> Option<String> {
+    match statement {
+        Stmt::Decl(Decl::Class(class)) => Some(class.name.clone()),
+        Stmt::Decl(Decl::Spec(spec)) => Some(spec.name.clone()),
+        Stmt::Decl(Decl::Type(ty)) => Some(ty.name.clone()),
+        Stmt::Decl(Decl::Fn(function)) => Some(function.name.clone()),
+        Stmt::Decl(Decl::Let(binding)) => match &binding.pattern.kind {
+            PatKind::Var(name) => Some(name.clone()),
+            _ => None,
+        },
+        Stmt::Decl(Decl::Impl(_)) | Stmt::Decl(Decl::Mod(_)) | Stmt::Decl(Decl::Use(_))
+        | Stmt::Expr(_) => None,
+    }
 }
 
 fn validate_spec_refinements(

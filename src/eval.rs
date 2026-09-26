@@ -307,6 +307,7 @@ fn eval_decl(decl: &Decl, env: &mut Env) -> Result<Value, String> {
         }
         Decl::Fn(_) => Err("unexpected fn declaration at evaluation time; desugar first".into()),
         Decl::Let(let_decl) => eval_let_decl(let_decl, env),
+        Decl::Mod(_) | Decl::Use(_) => Ok(Value::Unit),
     }
 }
 

@@ -1,5 +1,6 @@
 use pest::iterators::{Pair, Pairs};
 use pest::Parser;
+use std::path::Path;
 
 use crate::ast::*;
 
@@ -13,6 +14,66 @@ pub fn parse_program(source: &str) -> Result<Program, pest::error::Error<Rule>> 
     let pairs = LentoParser::parse(Rule::program, source)?;
     let root = pairs.into_iter().next().unwrap(); // the root `program` pair
     Ok(program(root.into_inner(), source))
+}
+
+/// Parse a source file and attach sibling `.lt` files as inline modules.
+pub fn parse_file(path: &Path) -> Result<Program, String> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|error| format!("Error reading {}: {error}", path.display()))?;
+    let mut program = parse_program(&source)
+        .map_err(|error| format!("Parse error in {}:\n{error}", path.display()))?;
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    let current = path.canonicalize().ok();
+    let mut children = Vec::new();
+    for entry in std::fs::read_dir(directory)
+        .map_err(|error| format!("Error reading {}: {error}", directory.display()))?
+    {
+        let entry = entry.map_err(|error| format!("Error reading module entry: {error}"))?;
+        let child = entry.path();
+        if current.as_ref().is_some_and(|current| {
+            child.canonicalize().ok().as_ref() == Some(current)
+        }) {
+            continue;
+        }
+        if child.extension().and_then(|extension| extension.to_str()) == Some("lt") {
+            let Some(name) = child.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            children.push(load_module_file(&child, name)?);
+        } else if child.is_dir() {
+            let manifest = child.join("mod.lt");
+            if manifest.is_file() {
+                let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
+                    continue;
+                };
+                children.push(load_module_file(&manifest, name)?);
+            }
+        }
+    }
+    children.sort_by(|left, right| left.name.cmp(&right.name));
+    let span = Span { line: 1, col: 1 };
+    for child in children {
+        program.statements.push(Stmt::Decl(Decl::Mod(child)));
+        program.spans.push(span);
+    }
+    Ok(program)
+}
+
+fn load_module_file(path: &Path, name: &str) -> Result<ModDecl, String> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|error| format!("Error reading {}: {error}", path.display()))?;
+    let mut program = parse_program(&source)
+        .map_err(|error| format!("Parse error in {}:\n{error}", path.display()))?;
+    let directory = path.parent().unwrap_or_else(|| Path::new("."));
+    let manifest = directory.join(name).join("mod.lt");
+    if manifest.is_file() {
+        let source = std::fs::read_to_string(&manifest)
+            .map_err(|error| format!("Error reading {}: {error}", manifest.display()))?;
+        let nested = parse_program(&source)
+            .map_err(|error| format!("Parse error in {}:\n{error}", manifest.display()))?;
+        program.statements.extend(nested.statements);
+    }
+    Ok(ModDecl { name: name.to_string(), body: program.statements })
 }
 
 /// Convert a byte offset into a 1-based line/column position.
@@ -64,6 +125,8 @@ fn program(pairs: Pairs<'_, Rule>, source: &str) -> Program {
 
 fn stmt(pair: Pair<'_, Rule>) -> Option<Stmt> {
     match pair.as_rule() {
+        Rule::mod_decl => Some(Stmt::Decl(Decl::Mod(mod_decl(pair)))),
+        Rule::use_decl => Some(Stmt::Decl(Decl::Use(use_decl(pair)))),
         Rule::class_decl => Some(Stmt::Decl(Decl::Class(class_decl(pair)))),
         Rule::impl_decl => Some(Stmt::Decl(Decl::Impl(impl_decl(pair)))),
         Rule::spec_decl => Some(Stmt::Decl(Decl::Spec(spec_decl(pair)))),
@@ -73,6 +136,25 @@ fn stmt(pair: Pair<'_, Rule>) -> Option<Stmt> {
         // runtime lowering desugars it before evaluation.
         Rule::fn_clause => Some(Stmt::Decl(Decl::Fn(fn_clause(pair)))),
         _ => Some(Stmt::Expr(expression(pair))),
+    }
+}
+
+fn mod_decl(pair: Pair<'_, Rule>) -> ModDecl {
+    let mut inner = pair.into_inner();
+    let name = inner.next().unwrap().as_str().to_string();
+    let body = match block(inner.next().unwrap()) {
+        Expr::Block(block) => block.body,
+        _ => unreachable!(),
+    };
+    ModDecl { name, body }
+}
+
+fn use_decl(pair: Pair<'_, Rule>) -> UseDecl {
+    UseDecl {
+        path: pair
+            .into_inner()
+            .map(|part| part.as_str().to_string())
+            .collect(),
     }
 }
 

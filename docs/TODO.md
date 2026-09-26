@@ -81,20 +81,27 @@ statically; see `src/exhaustive.rs` module docs.
 - Regression coverage includes a user-defined `Show` class and constrained
   `Seq` implementation in `tests/analysis.rs`.
 
+### 2026-09 — modules and direct imports
+
+- Inline modules use `mod name { ... }`.
+- Files are automatically modules; sibling `name.lt` and `name/mod.lt` files
+  are discovered by file loading.
+- `use name.subname` imports all exported declarations directly.
+- Root declarations shadow imported names.
+- All top-level module declarations are exported initially.
+
 ## Remaining
 
 Ordered by current priority. All were explicit non-goals in
 `SUM_TYPES_PLAN.md` unless noted.
 
-1. **Modules** — single flat namespace; top-level declarations may shadow
-   in nested blocks only.
-2. **Polymorphic variants** — anonymous `[a | b]` sums are structural and
+1. **Polymorphic variants** — anonymous `[a | b]` sums are structural and
    closed; no shared open variant types or row-polymorphic variants.
-3. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
+2. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
    runtime checks remain the authority.
-4. **Expression-level error spans** — errors report the enclosing
+3. **Expression-level error spans** — errors report the enclosing
    statement's line:col only.
-5. **Uppercase lambda-param collision** — `A b =>` parses as a constructor
+4. **Uppercase lambda-param collision** — `A b =>` parses as a constructor
    pattern, not an annotated lambda param; documented convention
    (lowercase params are the norm), unfixed.
 
