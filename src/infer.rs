@@ -676,10 +676,14 @@ pub fn infer_typed_expr(
             for arg in &c.args {
                 let arg = infer_typed_expr(ctx, arg, env)?;
                 let ret = ctx.fresh();
-                ctx.unify(
-                    &result,
-                    &MonoType::Function(Box::new(arg.ty.clone()), Box::new(ret.clone())),
-                )?;
+                let expected = MonoType::Function(Box::new(arg.ty.clone()), Box::new(ret.clone()));
+                match ctx.resolve(&result) {
+                    MonoType::Function(input, output) => {
+                        unify_call_argument(ctx, &arg.ty, &input)?;
+                        ctx.unify(&output, &ret)?;
+                    }
+                    _ => ctx.unify(&result, &expected)?,
+                }
                 result = ret;
                 args.push(arg);
             }
@@ -912,6 +916,48 @@ pub fn infer_typed_expr(
             let place = infer_typed_expr(ctx, &a.place, env)?;
             Ok(composite(ctor::unit(), vec![place, value]))
         }
+    }
+}
+
+/// Call arguments may be wider than closed record parameters.  The runtime
+/// projects such arguments at the method boundary; inference only needs to
+/// check the fields required by the parameter.
+fn unify_call_argument(
+    ctx: &mut InferCtx,
+    actual: &MonoType,
+    expected: &MonoType,
+) -> Result<(), TypeError> {
+    let actual = ctx.resolve(actual);
+    let expected = ctx.resolve(expected);
+    match (actual, expected) {
+        (
+            MonoType::Record {
+                fields: actual_fields,
+                ..
+            },
+            MonoType::Record {
+                fields: expected_fields,
+                rest: None,
+            },
+        ) => {
+            for (name, expected_ty) in &expected_fields {
+                let Some((_, actual_ty)) = actual_fields.iter().find(|(field, _)| field == name) else {
+                    return ctx.unify(
+                        &MonoType::Record {
+                            fields: actual_fields,
+                            rest: None,
+                        },
+                        &MonoType::Record {
+                            fields: expected_fields,
+                            rest: None,
+                        },
+                    );
+                };
+                ctx.unify(actual_ty, expected_ty)?;
+            }
+            Ok(())
+        }
+        (actual, expected) => ctx.unify(&actual, &expected),
     }
 }
 

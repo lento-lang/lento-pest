@@ -660,10 +660,14 @@ fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
         scrutinee: Box::new(scrutinee),
         arms,
     });
-    for b in bind.iter().rev() {
+    for (parameter_index, b) in bind.iter().enumerate().rev() {
         value = Expr::Lambda(crate::ast::LambdaExpr {
             params: vec![Pattern {
-                annotation: None,
+                annotation: spec
+                    .clauses
+                    .first()
+                    .and_then(|clause| clause.patterns.get(parameter_index))
+                    .and_then(|pattern| pattern.annotation.clone()),
                 kind: PatKind::Var(b.clone()),
             }],
             body: Box::new(value),

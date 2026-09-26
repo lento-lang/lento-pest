@@ -398,6 +398,11 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
                         .iter()
                         .find(|method| method_matches(&method.target, method.arity, &args, env))
                         .ok_or_else(|| format!("no matching method '{}'", var.name))?;
+                    let args = args
+                        .into_iter()
+                        .zip(method.target.iter())
+                        .map(|(value, ty)| coerce_value_to_type(value, ty))
+                        .collect::<Result<Vec<_>, _>>()?;
                     return apply_call(method.value.clone(), args);
                 }
             }
@@ -521,6 +526,12 @@ fn apply_call(callee: Value, args: Vec<Value>) -> Result<Value, String> {
         Value::Closure(closure) if closure.params.len() == args.len() => {
             let mut local_env = closure.env.clone();
             for (param, arg) in closure.params.iter().zip(args.into_iter()) {
+                let arg = param
+                    .annotation
+                    .as_ref()
+                    .map(|ty| coerce_value_to_type(arg.clone(), ty))
+                    .transpose()?
+                    .unwrap_or(arg);
                 bind_pattern(param, arg, true, &mut local_env)?;
             }
             eval_expr(&closure.body, &mut local_env)
@@ -539,6 +550,12 @@ pub(crate) fn apply_one(callee: Value, arg: Value) -> Result<Value, String> {
     match callee {
         Value::Closure(closure) => {
             let mut local_env = closure.env.clone();
+            let arg = closure.params[0]
+                .annotation
+                .as_ref()
+                .map(|ty| coerce_value_to_type(arg.clone(), ty))
+                .transpose()?
+                .unwrap_or(arg);
             bind_pattern(&closure.params[0], arg, true, &mut local_env)?;
             if closure.params.len() == 1 {
                 eval_expr(&closure.body, &mut local_env)
@@ -1060,6 +1077,28 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
         Ty::NamedBinder { ty, .. } => value_matches_ty(value, ty, env),
         // Arrow/sum shapes carry no runtime info to test against.
         Ty::Arrow { .. } | Ty::Sum(_) => true,
+    }
+}
+
+/// Closed record types are runtime coercion boundaries: callers may provide a
+/// wider record, but the callee receives only fields named by the type.
+fn coerce_value_to_type(value: Value, ty: &Ty) -> Result<Value, String> {
+    match ty {
+        Ty::RecordType(fields) => match value {
+            Value::Record(values) => {
+                let mut projected = HashMap::new();
+                for (name, _) in fields {
+                    let Some(field) = values.get(name) else {
+                        return Err(format!("record is missing field '{name}'"));
+                    };
+                    projected.insert(name.clone(), field.clone());
+                }
+                Ok(Value::Record(projected))
+            }
+            other => Ok(other),
+        },
+        Ty::OpenRecordType { .. } => Ok(value),
+        _ => Ok(value),
     }
 }
 

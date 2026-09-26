@@ -812,7 +812,9 @@ fn resolve_typed_expr_calls(
                 let mut supply = TypeVarSupply::new();
                 let (candidate_type, constraints) = instantiate(&mut supply, &candidate.scheme);
                 let mut substitution = Substitution::new();
-                if unify(&mut substitution, &candidate_type, &applied_type).is_ok() {
+                if unify(&mut substitution, &candidate_type, &applied_type).is_ok()
+                    || crate::types::call_type_compatible(&candidate_type, &applied_type)
+                {
                     let resolved_constraints = constraints
                         .iter()
                         .map(|constraint| {

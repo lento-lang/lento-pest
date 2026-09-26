@@ -194,6 +194,19 @@ fn record_subtyping_accepts_extra_fields_at_calls() {
 }
 
 #[test]
+fn closed_record_coercion_discards_extra_fields() {
+    let result = analysis(
+        "fn keep_a (value: { a: int }) = value\n\
+         keep_a { a: 1, b: 2 }\n",
+    )
+    .expect("a wider record should satisfy a closed record parameter");
+    let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
+        .expect("closed record coercion should evaluate");
+    assert_eq!(value.to_string(), "{a: 1}");
+}
+
+#[test]
 fn inline_module_use_imports_names_directly() {
     analyze(
         "mod math {\n\

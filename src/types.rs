@@ -1030,6 +1030,18 @@ pub fn is_permissive_instance(
     unify(&mut subst, &general_body, &instance_body).is_ok()
 }
 
+/// Check a call against a callable type, allowing an actual record argument
+/// to contain fields omitted by a closed record parameter.
+pub fn call_type_compatible(expected: &MonoType, actual: &MonoType) -> bool {
+    match (expected, actual) {
+        (MonoType::Function(expected_arg, expected_ret), MonoType::Function(actual_arg, actual_ret)) => {
+            call_type_compatible(expected_ret, actual_ret)
+                && matches(actual_arg, expected_arg, &BTreeSet::new(), &mut Substitution::new())
+        }
+        _ => expected == actual,
+    }
+}
+
 /// One-way matching: bind `left`'s matchable variables (via `subst`) so that
 /// `left` becomes structurally equal to the rigid `right`. Only variables in
 /// `matchable` may be bound; all other variables are rigid constants and are
