@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::ast::{BinaryOp, Expr, FnDecl, Lit, PatKind, Pattern, UnaryOp};
+use crate::ast::{BinaryOp, Expr, FnDecl, Lit, PatKind, Pattern, RecordValueEntry, UnaryOp};
 use crate::semantics::FunctionGroup;
 use crate::types::{
     generalize, instantiate, unify, MonoSumAlt, MonoType, SchemeConstraint, Substitution, TypeEnv, TypeScheme,
@@ -99,6 +99,28 @@ pub mod ctor {
     }
     pub fn str() -> MonoType {
         con("str")
+    }
+}
+
+/// Syntactic values are safe to generalize under the ML value restriction.
+pub(crate) fn is_value(expr: &Expr) -> bool {
+    match expr {
+        Expr::Lit(_) | Expr::Var(_) | Expr::Lambda(_) => true,
+        Expr::Tuple(tuple) => tuple.items.iter().all(is_value),
+        Expr::List(list) => {
+            let mut current = list;
+            while let crate::ast::ListExpr::Cells(cell) = current {
+                if !is_value(&cell.head) {
+                    return false;
+                }
+                current = &cell.tail;
+            }
+            true
+        }
+        Expr::Record(record) => record.entries.iter().all(|entry| match entry {
+            RecordValueEntry::Field(_, value) | RecordValueEntry::Spread(value) => is_value(value),
+        }),
+        _ => false,
     }
 }
 

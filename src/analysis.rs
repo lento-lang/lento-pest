@@ -17,8 +17,8 @@ use crate::semantics::{
 use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
 use crate::types::{
-    generalize, instantiate, lower_ty, unify, MonoSumAlt, MonoType, Substitution, TypeEnv, TypeScheme,
-    TypeVarSupply,
+    generalize, instantiate, lower_constraint, lower_ty, unify, MonoSumAlt, MonoType,
+    Substitution, TypeEnv, TypeScheme, TypeVarSupply,
 };
 
 /// Resolved declaration metadata shared by analysis, lowering, and runtime.
@@ -59,6 +59,7 @@ pub struct ClassMetadata {
 pub struct InstanceMetadata {
     pub class: String,
     pub quantified: Vec<u32>,
+    pub constraints: Vec<crate::types::SchemeConstraint>,
     pub target: Vec<MonoType>,
     pub methods: Vec<String>,
 }
@@ -187,7 +188,11 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                     .map_err(|error| format!("top-level binding failed: {error}"))?;
                 if let PatKind::Var(name) = &binding.pattern.kind {
                     let resolved = ctx.resolve(&value.ty);
-                    let scheme = generalize(&env, &resolved, ctx.constraints.clone());
+                    let scheme = if !binding.mutable && crate::infer::is_value(&binding.value) {
+                        generalize(&env, &resolved, ctx.constraints.clone())
+                    } else {
+                        crate::types::TypeScheme::mono(resolved)
+                    };
                     env.insert(name.clone(), scheme);
                 }
                 typed_lets.push(TypedLet {
@@ -710,7 +715,7 @@ fn resolve_typed_expr_calls(
                         !args.iter().any(contains_type_variable)
                             && declarations.instances.iter().any(|instance| {
                                 instance.class == *class
-                                    && instance_matches(&instance.target, args)
+                                    && instance_satisfies(instance, args, declarations, &mut Vec::new())
                             })
                     });
                     if accepted {
@@ -1310,12 +1315,7 @@ fn validate_class_constraints(
         };
         let implemented = declarations.instances.iter().any(|instance| {
             instance.class == class.name
-                && instance.target.len() == args.len()
-                && instance
-                    .target
-                    .iter()
-                    .zip(&args)
-                    .all(|(target, argument)| target == argument)
+                && instance_satisfies(instance, &args, declarations, &mut Vec::new())
         });
         if !implemented {
             return Err(format!(
@@ -1400,16 +1400,6 @@ fn resolve_declarations(
                 });
             }
             Stmt::Decl(Decl::Impl(implementation)) => {
-                if implementation
-                    .quantifiers
-                    .iter()
-                    .any(|quantifier| !quantifier.constraints.is_empty())
-                {
-                    return Err(format!(
-                        "constrained implementation quantifiers are not supported for '{}'",
-                        implementation.class
-                    ));
-                }
                 let mut binders = BTreeMap::new();
                 let mut quantified = Vec::new();
                 for quantifier in &implementation.quantifiers {
@@ -1423,6 +1413,16 @@ fn resolve_declarations(
                 declarations.instances.push(InstanceMetadata {
                     class: implementation.class.clone(),
                     quantified,
+                    constraints: implementation
+                        .quantifiers
+                        .iter()
+                        .flat_map(|quantifier| {
+                            quantifier
+                                .constraints
+                                .iter()
+                                .map(|constraint| lower_constraint(constraint, &binders))
+                        })
+                        .collect(),
                     target: implementation
                         .target
                         .iter()
@@ -1804,13 +1804,46 @@ fn validate_impl_type(
     Ok(())
 }
 
-fn instance_matches(target: &[MonoType], arguments: &[MonoType]) -> bool {
-    if target.len() != arguments.len() {
+fn instance_satisfies(
+    instance: &InstanceMetadata,
+    arguments: &[MonoType],
+    declarations: &DeclarationMetadata,
+    active: &mut Vec<(String, Vec<MonoType>)>,
+) -> bool {
+    let mut substitution = Substitution::new();
+    if instance.target.len() != arguments.len()
+        || !instance
+            .target
+            .iter()
+            .zip(arguments)
+            .all(|(target, argument)| unify(&mut substitution, target, argument).is_ok())
+    {
         return false;
     }
-    let mut substitution = Substitution::new();
-    target
+
+    let resolved_arguments = arguments
         .iter()
-        .zip(arguments)
-        .all(|(target, argument)| unify(&mut substitution, target, argument).is_ok())
+        .map(|argument| substitution.apply(argument))
+        .collect::<Vec<_>>();
+    let key = (instance.class.clone(), resolved_arguments.clone());
+    if active.contains(&key) {
+        return false;
+    }
+    active.push(key);
+
+    let satisfied = instance.constraints.iter().all(|constraint| {
+        let required = constraint
+            .args
+            .iter()
+            .map(|argument| substitution.apply(argument))
+            .collect::<Vec<_>>();
+        !required.iter().any(contains_type_variable)
+            && declarations.instances.iter().any(|candidate| {
+                candidate.class == constraint.name
+                    && instance_satisfies(candidate, &required, declarations, active)
+            })
+    });
+
+    active.pop();
+    satisfied
 }

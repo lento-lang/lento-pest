@@ -88,14 +88,31 @@ fn implementation_type_variables_require_impl_quantifiers() {
 }
 
 #[test]
-fn constrained_impl_quantifiers_are_rejected_until_supported() {
+fn constrained_impl_quantifiers_require_prerequisite_instances() {
+    let result = analysis(
+        "class Seq a { spec reverse : a -> a }\n\
+         class Show a { spec show : a -> str }\n\
+         impl Show int { fn show x = \"int\" }\n\
+         impl all a: Show a. Seq [a] { fn reverse xs = xs }\n\
+         reverse ([1])\n",
+    )
+    .expect("constrained implementation should resolve through Show int");
+    let seq_instance = result
+        .declarations
+        .instances
+        .iter()
+        .find(|instance| instance.class == "Seq")
+        .expect("Seq instance metadata");
+    assert_eq!(seq_instance.constraints[0].name, "Show");
+
     let error = analyze(
         "class Seq a { spec reverse : a -> a }\n\
          class Show a { spec show : a -> str }\n\
-         impl all a: Show a. Seq [a] { fn reverse xs = xs }\n",
+         impl all a: Show a. Seq [a] { fn reverse xs = xs }\n\
+         reverse ([1])\n",
     )
-    .expect_err("unsupported implementation constraints must not be discarded");
-    assert!(error.contains("constrained implementation quantifiers"), "{error}");
+    .expect_err("constrained implementation must require Show int");
+    assert!(error.contains("no instance"), "{error}");
 }
 
 #[test]
@@ -316,6 +333,13 @@ fn canonical_typed_program_keeps_top_level_let_and_expression_types() {
 fn canonical_pipeline_prebinds_recursive_lets() {
     analyze("let loop = x => loop x\n")
         .expect("recursive ordinary let should be visible while inferring its value");
+}
+
+#[test]
+fn canonical_pipeline_applies_value_restriction_to_mutable_lets() {
+    let error = analyze("let mut id = x => x\nlet first = id 1\nlet second = id \"text\"\n")
+        .expect_err("mutable binding must not be generalized");
+    assert!(error.contains("top-level let inference failed"), "{error}");
 }
 
 #[test]
