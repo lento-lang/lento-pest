@@ -433,6 +433,8 @@ pub fn unify(
         (MonoType::List(a), MonoType::List(b))
         | (MonoType::Ref(a), MonoType::Ref(b))
         | (MonoType::Mut(a), MonoType::Mut(b)) => unify(subst, &a.clone(), &b.clone()),
+        (MonoType::Mut(inner), other) => unify(subst, inner, &other),
+        (other, MonoType::Mut(inner)) => unify(subst, &other, inner),
         (
             MonoType::Record {
                 fields: left_fields,
@@ -815,6 +817,7 @@ pub fn lower_ty(ty: &Ty, binders: &BTreeMap<String, MonoType>) -> MonoType {
                     "String" => Some("str"),
                     "Bool" => Some("bool"),
                     "Unit" => Some("unit"),
+                    "usize" => Some("int"),
                     _ => None,
                 } {
                     return if primitive == "unit" {
@@ -986,6 +989,9 @@ fn matches(
         | (MonoType::Mut(a), MonoType::Mut(b)) => {
             let (a, b) = (a.clone(), b.clone());
             matches(&a, &b, matchable, subst)
+        }
+        (MonoType::Mut(inner), other) | (other, MonoType::Mut(inner)) => {
+            matches(inner, other, matchable, subst)
         }
         _ => false,
     }

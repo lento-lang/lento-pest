@@ -160,6 +160,7 @@ impl InferCtx {
                         "String" => Some("str"),
                         "Bool" => Some("bool"),
                         "Unit" => Some("unit"),
+                        "usize" => Some("int"),
                         _ => None,
                     } {
                         return if primitive == "unit" {
@@ -767,6 +768,19 @@ pub fn infer_typed_expr(
         }
         Expr::Member(m) => {
             let object = infer_typed_expr(ctx, &m.obj, env)?;
+            if m.field == "len" {
+                match ctx.resolve(&object.ty) {
+                    MonoType::List(_) | MonoType::Tuple(_) => {
+                        return Ok(composite(ctor::int(), vec![object]));
+                    }
+                    MonoType::Var(_) => {
+                        let element = ctx.fresh();
+                        ctx.unify(&object.ty, &MonoType::List(Box::new(element)))?;
+                        return Ok(composite(ctor::int(), vec![object]));
+                    }
+                    _ => {}
+                }
+            }
             let ty = if let Some(field) = find_record_field(ctx, &object.ty, &m.field) {
                 field
             } else {
