@@ -171,6 +171,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     for (source_index, statement) in program.statements.iter().enumerate() {
         match statement {
             Stmt::Decl(Decl::Let(binding)) => {
+                let pending_start = ctx.pending_constraints.len();
                 let recursive = if let PatKind::Var(name) = &binding.pattern.kind {
                     let ty = ctx.supply.fresh();
                     env.insert(name.clone(), crate::types::TypeScheme::mono(ty.clone()));
@@ -184,6 +185,17 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                     ctx.unify(&recursive, &value.ty)
                         .map_err(|error| format!("recursive top-level binding failed: {error}"))?;
                 }
+                if let Some(annotation) = &binding.annotation {
+                    let annotation = ctx.lower_surface_ty(annotation, &BTreeMap::new());
+                    ctx.unify(&value.ty, &annotation)
+                        .map_err(|error| format!("top-level annotation failed: {error}"))?;
+                }
+                validate_pending_constraints(
+                    &ctx,
+                    &declarations,
+                    &ctx.pending_constraints[pending_start..],
+                )
+                .map_err(|error| format!("top-level constraint failed: {error}"))?;
                 check_pattern(&mut ctx, &binding.pattern, &value.ty, &mut env)
                     .map_err(|error| format!("top-level binding failed: {error}"))?;
                 if let PatKind::Var(name) = &binding.pattern.kind {
@@ -195,6 +207,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                     };
                     env.insert(name.clone(), scheme);
                 }
+                let _pending = &ctx.pending_constraints[pending_start..];
                 typed_lets.push(TypedLet {
                     source_index,
                     mutable: binding.mutable,
@@ -1297,7 +1310,15 @@ fn validate_class_constraints(
     ctx: &InferCtx,
     declarations: &DeclarationMetadata,
 ) -> Result<(), String> {
-    for constraint in &ctx.constraints {
+    validate_pending_constraints(ctx, declarations, &ctx.constraints)
+}
+
+fn validate_pending_constraints(
+    ctx: &InferCtx,
+    declarations: &DeclarationMetadata,
+    constraints: &[crate::types::SchemeConstraint],
+) -> Result<(), String> {
+    for constraint in constraints {
         let args = constraint
             .args
             .iter()

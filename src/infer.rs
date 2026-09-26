@@ -130,6 +130,9 @@ pub struct InferCtx {
     pub supply: TypeVarSupply,
     pub subst: Substitution,
     pub constraints: Vec<SchemeConstraint>,
+    /// Constraints waiting for annotations or later inference to make their
+    /// type arguments concrete.
+    pub pending_constraints: Vec<SchemeConstraint>,
     pub type_declarations: BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
 }
 
@@ -139,6 +142,7 @@ impl InferCtx {
             supply: TypeVarSupply::new(),
             subst: Substitution::new(),
             constraints: Vec::new(),
+            pending_constraints: Vec::new(),
             type_declarations: BTreeMap::new(),
         }
     }
@@ -583,7 +587,8 @@ pub fn infer_typed_expr(
         Expr::Var(v) => match env.get(&v.name) {
             Some(scheme) => {
                 let (ty, constraints) = instantiate(&mut ctx.supply, scheme);
-                ctx.constraints.extend(constraints);
+                ctx.constraints.extend(constraints.clone());
+                ctx.pending_constraints.extend(constraints);
                 Ok(TypedExpr {
                     ty,
                     kind: TypedExprKind::Var(v.name.clone()),
@@ -706,6 +711,7 @@ pub fn infer_typed_expr(
                         children.push(value);
                     }
                     Stmt::Decl(crate::ast::Decl::Let(binding)) => {
+                        let pending_start = ctx.pending_constraints.len();
                         let recursive = if let PatKind::Var(name) = &binding.pattern.kind {
                             let ty = ctx.fresh();
                             local.insert(name.clone(), TypeScheme::mono(ty.clone()));
@@ -717,7 +723,12 @@ pub fn infer_typed_expr(
                         if let Some(recursive) = recursive {
                             ctx.unify(&recursive, &value.ty)?;
                         }
+                        if let Some(annotation) = &binding.annotation {
+                            let annotation = ctx.lower_surface_ty(annotation, &BTreeMap::new());
+                            ctx.unify(&value.ty, &annotation)?;
+                        }
                         check_pattern(ctx, &binding.pattern, &value.ty, &mut local)?;
+                        let _pending = &ctx.pending_constraints[pending_start..];
                         children.push(value);
                     }
                     _ => {}

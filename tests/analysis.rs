@@ -343,6 +343,27 @@ fn canonical_pipeline_applies_value_restriction_to_mutable_lets() {
 }
 
 #[test]
+fn canonical_pipeline_uses_let_annotations_to_solve_constraints() {
+    analyze(
+        "class Show a { spec show : a -> str }\n\
+         impl Show int { fn show x = \"int\" }\n\
+         let f : int -> str = x => show x\n",
+    )
+    .expect("annotation should solve the class constraint");
+
+    let error = analyze("let f : int -> str = x => x + 1\n")
+        .expect_err("annotation mismatch must be rejected");
+    assert!(error.contains("top-level annotation failed"), "{error}");
+
+    let error = analyze(
+        "class Show a { spec show : a -> str }\n\
+         let f : str -> str = x => show x\n",
+    )
+        .expect_err("concrete unsatisfied class constraint must be rejected");
+    assert!(error.contains("no instance") || error.contains("unsupported"), "{error}");
+}
+
+#[test]
 fn canonical_pipeline_resolves_fully_typed_overload_calls() {
     let result = analysis("fn id x = x\nlet value = id 1\n")
         .expect("fully applied call should resolve");
