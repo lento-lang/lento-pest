@@ -82,6 +82,17 @@ fn implementation_type_variables_require_impl_quantifiers() {
 }
 
 #[test]
+fn constrained_impl_quantifiers_are_rejected_until_supported() {
+    let error = analyze(
+        "class Seq a { spec reverse : a -> a }\n\
+         class Show a { spec show : a -> str }\n\
+         impl all a: Show a. Seq [a] { fn reverse xs = xs }\n",
+    )
+    .expect_err("unsupported implementation constraints must not be discarded");
+    assert!(error.contains("constrained implementation quantifiers"), "{error}");
+}
+
+#[test]
 fn canonical_pipeline_keeps_wip_exhaustiveness_errors() {
     let error = analyze("fn f b = match b { true => 1 }\n").expect_err("match is incomplete");
     assert!(error.contains("non-exhaustive"), "{error}");

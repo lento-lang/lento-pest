@@ -97,7 +97,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     let mut ctx = InferCtx::new();
     let mut env = base_env(&mut ctx.supply);
 
-    let declarations = resolve_declarations(program, &mut ctx);
+    let declarations = resolve_declarations(program, &mut ctx)?;
     install_type_declarations(&mut env, &declarations);
     install_class_methods(&mut env, &mut ctx, program);
     validate_spec_refinements(program, &mut ctx, &env)?;
@@ -1283,7 +1283,10 @@ fn validate_class_constraints(
 }
 
 
-fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMetadata {
+fn resolve_declarations(
+    program: &Program,
+    ctx: &mut InferCtx,
+) -> Result<DeclarationMetadata, String> {
     let mut declarations = DeclarationMetadata::default();
     let mut next_impl_var = 2_000_000u32;
     for statement in &program.statements {
@@ -1352,6 +1355,16 @@ fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMet
                 });
             }
             Stmt::Decl(Decl::Impl(implementation)) => {
+                if implementation
+                    .quantifiers
+                    .iter()
+                    .any(|quantifier| !quantifier.constraints.is_empty())
+                {
+                    return Err(format!(
+                        "constrained implementation quantifiers are not supported for '{}'",
+                        implementation.class
+                    ));
+                }
                 let mut binders = BTreeMap::new();
                 let mut quantified = Vec::new();
                 for quantifier in &implementation.quantifiers {
@@ -1380,7 +1393,7 @@ fn resolve_declarations(program: &Program, ctx: &mut InferCtx) -> DeclarationMet
             _ => {}
         }
     }
-    declarations
+    Ok(declarations)
 }
 
 
