@@ -73,24 +73,28 @@ statically; see `src/exhaustive.rs` module docs.
   end-of-line; no trailing comma; `;` and bare-newline separators removed).
   pprint emits commas; all samples and inline test programs updated.
 
+### 2026-09 — user-defined type-class constraints
+
+- Class names are resolved from declaration metadata, not a builtin allowlist.
+- Class methods carry their owning class constraint in their schemes.
+- Constrained implementations recursively require prerequisite instances.
+- Regression coverage includes a user-defined `Show` class and constrained
+  `Seq` implementation in `tests/analysis.rs`.
+
 ## Remaining
 
 Ordered by current priority. All were explicit non-goals in
 `SUM_TYPES_PLAN.md` unless noted.
 
-1. **User-defined type classes** — constraints are hardcoded to the eight
-   builtin classes (`Num Ord Eq Add Concat Seq Len Haystack`). Interfaces
-   for user classes would also let where-clauses reference user predicates
-   (currently builtin-only).
-2. **Modules** — single flat namespace; top-level declarations may shadow
+1. **Modules** — single flat namespace; top-level declarations may shadow
    in nested blocks only.
-3. **Polymorphic variants** — anonymous `[a | b]` sums are structural and
+2. **Polymorphic variants** — anonymous `[a | b]` sums are structural and
    closed; no shared open variant types or row-polymorphic variants.
-4. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
+3. **Borrow/exclusivity discipline** — `ref`/`mut` are typed but unchecked;
    runtime checks remain the authority.
-5. **Expression-level error spans** — errors report the enclosing
+4. **Expression-level error spans** — errors report the enclosing
    statement's line:col only.
-6. **Uppercase lambda-param collision** — `A b =>` parses as a constructor
+5. **Uppercase lambda-param collision** — `A b =>` parses as a constructor
    pattern, not an annotated lambda param; documented convention
    (lowercase params are the norm), unfixed.
 
