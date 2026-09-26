@@ -572,6 +572,15 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         MonoType::Record { fields, rest } => {
             rest.is_some() || fields.iter().any(|(_, ty)| contains_type_variable(ty))
         }
+        MonoType::Sum { args, alts, .. } => {
+            args.iter().any(contains_type_variable)
+                || alts.iter().any(|alt| match alt {
+                    crate::types::MonoSumAlt::Constructor { payload, .. } => {
+                        payload.as_ref().is_some_and(contains_type_variable)
+                    }
+                    crate::types::MonoSumAlt::Bare(ty) => contains_type_variable(ty),
+                })
+        }
     }
 }
 
@@ -585,6 +594,18 @@ fn type_nodes(ty: &MonoType) -> usize {
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => 1 + type_nodes(inner),
         MonoType::Record { fields, .. } => {
             1 + fields.iter().map(|(_, ty)| type_nodes(ty)).sum::<usize>()
+        }
+        MonoType::Sum { args, alts, .. } => {
+            1 + args.iter().map(type_nodes).sum::<usize>()
+                + alts
+                    .iter()
+                    .map(|alt| match alt {
+                        crate::types::MonoSumAlt::Constructor { payload, .. } => {
+                            payload.as_ref().map_or(0, type_nodes)
+                        }
+                        crate::types::MonoSumAlt::Bare(ty) => type_nodes(ty),
+                    })
+                    .sum::<usize>()
         }
     }
 }

@@ -21,7 +21,7 @@ use std::fmt;
 use crate::ast::{BinaryOp, Expr, FnDecl, Lit, PatKind, Pattern, UnaryOp};
 use crate::semantics::FunctionGroup;
 use crate::types::{
-    generalize, instantiate, unify, MonoType, SchemeConstraint, Substitution, TypeEnv, TypeScheme,
+    generalize, instantiate, unify, MonoSumAlt, MonoType, SchemeConstraint, Substitution, TypeEnv, TypeScheme,
     TypeVarSupply, UnifyError,
 };
 
@@ -156,14 +156,26 @@ impl InferCtx {
                     }
                 }
                 if let Some((parameters, source)) = self.type_declarations.get(name) {
-                    if !matches!(source, crate::ast::Ty::Sum(_)) && parameters.len() == args.len() {
+                    if parameters.len() == args.len() {
                         let mapping = parameters
                             .iter()
                             .zip(args)
                             .map(|(parameter, argument)| {
                                 (parameter.clone(), self.lower_surface_ty(argument, binders))
                             })
-                            .collect();
+                            .collect::<BTreeMap<_, _>>();
+                        if let crate::ast::Ty::Sum(_) = source {
+                            if let MonoType::Sum { alts, .. } = self.lower_surface_ty(source, &mapping) {
+                                return MonoType::Sum {
+                                    name: name.clone(),
+                                    args: args
+                                        .iter()
+                                        .map(|argument| self.lower_surface_ty(argument, binders))
+                                        .collect(),
+                                    alts,
+                                };
+                            }
+                        }
                         return self.lower_surface_ty(source, &mapping);
                     }
                 }
@@ -194,21 +206,24 @@ impl InferCtx {
                 MonoType::Mut(Box::new(self.lower_surface_ty(inner, binders)))
             }
             crate::ast::Ty::NamedBinder { ty, .. } => self.lower_surface_ty(ty, binders),
-            crate::ast::Ty::Sum(alts) => MonoType::Constructor(
-                format!("<sum:{}>", alts.len()),
-                alts.iter()
+            crate::ast::Ty::Sum(alts) => MonoType::Sum {
+                name: format!("<sum:{}>", alts.len()),
+                args: Vec::new(),
+                alts: alts
+                    .iter()
                     .map(|alt| match alt {
-                        crate::ast::SumAlt::Ctor { name, payload } => MonoType::Constructor(
-                            name.clone(),
-                            payload
+                        crate::ast::SumAlt::Ctor { name, payload } => MonoSumAlt::Constructor {
+                            name: name.clone(),
+                            payload: payload
                                 .as_ref()
-                                .map(|payload| vec![self.lower_surface_ty(payload, binders)])
-                                .unwrap_or_default(),
-                        ),
-                        crate::ast::SumAlt::Bare(ty) => self.lower_surface_ty(ty, binders),
+                                .map(|payload| self.lower_surface_ty(payload, binders)),
+                        },
+                        crate::ast::SumAlt::Bare(ty) => {
+                            MonoSumAlt::Bare(self.lower_surface_ty(ty, binders))
+                        }
                     })
                     .collect(),
-            ),
+            },
             crate::ast::Ty::RecordType(fields) => MonoType::Record {
                 fields: fields
                     .iter()
@@ -394,7 +409,12 @@ pub fn check_pattern(
     }
     match &pat.kind {
         PatKind::Var(name) => {
-            env.insert(name.clone(), TypeScheme::mono(expected.clone()));
+            let binding = pat
+                .annotation
+                .as_ref()
+                .map(|annotation| ctx.lower_surface_ty(annotation, &BTreeMap::new()))
+                .unwrap_or_else(|| expected.clone());
+            env.insert(name.clone(), TypeScheme::mono(binding));
             Ok(())
         }
         PatKind::Wildcard => Ok(()),
@@ -660,6 +680,7 @@ pub fn infer_typed_expr(
         }
         Expr::Match(m) => {
             let scrutinee = infer_typed_expr(ctx, &m.scrutinee, env)?;
+            let scrutinee = infer_match_scrutinee(ctx, scrutinee, &m.arms);
             let result = ctx.fresh();
             let mut arms = Vec::with_capacity(m.arms.len());
             for arm in &m.arms {
@@ -766,6 +787,39 @@ pub fn infer_typed_expr(
             Ok(composite(ctor::unit(), vec![place, value]))
         }
     }
+}
+
+fn infer_match_scrutinee(
+    ctx: &mut InferCtx,
+    scrutinee: crate::semantics::TypedExpr,
+    arms: &[crate::ast::MatchArm],
+) -> crate::semantics::TypedExpr {
+    if !matches!(ctx.resolve(&scrutinee.ty), MonoType::Var(_)) {
+        return scrutinee;
+    }
+    let alternatives = arms
+        .iter()
+        .filter_map(|arm| arm.pattern.annotation.as_ref())
+        .map(|ty| ctx.lower_surface_ty(ty, &BTreeMap::new()))
+        .collect::<Vec<_>>();
+    if alternatives.len() < 2 {
+        return scrutinee;
+    }
+    let mut unique = Vec::new();
+    for ty in alternatives {
+        if !unique.contains(&ty) {
+            unique.push(ty);
+        }
+    }
+    if unique.len() >= 2 {
+        let sum = MonoType::Sum {
+            name: "<match>".to_string(),
+            args: Vec::new(),
+            alts: unique.into_iter().map(MonoSumAlt::Bare).collect(),
+        };
+        let _ = ctx.unify(&scrutinee.ty, &sum);
+    }
+    scrutinee
 }
 
 fn find_record_field(ctx: &InferCtx, ty: &MonoType, field: &str) -> Option<MonoType> {

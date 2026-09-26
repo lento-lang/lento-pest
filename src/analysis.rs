@@ -17,7 +17,7 @@ use crate::semantics::{
 use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
 use crate::types::{
-    generalize, instantiate, lower_ty, unify, MonoType, Substitution, TypeEnv, TypeScheme,
+    generalize, instantiate, lower_ty, unify, MonoSumAlt, MonoType, Substitution, TypeEnv, TypeScheme,
     TypeVarSupply,
 };
 
@@ -810,6 +810,15 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         MonoType::Record { fields, rest } => {
             rest.is_some() || fields.iter().any(|(_, ty)| contains_type_variable(ty))
         }
+        MonoType::Sum { args, alts, .. } => {
+            args.iter().any(contains_type_variable)
+                || alts.iter().any(|alt| match alt {
+                    MonoSumAlt::Constructor { payload, .. } => {
+                        payload.as_ref().is_some_and(contains_type_variable)
+                    }
+                    MonoSumAlt::Bare(ty) => contains_type_variable(ty),
+                })
+        }
     }
 }
 
@@ -831,6 +840,18 @@ fn candidate_specificity(candidate: &crate::specialize::Specialization) -> (usiz
                     }
                     MonoType::Record { fields, .. } => {
                         1 + fields.iter().map(|(_, ty)| size(ty)).sum::<usize>()
+                    }
+                    MonoType::Sum { args, alts, .. } => {
+                        1 + args.iter().map(size).sum::<usize>()
+                            + alts
+                                .iter()
+                                .map(|alt| match alt {
+                                    MonoSumAlt::Constructor { payload, .. } => {
+                                        payload.as_ref().map_or(0, size)
+                                    }
+                                    MonoSumAlt::Bare(ty) => size(ty),
+                                })
+                                .sum::<usize>()
                     }
                 }
             }
@@ -1415,15 +1436,51 @@ fn install_type_declarations(
     declarations: &DeclarationMetadata,
 ) {
     for declaration in &declarations.types {
-        let result = MonoType::Constructor(
-            declaration.name.clone(),
-            declaration
-                .parameter_ids
-                .iter()
-                .copied()
-                .map(MonoType::Var)
-                .collect(),
-        );
+        let result = match &declaration.source {
+            Ty::Sum(alts) => MonoType::Sum {
+                name: declaration.name.clone(),
+                args: declaration
+                    .parameter_ids
+                    .iter()
+                    .copied()
+                    .map(MonoType::Var)
+                    .collect(),
+                alts: alts
+                    .iter()
+                    .map(|alt| match alt {
+                        SumAlt::Ctor { name, payload } => MonoSumAlt::Constructor {
+                            name: name.clone(),
+                            payload: payload.as_ref().map(|payload| {
+                                lower_ty(payload, &declaration
+                                    .parameters
+                                    .iter()
+                                    .cloned()
+                                    .zip(declaration.parameter_ids.iter().copied().map(MonoType::Var))
+                                    .collect())
+                            }),
+                        },
+                        SumAlt::Bare(ty) => MonoSumAlt::Bare(lower_ty(
+                            ty,
+                            &declaration
+                                .parameters
+                                .iter()
+                                .cloned()
+                                .zip(declaration.parameter_ids.iter().copied().map(MonoType::Var))
+                                .collect(),
+                        )),
+                    })
+                    .collect(),
+            },
+            _ => MonoType::Constructor(
+                declaration.name.clone(),
+                declaration
+                    .parameter_ids
+                    .iter()
+                    .copied()
+                    .map(MonoType::Var)
+                    .collect(),
+            ),
+        };
         for constructor in &declaration.constructors {
             let body = match &constructor.payload {
                 Some(payload) => MonoType::Function(
@@ -1447,10 +1504,24 @@ fn install_type_declarations(
 fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String> {
     match expression {
         Expr::Match(m) => {
+            if m.arms.iter().any(|arm| arm.pattern.annotation.is_some()) {
+                validate_nested_matches(&m.scrutinee, owner)?;
+                for arm in &m.arms {
+                    if let Some(guard) = &arm.guard {
+                        validate_nested_matches(guard, owner)?;
+                    }
+                    validate_nested_matches(&arm.body, owner)?;
+                }
+                return Ok(());
+            }
             let specialization = crate::specialize::Specialization {
                 id: 0,
                 scheme: TypeScheme::mono(MonoType::Var(0)),
-                declared_domain: Vec::new(),
+                declared_domain: vec![m
+                    .arms
+                    .first()
+                    .and_then(|arm| arm.pattern.annotation.as_ref())
+                    .map(|ty| lower_ty(ty, &BTreeMap::new()))],
                 clauses: m
                     .arms
                     .iter()
@@ -1463,7 +1534,11 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
                         },
                         patterns: vec![arm.pattern.clone()],
                         source_index: index,
-                        declared_domain: Vec::new(),
+                        declared_domain: vec![arm
+                            .pattern
+                            .annotation
+                            .as_ref()
+                            .map(|ty| lower_ty(ty, &BTreeMap::new()))],
                     })
                     .collect(),
             };

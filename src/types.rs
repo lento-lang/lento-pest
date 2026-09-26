@@ -65,6 +65,18 @@ pub enum MonoType {
         fields: Vec<(String, MonoType)>,
         rest: Option<TypeVarId>,
     },
+    /// Nominal or inferred sum type with constructor and bare alternatives.
+    Sum {
+        name: String,
+        args: Vec<MonoType>,
+        alts: Vec<MonoSumAlt>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum MonoSumAlt {
+    Constructor { name: String, payload: Option<MonoType> },
+    Bare(MonoType),
 }
 
 /// A type scheme: quantified variables with their constraints over a
@@ -170,6 +182,21 @@ impl MonoType {
                     }
                 }
             }
+            MonoType::Sum { args, alts, .. } => {
+                for arg in args {
+                    arg.collect_free_vars(seen, out);
+                }
+                for alt in alts {
+                    match alt {
+                        MonoSumAlt::Constructor { payload, .. } => {
+                            if let Some(payload) = payload {
+                                payload.collect_free_vars(seen, out);
+                            }
+                        }
+                        MonoSumAlt::Bare(ty) => ty.collect_free_vars(seen, out),
+                    }
+                }
+            }
         }
     }
 }
@@ -268,6 +295,20 @@ impl Substitution {
                     .map(|(name, ty)| (name.clone(), self.apply(ty)))
                     .collect(),
                 rest: *rest,
+            },
+            MonoType::Sum { name, args, alts } => MonoType::Sum {
+                name: name.clone(),
+                args: args.iter().map(|ty| self.apply(ty)).collect(),
+                alts: alts
+                    .iter()
+                    .map(|alt| match alt {
+                        MonoSumAlt::Constructor { name, payload } => MonoSumAlt::Constructor {
+                            name: name.clone(),
+                            payload: payload.as_ref().map(|ty| self.apply(ty)),
+                        },
+                        MonoSumAlt::Bare(ty) => MonoSumAlt::Bare(self.apply(ty)),
+                    })
+                    .collect(),
             },
         }
     }
@@ -402,8 +443,55 @@ pub fn unify(
                 rest: right_rest,
             },
         ) => unify_records(subst, left_fields, *left_rest, right_fields, *right_rest),
+        (
+            MonoType::Sum {
+                name: left_name,
+                args: left_args,
+                alts: left_alts,
+            },
+            MonoType::Sum {
+                name: right_name,
+                args: right_args,
+                alts: right_alts,
+            },
+        ) => {
+            if left_name != right_name && left_alts != right_alts {
+                return Err(UnifyError::Mismatch { left, right });
+            }
+            for (left, right) in left_args.iter().zip(right_args) {
+                unify(subst, left, right)?;
+            }
+            Ok(())
+        }
+        (MonoType::Sum { alts, .. }, other) => unify_sum_member(subst, alts, &other),
+        (other, MonoType::Sum { alts, .. }) => unify_sum_member(subst, alts, &other),
         _ => Err(UnifyError::Mismatch { left, right }),
     }
+}
+
+fn unify_sum_member(
+    subst: &mut Substitution,
+    alts: &[MonoSumAlt],
+    other: &MonoType,
+) -> Result<(), UnifyError> {
+    for alt in alts {
+        let MonoSumAlt::Bare(candidate) = alt else {
+            continue;
+        };
+        let snapshot = subst.clone();
+        if unify(subst, other, candidate).is_ok() {
+            return Ok(());
+        }
+        *subst = snapshot;
+    }
+    Err(UnifyError::Mismatch {
+        left: other.clone(),
+        right: MonoType::Sum {
+            name: "<sum>".to_string(),
+            args: Vec::new(),
+            alts: alts.to_vec(),
+        },
+    })
 }
 
 fn unify_records(
@@ -677,6 +765,20 @@ fn rename_vars(ty: &MonoType, renaming: &BTreeMap<TypeVarId, TypeVarId>) -> Mono
                 .map(|(name, ty)| (name.clone(), rename_vars(ty, renaming)))
                 .collect(),
             rest: rest.map(|id| renaming.get(&id).copied().unwrap_or(id)),
+        },
+        MonoType::Sum { name, args, alts } => MonoType::Sum {
+            name: name.clone(),
+            args: args.iter().map(|ty| rename_vars(ty, renaming)).collect(),
+            alts: alts
+                .iter()
+                .map(|alt| match alt {
+                    MonoSumAlt::Constructor { name, payload } => MonoSumAlt::Constructor {
+                        name: name.clone(),
+                        payload: payload.as_ref().map(|ty| rename_vars(ty, renaming)),
+                    },
+                    MonoSumAlt::Bare(ty) => MonoSumAlt::Bare(rename_vars(ty, renaming)),
+                })
+                .collect(),
         },
     }
 }
