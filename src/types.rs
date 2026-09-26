@@ -809,6 +809,20 @@ pub fn lower_ty(ty: &Ty, binders: &BTreeMap<String, MonoType>) -> MonoType {
                 if name == "unit" {
                     return MonoType::Tuple(Vec::new());
                 }
+                if let Some(primitive) = match name.as_str() {
+                    "Int" => Some("int"),
+                    "Float" => Some("float"),
+                    "String" => Some("str"),
+                    "Bool" => Some("bool"),
+                    "Unit" => Some("unit"),
+                    _ => None,
+                } {
+                    return if primitive == "unit" {
+                        MonoType::Tuple(Vec::new())
+                    } else {
+                        MonoType::Constructor(primitive.to_string(), Vec::new())
+                    };
+                }
             }
             MonoType::Constructor(
                 name.clone(),

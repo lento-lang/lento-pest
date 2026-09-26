@@ -154,6 +154,20 @@ impl InferCtx {
                     if let Some(bound) = binders.get(name) {
                         return bound.clone();
                     }
+                    if let Some(primitive) = match name.as_str() {
+                        "Int" => Some("int"),
+                        "Float" => Some("float"),
+                        "String" => Some("str"),
+                        "Bool" => Some("bool"),
+                        "Unit" => Some("unit"),
+                        _ => None,
+                    } {
+                        return if primitive == "unit" {
+                            MonoType::Tuple(Vec::new())
+                        } else {
+                            MonoType::Constructor(primitive.to_string(), Vec::new())
+                        };
+                    }
                 }
                 if let Some((parameters, source)) = self.type_declarations.get(name) {
                     if parameters.len() == args.len() {
