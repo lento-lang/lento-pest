@@ -449,15 +449,15 @@ pub fn unify(
             MonoType::Sum {
                 name: left_name,
                 args: left_args,
-                alts: _,
+                alts: left_alts,
             },
             MonoType::Sum {
                 name: right_name,
                 args: right_args,
-                alts: _,
+                alts: right_alts,
             },
         ) => {
-            if left_name != right_name {
+            if left_name != right_name && left_alts != right_alts {
                 return Err(UnifyError::Mismatch { left, right });
             }
             for (left, right) in left_args.iter().zip(right_args) {

@@ -128,12 +128,11 @@ fn typed_match_arms_contribute_to_exhaustiveness() {
 }
 
 #[test]
-fn anonymous_sum_annotations_are_generative() {
-    let error = analyze(
+fn anonymous_sum_annotations_are_structural() {
+    analyze(
         "let identity : [int | str] -> [int | str] = value => value\n",
     )
-    .expect_err("separate anonymous sum annotations must not unify");
-    assert!(error.contains("unify") || error.contains("annotation"), "{error}");
+    .expect("identical anonymous sum annotations should unify structurally");
 }
 
 #[test]
