@@ -60,6 +60,11 @@ pub enum MonoType {
     Ref(Box<MonoType>),
     /// `mut T` — an exclusive mutable place.
     Mut(Box<MonoType>),
+    /// Structural record type with an optional open row variable.
+    Record {
+        fields: Vec<(String, MonoType)>,
+        rest: Option<TypeVarId>,
+    },
 }
 
 /// A type scheme: quantified variables with their constraints over a
@@ -155,6 +160,16 @@ impl MonoType {
             MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
                 inner.collect_free_vars(seen, out);
             }
+            MonoType::Record { fields, rest } => {
+                for (_, field) in fields {
+                    field.collect_free_vars(seen, out);
+                }
+                if let Some(rest) = rest {
+                    if seen.insert(*rest) {
+                        out.push(*rest);
+                    }
+                }
+            }
         }
     }
 }
@@ -247,6 +262,13 @@ impl Substitution {
             MonoType::List(inner) => MonoType::List(Box::new(self.apply(inner))),
             MonoType::Ref(inner) => MonoType::Ref(Box::new(self.apply(inner))),
             MonoType::Mut(inner) => MonoType::Mut(Box::new(self.apply(inner))),
+            MonoType::Record { fields, rest } => MonoType::Record {
+                fields: fields
+                    .iter()
+                    .map(|(name, ty)| (name.clone(), self.apply(ty)))
+                    .collect(),
+                rest: *rest,
+            },
         }
     }
 
@@ -370,7 +392,142 @@ pub fn unify(
         (MonoType::List(a), MonoType::List(b))
         | (MonoType::Ref(a), MonoType::Ref(b))
         | (MonoType::Mut(a), MonoType::Mut(b)) => unify(subst, &a.clone(), &b.clone()),
+        (
+            MonoType::Record {
+                fields: left_fields,
+                rest: left_rest,
+            },
+            MonoType::Record {
+                fields: right_fields,
+                rest: right_rest,
+            },
+        ) => unify_records(subst, left_fields, *left_rest, right_fields, *right_rest),
         _ => Err(UnifyError::Mismatch { left, right }),
+    }
+}
+
+fn unify_records(
+    subst: &mut Substitution,
+    left_fields: &[(String, MonoType)],
+    left_rest: Option<TypeVarId>,
+    right_fields: &[(String, MonoType)],
+    right_rest: Option<TypeVarId>,
+) -> Result<(), UnifyError> {
+    let left_names = left_fields
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<BTreeSet<_>>();
+    let right_names = right_fields
+        .iter()
+        .map(|(name, _)| name.as_str())
+        .collect::<BTreeSet<_>>();
+    for (name, left) in left_fields {
+        if let Some((_, right)) = right_fields.iter().find(|(other, _)| other == name) {
+            unify(subst, left, right)?;
+        }
+    }
+    let only_left = left_fields
+        .iter()
+        .filter(|(name, _)| !right_names.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let only_right = right_fields
+        .iter()
+        .filter(|(name, _)| !left_names.contains(name.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    match (only_left.is_empty(), only_right.is_empty()) {
+        (true, true) => unify_rows(subst, left_rest, right_rest),
+        (true, false) => match left_rest {
+            Some(rest) => bind_var(
+                subst,
+                rest,
+                &MonoType::Record {
+                    fields: only_right,
+                    rest: right_rest,
+                },
+            ),
+            None => Err(record_mismatch(left_fields, left_rest, right_fields, right_rest)),
+        },
+        (false, true) => match right_rest {
+            Some(rest) => bind_var(
+                subst,
+                rest,
+                &MonoType::Record {
+                    fields: only_left,
+                    rest: left_rest,
+                },
+            ),
+            None => Err(record_mismatch(left_fields, left_rest, right_fields, right_rest)),
+        },
+        (false, false) => {
+            let left_rest = left_rest
+                .ok_or_else(|| record_mismatch(left_fields, left_rest, right_fields, right_rest))?;
+            let right_rest = right_rest
+                .ok_or_else(|| record_mismatch(left_fields, Some(left_rest), right_fields, right_rest))?;
+            let fresh = subst.map.keys().copied().max().unwrap_or(10_000_000) + 1;
+            bind_var(
+                subst,
+                left_rest,
+                &MonoType::Record {
+                    fields: only_right,
+                    rest: Some(fresh),
+                },
+            )?;
+            bind_var(
+                subst,
+                right_rest,
+                &MonoType::Record {
+                    fields: only_left,
+                    rest: Some(fresh),
+                },
+            )
+        }
+    }
+}
+
+fn unify_rows(
+    subst: &mut Substitution,
+    left: Option<TypeVarId>,
+    right: Option<TypeVarId>,
+) -> Result<(), UnifyError> {
+    match (left, right) {
+        (None, None) => Ok(()),
+        (Some(left), Some(right)) if left == right => Ok(()),
+        (Some(left), Some(right)) => bind_var(
+            subst,
+            right,
+            &MonoType::Record {
+                fields: Vec::new(),
+                rest: Some(left),
+            },
+        ),
+        (Some(row), None) | (None, Some(row)) => bind_var(
+            subst,
+            row,
+            &MonoType::Record {
+                fields: Vec::new(),
+                rest: None,
+            },
+        ),
+    }
+}
+
+fn record_mismatch(
+    left_fields: &[(String, MonoType)],
+    left_rest: Option<TypeVarId>,
+    right_fields: &[(String, MonoType)],
+    right_rest: Option<TypeVarId>,
+) -> UnifyError {
+    UnifyError::Mismatch {
+        left: MonoType::Record {
+            fields: left_fields.to_vec(),
+            rest: left_rest,
+        },
+        right: MonoType::Record {
+            fields: right_fields.to_vec(),
+            rest: right_rest,
+        },
     }
 }
 
@@ -514,6 +671,13 @@ fn rename_vars(ty: &MonoType, renaming: &BTreeMap<TypeVarId, TypeVarId>) -> Mono
         MonoType::List(inner) => MonoType::List(Box::new(rename_vars(inner, renaming))),
         MonoType::Ref(inner) => MonoType::Ref(Box::new(rename_vars(inner, renaming))),
         MonoType::Mut(inner) => MonoType::Mut(Box::new(rename_vars(inner, renaming))),
+        MonoType::Record { fields, rest } => MonoType::Record {
+            fields: fields
+                .iter()
+                .map(|(name, ty)| (name.clone(), rename_vars(ty, renaming)))
+                .collect(),
+            rest: rest.map(|id| renaming.get(&id).copied().unwrap_or(id)),
+        },
     }
 }
 
@@ -574,15 +738,13 @@ pub fn lower_ty(ty: &Ty, binders: &BTreeMap<String, MonoType>) -> MonoType {
                 })
                 .collect(),
         ),
-        Ty::RecordType(fields) => MonoType::Constructor(
-            "record".to_string(),
-            fields
+        Ty::RecordType(fields) => MonoType::Record {
+            fields: fields
                 .iter()
-                .map(|(name, ty)| {
-                    MonoType::Constructor(name.clone(), vec![lower_ty(ty, binders)])
-                })
+                .map(|(name, ty)| (name.clone(), lower_ty(ty, binders)))
                 .collect(),
-        ),
+            rest: None,
+        },
     }
 }
 

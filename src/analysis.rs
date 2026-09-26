@@ -800,6 +800,9 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
             contains_type_variable(inner)
         }
+        MonoType::Record { fields, rest } => {
+            rest.is_some() || fields.iter().any(|(_, ty)| contains_type_variable(ty))
+        }
     }
 }
 
@@ -818,6 +821,9 @@ fn candidate_specificity(candidate: &crate::specialize::Specialization) -> (usiz
                     MonoType::Function(from, to) => 1 + size(from) + size(to),
                     MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
                         1 + size(inner)
+                    }
+                    MonoType::Record { fields, .. } => {
+                        1 + fields.iter().map(|(_, ty)| size(ty)).sum::<usize>()
                     }
                 }
             }

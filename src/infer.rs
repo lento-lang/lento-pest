@@ -372,19 +372,26 @@ pub fn check_pattern(
             Ok(())
         }
         PatKind::Record { fields, rest } => {
-            // Records are structurally typed here as a nominal `record`
-            // constructor carrying field types; a dedicated record row type
-            // arrives with the type-declaration environment.
             let mut field_tys = Vec::new();
             for f in fields {
                 let ft = ctx.fresh();
                 check_pattern(ctx, &f.pattern, &ft, env)?;
-                field_tys.push(MonoType::Constructor(f.name.clone(), vec![ft]));
+                field_tys.push((f.name.clone(), ft));
             }
-            let rec = MonoType::Constructor("record".to_string(), field_tys);
+            let row = rest.as_ref().map(|_| ctx.supply.fresh_id());
+            let rec = MonoType::Record {
+                fields: field_tys,
+                rest: row,
+            };
             ctx.unify(expected, &rec)?;
             if let Some(rest) = rest {
-                env.insert(rest.clone(), TypeScheme::mono(expected.clone()));
+                env.insert(
+                    rest.clone(),
+                    TypeScheme::mono(MonoType::Record {
+                        fields: Vec::new(),
+                        rest: row,
+                    }),
+                );
             }
             Ok(())
         }
@@ -589,39 +596,61 @@ pub fn infer_typed_expr(
         }
         Expr::Record(r) => {
             let mut fields = Vec::new();
+            let mut rest = None;
             let mut children = Vec::new();
             for entry in &r.entries {
                 match entry {
                     RecordValueEntry::Field(name, expression) => {
                         let field = infer_typed_expr(ctx, expression, env)?;
-                        fields.push(MonoType::Constructor(name.clone(), vec![field.ty.clone()]));
+                        fields.push((name.clone(), field.ty.clone()));
                         children.push(field);
                     }
                     RecordValueEntry::Spread(expression) => {
-                        children.push(infer_typed_expr(ctx, expression, env)?);
+                        let spread = infer_typed_expr(ctx, expression, env)?;
+                        match ctx.resolve(&spread.ty) {
+                            MonoType::Record {
+                                fields: spread_fields,
+                                rest: spread_rest,
+                            } => {
+                                fields.extend(spread_fields);
+                                rest = spread_rest;
+                            }
+                            other => {
+                                return Err(TypeError {
+                                    kind: TypeErrorKind::BadMember {
+                                        ty: other,
+                                        field: "record spread".to_string(),
+                                    },
+                                });
+                            }
+                        }
+                        children.push(spread);
                     }
                 }
             }
-            Ok(composite(MonoType::Constructor("record".into(), fields), children))
+            Ok(composite(
+                MonoType::Record {
+                    fields,
+                    rest,
+                },
+                children,
+            ))
         }
         Expr::Member(m) => {
             let object = infer_typed_expr(ctx, &m.obj, env)?;
-            let ty = match ctx.resolve(&object.ty) {
-                MonoType::Constructor(name, fields) if name == "record" => {
-                    let found = fields.iter().find_map(|field| match field {
-                        MonoType::Constructor(field_name, args) if *field_name == m.field && args.len() == 1 => Some(args[0].clone()),
-                        _ => None,
-                    });
-                    found.ok_or_else(|| TypeError {
-                        kind: TypeErrorKind::BadMember {
-                            ty: object.ty.clone(),
-                            field: m.field.clone(),
-                        },
-                    })?
-                }
-                other => return Err(TypeError {
-                    kind: TypeErrorKind::BadMember { ty: other, field: m.field.clone() },
-                }),
+            let ty = if let Some(field) = find_record_field(ctx, &object.ty, &m.field) {
+                field
+            } else {
+                let field = ctx.fresh();
+                let row = ctx.supply.fresh_id();
+                ctx.unify(
+                    &object.ty,
+                    &MonoType::Record {
+                        fields: vec![(m.field.clone(), field.clone())],
+                        rest: Some(row),
+                    },
+                )?;
+                field
             };
             Ok(composite(ty, vec![object]))
         }
@@ -642,6 +671,17 @@ pub fn infer_typed_expr(
             let place = infer_typed_expr(ctx, &a.place, env)?;
             Ok(composite(ctor::unit(), vec![place, value]))
         }
+    }
+}
+
+fn find_record_field(ctx: &InferCtx, ty: &MonoType, field: &str) -> Option<MonoType> {
+    match ctx.resolve(ty) {
+        MonoType::Record { fields, rest } => fields
+            .into_iter()
+            .find(|(name, _)| name == field)
+            .map(|(_, ty)| ty)
+            .or_else(|| rest.and_then(|row| find_record_field(ctx, &MonoType::Var(row), field))),
+        _ => None,
     }
 }
 

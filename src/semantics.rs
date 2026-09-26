@@ -569,6 +569,9 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
             contains_type_variable(inner)
         }
+        MonoType::Record { fields, rest } => {
+            rest.is_some() || fields.iter().any(|(_, ty)| contains_type_variable(ty))
+        }
     }
 }
 
@@ -580,6 +583,9 @@ fn type_nodes(ty: &MonoType) -> usize {
         }
         MonoType::Function(from, to) => 1 + type_nodes(from) + type_nodes(to),
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => 1 + type_nodes(inner),
+        MonoType::Record { fields, .. } => {
+            1 + fields.iter().map(|(_, ty)| type_nodes(ty)).sum::<usize>()
+        }
     }
 }
 
