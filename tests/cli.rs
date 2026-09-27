@@ -13,3 +13,16 @@ fn prelude_flag_loads_class_declarations() {
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "Less");
 }
+
+#[test]
+fn function_parameter_assignment_uses_the_lambda_cell() {
+    let path = std::env::temp_dir().join(format!("lento-mutable-{}.lt", std::process::id()));
+    std::fs::write(&path, "fn increment x = x = x + 1\nincrement 1\n").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_lento_rust"))
+        .arg(&path)
+        .output()
+        .unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}

@@ -656,10 +656,22 @@ fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
         })
         .collect();
 
-    let mut value = Expr::Match(crate::ast::MatchExpr {
-        scrutinee: Box::new(scrutinee),
-        arms,
-    });
+    // A single variable-only clause needs no dispatcher. In particular, a
+    // match would rebind its parameters as immutable values and hide the
+    // mutable cells created by a lambda application.
+    let mut value = if spec.clauses.len() == 1
+        && spec.clauses[0]
+            .patterns
+            .iter()
+            .all(|pattern| matches!(&pattern.kind, PatKind::Var(_)))
+    {
+        lower_typed_expr(&spec.clauses[0].body)
+    } else {
+        Expr::Match(crate::ast::MatchExpr {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
+    };
     for (parameter_index, b) in bind.iter().enumerate().rev() {
         value = Expr::Lambda(crate::ast::LambdaExpr {
             params: vec![Pattern {
