@@ -629,6 +629,9 @@ pub fn infer_typed_expr(
             for p in &l.params {
                 let pt = ctx.fresh();
                 check_pattern(ctx, p, &pt, &mut local)?;
+                if let PatKind::Var(name) = &p.kind {
+                    ctx.mutable_places.insert(name.clone(), true);
+                }
                 param_tys.push(pt);
             }
             let body = infer_typed_expr(ctx, &l.body, &mut local)?;
@@ -1076,6 +1079,11 @@ pub fn infer_clause(
     for p in &clause.params {
         let pi = ctx.fresh();
         check_pattern(ctx, p, &pi, &mut local)?;
+        if let PatKind::Var(name) = &p.kind {
+            // Function parameters are local cells in the evaluator. Their
+            // annotations/specs determine which callers may provide a place.
+            ctx.mutable_places.insert(name.clone(), true);
+        }
         param_tys.push(pi);
     }
     let body = infer_typed_expr(ctx, &clause.body, &mut local)?;
