@@ -185,13 +185,24 @@ fn type_str(t: &Ty) -> String {
     s
 }
 
+fn format_type_application_arg(out: &mut String, ty: &Ty) {
+    match ty {
+        Ty::Arrow { .. } | Ty::Sum(_) => {
+            out.push('(');
+            format_type(out, ty);
+            out.push(')');
+        }
+        _ => format_type(out, ty),
+    }
+}
+
 fn format_type(out: &mut String, ty: &Ty) {
     match ty {
         Ty::Named { name, args } => {
             let _ = write!(out, "{name}");
-            if !args.is_empty() {
-                let as_: Vec<String> = args.iter().map(type_str).collect();
-                let _ = write!(out, "<{}>", as_.join(", "));
+            for arg in args {
+                out.push(' ');
+                format_type_application_arg(out, arg);
             }
         }
         Ty::Tuple(tys) => {

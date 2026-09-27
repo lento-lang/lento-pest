@@ -111,3 +111,14 @@ fn len xs = xs.len
     assert!(printed.contains("=>"));
     assert!(printed.contains("all a, b"));
 }
+
+#[test]
+fn pretty_printed_type_applications_are_curried() {
+    let ast = parse_program(
+        "type Result a e = Ok a | Err e\n         spec check : all a, e. Result a e -> bool\n",
+    )
+    .expect("curried type application should parse");
+    let printed = format_program(&ast);
+    assert!(printed.contains("Result a e"), "{printed}");
+    assert!(!printed.contains("<a") && !printed.contains("<a,"), "{printed}");
+}
