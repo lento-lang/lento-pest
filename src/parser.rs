@@ -944,11 +944,6 @@ fn type_base(pair: Pair<'_, Rule>) -> Ty {
             let mut args = Vec::new();
             for k in kids.iter().skip(1) {
                 match k.as_rule() {
-                    Rule::type_args => {
-                        for arg in k.clone().into_inner() {
-                            args.push(type_(arg));
-                        }
-                    }
                     Rule::ty_app_args => {
                         for arg in k.clone().into_inner() {
                             args.push(type_(arg));
