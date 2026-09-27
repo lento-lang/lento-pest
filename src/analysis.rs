@@ -522,7 +522,7 @@ fn verify_canonical_smt(
         }
     }
 
-    verify_canonical_smt_calls(program, &refinements)?;
+    verify_canonical_smt_calls(program, groups, &refinements)?;
 
     for group in groups {
         let Some(refinement) = refinements.get(&group.name) else {
@@ -596,6 +596,7 @@ fn verify_canonical_smt(
 #[cfg(feature = "canonical-smt")]
 fn verify_canonical_smt_calls(
     program: &Program,
+    groups: &[FunctionGroup],
     refinements: &BTreeMap<String, SmtRefinement>,
 ) -> Result<(), String> {
     fn walk(
@@ -726,6 +727,11 @@ fn verify_canonical_smt_calls(
                 walk(&binding.value, refinements, false)?
             }
             _ => {}
+        }
+    }
+    for group in groups {
+        for clause in &group.raw_clauses {
+            walk(&clause.body, refinements, false)?;
         }
     }
     Ok(())

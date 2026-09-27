@@ -10,11 +10,12 @@ permissions:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.85.1
       - run: cargo fmt --all
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets --no-default-features

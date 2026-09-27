@@ -33,6 +33,13 @@ fn canonical_smt_rejects_increment_at_i64_max() {
 
 #[cfg(feature = "canonical-smt")]
 #[test]
+fn canonical_smt_checks_calls_inside_function_bodies() {
+    let source = "spec divide:\n    (x: int) -> (y: int) -> int\n    where\n        y != 0\nfn divide x y = x / y\nfn bad x = divide 1 0\n";
+    assert!(analyze(source).unwrap_err().contains("precondition"));
+}
+
+#[cfg(feature = "canonical-smt")]
+#[test]
 fn canonical_smt_rejects_false_refinement_postconditions() {
     let error = analyze(
         "spec unchanged:\n             (x: int) -> (r: int)\n             where\n                 r > x\n         fn unchanged x = x\n",
