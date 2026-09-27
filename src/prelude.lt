@@ -22,19 +22,19 @@ fn unwrap_or fallback option = match option { Some value => value, None => fallb
 spec map_option : all a, b. (a -> b) -> Option a -> Option b
 fn map_option transform option = match option { Some value => Some (transform value), None => None }
 
-spec is_ok : all e, a. Result e a -> bool
+spec is_ok : all e, a. Result<e, a> -> bool
 fn is_ok result = match result { Ok _ => true, Err _ => false }
 
-spec is_err : all e, a. Result e a -> bool
+spec is_err : all e, a. Result<e, a> -> bool
 fn is_err result = match result { Ok _ => false, Err _ => true }
 
-spec map_result : all e, a, b. (a -> b) -> Result e a -> Result e b
+spec map_result : all e, a, b. (a -> b) -> Result<e, a> -> Result<e, b>
 fn map_result transform result = match result { Ok value => Ok (transform value), Err error => Err error }
 
-spec map_err : all e, f, a. (e -> f) -> Result e a -> Result f a
+spec map_err : all e, f, a. (e -> f) -> Result<e, a> -> Result<f, a>
 fn map_err transform result = match result { Ok value => Ok value, Err error => Err (transform error) }
 
-spec and_then_result : all e, a, b. (a -> Result e b) -> Result e a -> Result e b
+spec and_then_result : all e, a, b. (a -> Result<e, b>) -> Result<e, a> -> Result<e, b>
 fn and_then_result transform result = match result { Ok value => transform value, Err error => Err error }
 
 class Num a {
