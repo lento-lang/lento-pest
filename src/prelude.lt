@@ -11,40 +11,31 @@ type ControlFlow b c = Break b | Continue c
 type Bound a = Unbounded | Included a | Excluded a
 
 spec is_some : all a. Option a -> bool
-fn is_some (Some _) = true
-fn is_some None = false
+fn is_some option = match option { Some _ => true, None => false }
 
 spec is_none : all a. Option a -> bool
-fn is_none (Some _) = false
-fn is_none None = true
+fn is_none option = match option { Some _ => false, None => true }
 
 spec unwrap_or : all a. a -> Option a -> a
-fn unwrap_or _ (Some value) = value
-fn unwrap_or fallback None = fallback
+fn unwrap_or fallback option = match option { Some value => value, None => fallback }
 
 spec map_option : all a, b. (a -> b) -> Option a -> Option b
-fn map_option transform (Some value) = Some (transform value)
-fn map_option _ None = None
+fn map_option transform option = match option { Some value => Some (transform value), None => None }
 
 spec is_ok : all e, a. Result e a -> bool
-fn is_ok (Ok _) = true
-fn is_ok (Err _) = false
+fn is_ok result = match result { Ok _ => true, Err _ => false }
 
 spec is_err : all e, a. Result e a -> bool
-fn is_err (Ok _) = false
-fn is_err (Err _) = true
+fn is_err result = match result { Ok _ => false, Err _ => true }
 
 spec map_result : all e, a, b. (a -> b) -> Result e a -> Result e b
-fn map_result transform (Ok value) = Ok (transform value)
-fn map_result _ (Err error) = Err error
+fn map_result transform result = match result { Ok value => Ok (transform value), Err error => Err error }
 
 spec map_err : all e, f, a. (e -> f) -> Result e a -> Result f a
-fn map_err _ (Ok value) = Ok value
-fn map_err transform (Err error) = Err (transform error)
+fn map_err transform result = match result { Ok value => Ok value, Err error => Err (transform error) }
 
 spec and_then_result : all e, a, b. (a -> Result e b) -> Result e a -> Result e b
-fn and_then_result transform (Ok value) = transform value
-fn and_then_result _ (Err error) = Err error
+fn and_then_result transform result = match result { Ok value => transform value, Err error => Err error }
 
 class Num a {
     spec abs : a -> a
