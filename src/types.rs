@@ -420,6 +420,17 @@ pub fn unify(
             }
             Ok(())
         }
+        // Specs lower named ADTs as constructors, while inferred values carry
+        // their resolved sum alternatives. Both denote the same nominal type.
+        (MonoType::Sum { name: sum_name, args: sum_args, .. }, MonoType::Constructor(name, args))
+        | (MonoType::Constructor(name, args), MonoType::Sum { name: sum_name, args: sum_args, .. })
+            if sum_name == name && sum_args.len() == args.len() =>
+        {
+            for (sum_arg, arg) in sum_args.iter().zip(args) {
+                unify(subst, sum_arg, arg)?;
+            }
+            Ok(())
+        }
         (MonoType::Function(f1, t1), MonoType::Function(f2, t2)) => {
             unify(subst, &f1.clone(), &f2.clone())?;
             unify(subst, &t1.clone(), &t2.clone())
@@ -1070,6 +1081,20 @@ fn matches(
                     .iter()
                     .zip(a2.clone().iter())
                     .all(|(x, y)| matches(x, y, matchable, subst))
+        }
+        (MonoType::Sum { name: sum_name, args: sum_args, .. }, MonoType::Constructor(name, args)) => {
+            sum_name == name
+                && sum_args.len() == args.len()
+                && sum_args.iter().zip(args).all(|(sum_arg, arg)| {
+                    matches(sum_arg, arg, matchable, subst)
+                })
+        }
+        (MonoType::Constructor(name, args), MonoType::Sum { name: sum_name, args: sum_args, .. }) => {
+            sum_name == name
+                && args.len() == sum_args.len()
+                && args.iter().zip(sum_args).all(|(arg, sum_arg)| {
+                    matches(arg, sum_arg, matchable, subst)
+                })
         }
         (MonoType::Function(f1, t1), MonoType::Function(f2, t2)) => {
             let (f1, t1, f2, t2) = (f1.clone(), t1.clone(), f2.clone(), t2.clone());
