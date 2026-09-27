@@ -28,6 +28,61 @@ fn list(inner: MonoType) -> MonoType {
     MonoType::List(Box::new(inner))
 }
 
+#[test]
+fn solved_record_tail_is_materialized_by_substitution() {
+    let mut subst = Substitution::new();
+    let open = MonoType::Record {
+        fields: vec![("a".into(), con("int", vec![]))],
+        rest: Some(42),
+    };
+    let closed = MonoType::Record {
+        fields: vec![
+            ("a".into(), con("int", vec![])),
+            ("b".into(), con("str", vec![])),
+        ],
+        rest: None,
+    };
+    unify(&mut subst, &open, &closed).unwrap();
+    assert_eq!(subst.apply(&open), closed);
+}
+
+#[test]
+fn independently_reconciled_rows_do_not_share_a_fresh_tail() {
+    let mut subst = Substitution::new();
+    let open = |name: &str, tail| MonoType::Record {
+        fields: vec![(name.into(), con("int", vec![]))],
+        rest: Some(tail),
+    };
+    unify(&mut subst, &open("a", 10), &open("b", 11)).unwrap();
+    unify(&mut subst, &open("c", 12), &open("d", 13)).unwrap();
+    assert_ne!(subst.apply(&var(10)), subst.apply(&var(12)));
+}
+
+#[test]
+fn nominal_sums_keep_identity_and_structural_sums_check_payloads() {
+    use lento::types::MonoSumAlt;
+    let sum = |name: &str, payload: &str| MonoType::Sum {
+        name: name.into(),
+        args: vec![],
+        alts: vec![MonoSumAlt::Constructor {
+            name: "Some".into(),
+            payload: Some(con(payload, vec![])),
+        }],
+    };
+    assert!(unify(
+        &mut Substitution::new(),
+        &sum("Left", "int"),
+        &sum("Right", "int")
+    )
+    .is_err());
+    assert!(unify(
+        &mut Substitution::new(),
+        &sum("<sum:1>", "int"),
+        &sum("<sum:1>", "str")
+    )
+    .is_err());
+}
+
 // -- fresh variables --------------------------------------------------------
 
 #[test]
@@ -119,15 +174,26 @@ fn nominal_sum_and_named_type_representations_agree() {
         name: "Option".into(),
         args: vec![var(0)],
         alts: vec![
-            MonoSumAlt::Constructor { name: "None".into(), payload: None },
-            MonoSumAlt::Constructor { name: "Some".into(), payload: Some(var(0)) },
+            MonoSumAlt::Constructor {
+                name: "None".into(),
+                payload: None,
+            },
+            MonoSumAlt::Constructor {
+                name: "Some".into(),
+                payload: Some(var(0)),
+            },
         ],
     };
     let named = con("Option", vec![con("int", vec![])]);
     let mut substitution = Substitution::new();
     unify(&mut substitution, &option, &named).expect("same nominal sum should unify");
     assert_eq!(substitution.apply(&var(0)), con("int", vec![]));
-    assert!(unify(&mut Substitution::new(), &option, &con("Other", vec![var(0)])).is_err());
+    assert!(unify(
+        &mut Substitution::new(),
+        &option,
+        &con("Other", vec![var(0)])
+    )
+    .is_err());
 
     let implementation = TypeScheme {
         quantified: vec![0],
@@ -139,7 +205,11 @@ fn nominal_sum_and_named_type_representations_agree() {
         constraints: vec![],
         body: arrow(con("Option", vec![var(1)]), con("bool", vec![])),
     };
-    assert!(implementation_covers_spec(&mut TypeVarSupply::new(), &implementation, &specification));
+    assert!(implementation_covers_spec(
+        &mut TypeVarSupply::new(),
+        &implementation,
+        &specification
+    ));
 }
 
 #[test]
@@ -160,10 +230,7 @@ fn unification_is_structural_for_functions_tuples_and_lists() {
     let mut s = Substitution::new();
     unify(
         &mut s,
-        &arrow(
-            var(0),
-            MonoType::Tuple(vec![var(1), list(var(1))]),
-        ),
+        &arrow(var(0), MonoType::Tuple(vec![var(1), list(var(1))])),
         &arrow(
             con("str", vec![]),
             MonoType::Tuple(vec![con("bool", vec![]), list(con("bool", vec![]))]),
@@ -324,10 +391,7 @@ fn lower_ty_never_turns_a_bare_parameter_name_into_a_nominal_type() {
         name: "x".to_string(),
         args: vec![],
     };
-    assert_eq!(
-        lower_ty(&surface, &BTreeMap::new()),
-        con("x", vec![])
-    );
+    assert_eq!(lower_ty(&surface, &BTreeMap::new()), con("x", vec![]));
     // With a binder in scope the same name resolves to that variable.
     let mut binders = BTreeMap::new();
     binders.insert("x".to_string(), var(3));

@@ -19,6 +19,9 @@ struct Cli {
     print_code: bool,
     #[arg(long, requires = "file", conflicts_with_all = ["print_ast", "print_code"])]
     fmt: bool,
+    /// Load the class-based prelude (its global method names may shadow intrinsics).
+    #[arg(long, requires = "file")]
+    prelude: bool,
 }
 
 fn read_line(prompt: Option<&str>) -> Option<String> {
@@ -47,8 +50,19 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
     lento::parser::parse_file(path)
 }
 
-fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
-    let analysis = lento::analysis::analyze_program(ast)?;
+fn interpret(ast: &lento::ast::Program, with_prelude: bool) -> Result<(), String> {
+    let mut program = ast.clone();
+    if with_prelude {
+        let prelude = parse_program(include_str!("prelude.lt"))
+            .map_err(|error| format!("prelude parse error: {error}"))?;
+        let mut statements = prelude.statements;
+        statements.extend(program.statements);
+        program.statements = statements;
+        let mut spans = prelude.spans;
+        spans.extend(program.spans);
+        program.spans = spans;
+    }
+    let analysis = lento::analysis::analyze_program(&program)?;
     let lowered = lento::semantics::lower_analyzed_program(&analysis.source, &analysis.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)?;
     if matches!(lowered.statements.last(), Some(lento::ast::Stmt::Expr(_)))
@@ -82,7 +96,7 @@ fn main() -> Result<(), String> {
                 Ok(())
             } else {
                 let ast = load(path)?;
-                interpret(&ast)
+                interpret(&ast, cli.prelude)
             }
         }
         None => {

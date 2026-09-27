@@ -24,10 +24,9 @@ fn analyze(src: &str) -> Vec<lento::patterns::PatternDiagnostic> {
 fn catchall_first_makes_literal_clause_unreachable() {
     // fn f x = ...; fn f 0 = ... — the literal clause is unreachable.
     let diags = analyze("fn f x = x\nfn f 0 = 0");
-    assert!(diags.iter().any(|d| matches!(
-        d.kind,
-        DiagnosticKind::UnreachableClause { index: 1 }
-    )));
+    assert!(diags
+        .iter()
+        .any(|d| matches!(d.kind, DiagnosticKind::UnreachableClause { index: 1 })));
     // The unreachable clause is a warning, not an error.
     assert!(diags
         .iter()
@@ -50,7 +49,10 @@ fn duplicate_clause_is_an_error() {
     let diags = analyze("fn f 0 = 0\nfn f 0 = 1");
     assert!(diags.iter().any(|d| matches!(
         d.kind,
-        DiagnosticKind::DuplicateClause { index: 1, earlier: 0 }
+        DiagnosticKind::DuplicateClause {
+            index: 1,
+            earlier: 0
+        }
     ) && d.severity == Severity::Error));
 }
 
@@ -67,14 +69,19 @@ fn empty_and_cons_list_are_exhaustive_together() {
 fn singleton_list_pattern_is_non_exhaustive() {
     // [y] alone leaves [] and [_, _, ..._] uncovered.
     let diags = analyze("fn f [y] = y");
-    let ne = diags.iter().find(|d| matches!(d.kind, DiagnosticKind::NonExhaustive { .. }));
+    let ne = diags
+        .iter()
+        .find(|d| matches!(d.kind, DiagnosticKind::NonExhaustive { .. }));
     let ne = ne.expect("expected a non-exhaustive warning");
     assert_eq!(ne.severity, Severity::Warning);
     if let DiagnosticKind::NonExhaustive { witnesses } = &ne.kind {
         // At least one concrete uncovered witness is reported (the empty list
         // for `[y]`). The search returns the first uncovered vector.
         assert!(!witnesses.is_empty(), "expected witnesses");
-        assert!(witnesses.iter().any(|w| w == "[]"), "witnesses: {witnesses:?}");
+        assert!(
+            witnesses.iter().any(|w| w == "[]"),
+            "witnesses: {witnesses:?}"
+        );
     }
 }
 

@@ -146,14 +146,23 @@ pub struct Constraint {
 /// arrows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
-    Named { name: String, args: Vec<Ty> },
+    Named {
+        name: String,
+        args: Vec<Ty>,
+    },
     Tuple(Vec<Ty>),
     List(Box<Ty>),
     #[allow(non_camel_case_types)]
-    Arrow { from: Box<Ty>, to: Box<Ty> },
+    Arrow {
+        from: Box<Ty>,
+        to: Box<Ty>,
+    },
     Ref(Box<Ty>),
     Mut(Box<Ty>),
-    NamedBinder { name: String, ty: Box<Ty> },
+    NamedBinder {
+        name: String,
+        ty: Box<Ty>,
+    },
     /// `int | str` or `Some a | None` — a sum type declaration body.
     Sum(Vec<SumAlt>),
     /// `{ a: int, b: bool }` — a record type.
@@ -457,13 +466,13 @@ pub fn param_type(p: &Pattern) -> Option<Ty> {
             }
             Some(Ty::Tuple(tys))
         }
-    // Literals, wildcards, lists, spread, records and constructors do not
-    // carry recoverable element types without more type inference.
-    PatKind::Lit(_)
-    | PatKind::Wildcard
-    | PatKind::List(_)
-    | PatKind::Spread(_)
-    | PatKind::Record { .. }
-    | PatKind::Constructor { .. } => None,
-}
+        // Literals, wildcards, lists, spread, records and constructors do not
+        // carry recoverable element types without more type inference.
+        PatKind::Lit(_)
+        | PatKind::Wildcard
+        | PatKind::List(_)
+        | PatKind::Spread(_)
+        | PatKind::Record { .. }
+        | PatKind::Constructor { .. } => None,
+    }
 }

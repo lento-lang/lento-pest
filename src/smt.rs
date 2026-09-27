@@ -134,7 +134,9 @@ impl<'a> Enc<'a> {
                         return self.encode(inner);
                     }
                 }
-                Err(Unsupported("blocks with statements cannot be encoded".into()))
+                Err(Unsupported(
+                    "blocks with statements cannot be encoded".into(),
+                ))
             }
             Expr::Lambda(lambda) => {
                 // Curried definition bodies: parameters were pre-bound by the
@@ -142,7 +144,9 @@ impl<'a> Enc<'a> {
                 // A parameter not already bound (extra curry depth, or a
                 // destructuring pattern) is unsupported.
                 if lambda.params.len() != 1 {
-                    return Err(Unsupported("multi-parameter lambdas cannot be encoded".into()));
+                    return Err(Unsupported(
+                        "multi-parameter lambdas cannot be encoded".into(),
+                    ));
                 }
                 match &lambda.params[0].kind {
                     PatKind::Var(name) => {
@@ -164,7 +168,12 @@ impl<'a> Enc<'a> {
         }
     }
 
-    fn encode_binary(&mut self, op: &BinaryOp, lhs: &Expr, rhs: &Expr) -> Result<Term<'a>, Unsupported> {
+    fn encode_binary(
+        &mut self,
+        op: &BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+    ) -> Result<Term<'a>, Unsupported> {
         let tm: &'a TermManager = self.tm;
         use BinaryOp::*;
         use SVal::{Bool, Float, Int};
@@ -322,7 +331,10 @@ fn run_check(
     if res.is_sat() {
         let mut parts = Vec::new();
         for (t, name) in params {
-            parts.push(format!("{name} = {}", fmt_value(&solver.get_value(t.copy()))));
+            parts.push(format!(
+                "{name} = {}",
+                fmt_value(&solver.get_value(t.copy()))
+            ));
         }
         return Ok(Verdict::Counterexample(parts.join(", ")));
     }
@@ -468,11 +480,18 @@ mod tests {
         Expr::Lit(LitExpr { value: Lit::Int(v) })
     }
     fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-        Expr::Binary(BinaryExpr { op, lhs: Box::new(l), rhs: Box::new(r) })
+        Expr::Binary(BinaryExpr {
+            op,
+            lhs: Box::new(l),
+            rhs: Box::new(r),
+        })
     }
     fn lam(param: &str, body: Expr) -> Expr {
         Expr::Lambda(LambdaExpr {
-            params: vec![Pattern { annotation: None, kind: PatKind::Var(param.into()) }],
+            params: vec![Pattern {
+                annotation: None,
+                kind: PatKind::Var(param.into()),
+            }],
             body: Box::new(body),
         })
     }
@@ -486,7 +505,11 @@ mod tests {
         // the encoded body, so the equality is definitionally true.
         let body = lam("x", bin(BinaryOp::Mul, var("x"), var("x")));
         let pres = vec![];
-        let post = bin(BinaryOp::Eq, var("r"), bin(BinaryOp::Mul, var("x"), var("x")));
+        let post = bin(
+            BinaryOp::Eq,
+            var("r"),
+            bin(BinaryOp::Mul, var("x"), var("x")),
+        );
         let inputs = vec![(Some("x".into()), SVal::Int)];
         match check_post(&inputs, &("r".into(), SVal::Int), &body, &pres, &post) {
             Ok(Verdict::Proven) => {}
@@ -507,10 +530,7 @@ mod tests {
             bin(BinaryOp::Mul, var("r"), var("y")),
             var("x"),
         );
-        let inputs = vec![
-            (Some("x".into()), SVal::Int),
-            (Some("y".into()), SVal::Int),
-        ];
+        let inputs = vec![(Some("x".into()), SVal::Int), (Some("y".into()), SVal::Int)];
         match check_post(&inputs, &("r".into(), SVal::Int), &body, &pres, &post) {
             Ok(Verdict::Proven) | Err(_) => {}
             Ok(Verdict::Counterexample(w)) => {
@@ -530,10 +550,7 @@ mod tests {
             bin(BinaryOp::Mul, var("r"), var("y")),
             var("x"),
         );
-        let inputs = vec![
-            (Some("x".into()), SVal::Int),
-            (Some("y".into()), SVal::Int),
-        ];
+        let inputs = vec![(Some("x".into()), SVal::Int), (Some("y".into()), SVal::Int)];
         match check_post(&inputs, &("r".into(), SVal::Int), &body, &pres, &post) {
             Ok(Verdict::Counterexample(w)) => {
                 assert!(w.contains("x"), "witness should name params: {w}");
@@ -572,9 +589,30 @@ mod tests {
     #[test]
     fn float_and_bool_clauses_encode() {
         // f = x => x * 2.5 with post r > 0.0 for x > 0.0
-        let body = lam("x", bin(BinaryOp::Mul, var("x"), Expr::Lit(LitExpr { value: Lit::Float(2.5) })));
-        let pres = vec![bin(BinaryOp::Gt, var("x"), Expr::Lit(LitExpr { value: Lit::Float(0.0) }))];
-        let post = bin(BinaryOp::Gt, var("r"), Expr::Lit(LitExpr { value: Lit::Float(0.0) }));
+        let body = lam(
+            "x",
+            bin(
+                BinaryOp::Mul,
+                var("x"),
+                Expr::Lit(LitExpr {
+                    value: Lit::Float(2.5),
+                }),
+            ),
+        );
+        let pres = vec![bin(
+            BinaryOp::Gt,
+            var("x"),
+            Expr::Lit(LitExpr {
+                value: Lit::Float(0.0),
+            }),
+        )];
+        let post = bin(
+            BinaryOp::Gt,
+            var("r"),
+            Expr::Lit(LitExpr {
+                value: Lit::Float(0.0),
+            }),
+        );
         let inputs = vec![(Some("x".into()), SVal::Float)];
         match check_post(&inputs, &("r".into(), SVal::Float), &body, &pres, &post) {
             Ok(Verdict::Proven) => {}
@@ -585,7 +623,10 @@ mod tests {
         let bfalse = bin(
             BinaryOp::And,
             var("b"),
-            Expr::Unary(UnaryExpr { op: UnaryOp::Not, operand: Box::new(var("b")) }),
+            Expr::Unary(UnaryExpr {
+                op: UnaryOp::Not,
+                operand: Box::new(var("b")),
+            }),
         );
         let inputs = vec![(Some("b".into()), Some(SVal::Bool))];
         let externals: Vec<(String, SVal)> = Vec::new();
@@ -593,7 +634,9 @@ mod tests {
             check_pre(
                 &inputs,
                 &bfalse,
-                &[&Expr::Lit(LitExpr { value: Lit::Bool(true) })],
+                &[&Expr::Lit(LitExpr {
+                    value: Lit::Bool(true)
+                })],
                 &externals
             ),
             Ok(Verdict::Counterexample(_))

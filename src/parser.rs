@@ -30,9 +30,10 @@ pub fn parse_file(path: &Path) -> Result<Program, String> {
     {
         let entry = entry.map_err(|error| format!("Error reading module entry: {error}"))?;
         let child = entry.path();
-        if current.as_ref().is_some_and(|current| {
-            child.canonicalize().ok().as_ref() == Some(current)
-        }) {
+        if current
+            .as_ref()
+            .is_some_and(|current| child.canonicalize().ok().as_ref() == Some(current))
+        {
             continue;
         }
         if child.extension().and_then(|extension| extension.to_str()) == Some("lt") {
@@ -73,7 +74,10 @@ fn load_module_file(path: &Path, name: &str) -> Result<ModDecl, String> {
             .map_err(|error| format!("Parse error in {}:\n{error}", manifest.display()))?;
         program.statements.extend(nested.statements);
     }
-    Ok(ModDecl { name: name.to_string(), body: program.statements })
+    Ok(ModDecl {
+        name: name.to_string(),
+        body: program.statements,
+    })
 }
 
 /// Convert a byte offset into a 1-based line/column position.
@@ -198,7 +202,11 @@ fn class_decl(pair: Pair<'_, Rule>) -> ClassDecl {
             _ => {}
         }
     }
-    ClassDecl { name, params, specs }
+    ClassDecl {
+        name,
+        params,
+        specs,
+    }
 }
 
 fn impl_decl(pair: Pair<'_, Rule>) -> ImplDecl {
@@ -216,7 +224,12 @@ fn impl_decl(pair: Pair<'_, Rule>) -> ImplDecl {
             _ => {}
         }
     }
-    ImplDecl { class, quantifiers, target, methods }
+    ImplDecl {
+        class,
+        quantifiers,
+        target,
+        methods,
+    }
 }
 
 fn quantifier(pair: Pair<'_, Rule>) -> Quantifier {
@@ -297,11 +310,12 @@ fn alternative_from_ty(ty: Ty) -> SumAlt {
         Ty::Named { name, args } if name.starts_with("...") && args.is_empty() => {
             SumAlt::Row(name.trim_start_matches("...").to_string())
         }
-        Ty::Named { name, args }
-            if name.starts_with(|c: char| c.is_ascii_uppercase()) =>
-        {
+        Ty::Named { name, args } if name.starts_with(|c: char| c.is_ascii_uppercase()) => {
             match args.len() {
-                0 => SumAlt::Ctor { name, payload: None },
+                0 => SumAlt::Ctor {
+                    name,
+                    payload: None,
+                },
                 1 => SumAlt::Ctor {
                     name,
                     payload: Some(args.into_iter().next().unwrap()),
@@ -318,7 +332,10 @@ fn alternative_from_ty(ty: Ty) -> SumAlt {
 
 fn let_decl(pair: Pair<'_, Rule>) -> LetDecl {
     let mut mutable = false;
-    let mut pat = Pattern { annotation: None, kind: PatKind::Wildcard };
+    let mut pat = Pattern {
+        annotation: None,
+        kind: PatKind::Wildcard,
+    };
     let mut annotation = None;
     let mut value = none_expr();
     for inner in pair.into_inner() {
@@ -393,7 +410,10 @@ fn pat_alt(pair: Pair<'_, Rule>) -> Pattern {
             .filter(|k| k.as_rule() == Rule::pattern_elem)
             .map(pat_elem)
             .collect();
-        return Pattern { annotation: None, kind: PatKind::Tuple(elems) };
+        return Pattern {
+            annotation: None,
+            kind: PatKind::Tuple(elems),
+        };
     }
 
     // Single annotation `(x : Int)`.
@@ -403,7 +423,10 @@ fn pat_alt(pair: Pair<'_, Rule>) -> Pattern {
             Some(p) => pattern(p.clone()).kind,
             None => PatKind::Wildcard,
         };
-        return Pattern { annotation: Some(ty), kind };
+        return Pattern {
+            annotation: Some(ty),
+            kind,
+        };
     }
 
     // Grouped `(a)` — transparent.
@@ -414,7 +437,10 @@ fn pat_alt(pair: Pair<'_, Rule>) -> Pattern {
     // Atom.
     match kids.into_iter().next() {
         Some(atom) => atom_pattern(atom),
-        None => Pattern { annotation: None, kind: PatKind::Wildcard },
+        None => Pattern {
+            annotation: None,
+            kind: PatKind::Wildcard,
+        },
     }
 }
 
@@ -475,7 +501,10 @@ fn atom_pattern(pair: Pair<'_, Rule>) -> Pattern {
                 kind: PatKind::Lit(Lit::Str(s.to_string())),
             }
         }
-        _ => Pattern { annotation: None, kind: PatKind::Wildcard },
+        _ => Pattern {
+            annotation: None,
+            kind: PatKind::Wildcard,
+        },
     }
 }
 
@@ -528,7 +557,10 @@ fn record_pattern(pair: Pair<'_, Rule>) -> Pattern {
 /// Build a `RecordField` from a `record_field` pair.
 fn record_field(pair: Pair<'_, Rule>) -> RecordField {
     let mut name = String::new();
-    let mut pat = Pattern { annotation: None, kind: PatKind::Wildcard };
+    let mut pat = Pattern {
+        annotation: None,
+        kind: PatKind::Wildcard,
+    };
     for inner in pair.into_inner() {
         if inner.as_rule() == Rule::identifier {
             name = inner.as_str().to_string();
@@ -695,7 +727,9 @@ fn binop_rank(op: &BinaryOp) -> u8 {
     match op {
         BinaryOp::Or => 1,
         BinaryOp::And => 2,
-        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => 3,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge => {
+            3
+        }
         BinaryOp::Add | BinaryOp::Sub => 4,
         BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => 5,
     }
@@ -912,7 +946,10 @@ fn type_(pair: Pair<'_, Rule>) -> Ty {
                 None => Ty::Tuple(Vec::new()),
             }
         }
-        Rule::identifier => Ty::Named { name: pair.as_str().to_string(), args: Vec::new() },
+        Rule::identifier => Ty::Named {
+            name: pair.as_str().to_string(),
+            args: Vec::new(),
+        },
         Rule::list_union => list_union(pair),
         Rule::ty_record => ty_record(pair),
         other => panic!("unexpected type rule: {other:?}"),

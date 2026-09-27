@@ -424,7 +424,6 @@ pub fn lower_typed_program(program: &TypedProgram) -> Program {
     Program { statements, spans }
 }
 
-
 /// Lower analyzed functions through the typed IR while preserving all
 /// non-function declarations and their source order for runtime setup.
 pub fn lower_analyzed_program(source: &Program, typed: &TypedProgram) -> Program {
@@ -512,9 +511,10 @@ fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
     let mut clauses = specializations
         .iter()
         .flat_map(|specialization| {
-            specialization.clauses.iter().map(move |clause| {
-                (specialization_specificity(specialization), clause)
-            })
+            specialization
+                .clauses
+                .iter()
+                .map(move |clause| (specialization_specificity(specialization), clause))
         })
         .collect::<Vec<_>>();
     clauses.sort_by(|(left_specificity, left), (right_specificity, right)| {
@@ -526,7 +526,10 @@ fn lower_overload_set(set: &TypedOverloadSet) -> LetDecl {
         id: first.id,
         scheme: first.scheme.clone(),
         origin: first.origin.clone(),
-        clauses: clauses.into_iter().map(|(_, clause)| clause.clone()).collect(),
+        clauses: clauses
+            .into_iter()
+            .map(|(_, clause)| clause.clone())
+            .collect(),
     };
     let value = lower_specialization(&set.name, &merged);
     LetDecl {
@@ -592,7 +595,9 @@ fn type_nodes(ty: &MonoType) -> usize {
             1 + args.iter().map(type_nodes).sum::<usize>()
         }
         MonoType::Function(from, to) => 1 + type_nodes(from) + type_nodes(to),
-        MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => 1 + type_nodes(inner),
+        MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
+            1 + type_nodes(inner)
+        }
         MonoType::Record { fields, .. } => {
             1 + fields.iter().map(|(_, ty)| type_nodes(ty)).sum::<usize>()
         }
@@ -604,8 +609,8 @@ fn type_nodes(ty: &MonoType) -> usize {
                         crate::types::MonoSumAlt::Constructor { payload, .. } => {
                             payload.as_ref().map_or(0, type_nodes)
                         }
-                    crate::types::MonoSumAlt::Bare(ty) => type_nodes(ty),
-                    crate::types::MonoSumAlt::Row(ty) => type_nodes(ty),
+                        crate::types::MonoSumAlt::Bare(ty) => type_nodes(ty),
+                        crate::types::MonoSumAlt::Row(ty) => type_nodes(ty),
                     })
                     .sum::<usize>()
         }
@@ -617,10 +622,12 @@ fn type_nodes(ty: &MonoType) -> usize {
 fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
     let arity = spec.clauses.first().map(|c| c.patterns.len()).unwrap_or(0);
     let bind: Vec<String> = (0..arity)
-        .map(|i| match spec.clauses.first().map(|c| &c.patterns[i].kind) {
-            Some(PatKind::Var(n)) => n.clone(),
-            _ => format!("__l{name}{i}"),
-        })
+        .map(
+            |i| match spec.clauses.first().map(|c| &c.patterns[i].kind) {
+                Some(PatKind::Var(n)) => n.clone(),
+                _ => format!("__l{name}{i}"),
+            },
+        )
         .collect();
 
     let scrutinee = if arity == 1 {
@@ -656,10 +663,22 @@ fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
         })
         .collect();
 
-    let mut value = Expr::Match(crate::ast::MatchExpr {
-        scrutinee: Box::new(scrutinee),
-        arms,
-    });
+    // A single variable-only clause needs no dispatcher. In particular, a
+    // match would rebind its parameters as immutable values and hide the
+    // mutable cells created by a lambda application.
+    let mut value = if spec.clauses.len() == 1
+        && spec.clauses[0]
+            .patterns
+            .iter()
+            .all(|pattern| matches!(&pattern.kind, PatKind::Var(_)))
+    {
+        lower_typed_expr(&spec.clauses[0].body)
+    } else {
+        Expr::Match(crate::ast::MatchExpr {
+            scrutinee: Box::new(scrutinee),
+            arms,
+        })
+    };
     for (parameter_index, b) in bind.iter().enumerate().rev() {
         value = Expr::Lambda(crate::ast::LambdaExpr {
             params: vec![Pattern {
@@ -675,7 +694,6 @@ fn lower_specialization(name: &str, spec: &TypedSpecialization) -> Expr {
     }
     value
 }
-
 
 fn lower_next(children: &mut std::slice::Iter<'_, TypedExpr>) -> Expr {
     lower_typed_expr(children.next().expect("typed child/source shape mismatch"))
@@ -694,7 +712,11 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
             rhs: Box::new(lower_next(&mut children)),
         }),
         Expr::Tuple(tuple) => Expr::Tuple(crate::ast::TupleExpr {
-            items: tuple.items.iter().map(|_| lower_next(&mut children)).collect(),
+            items: tuple
+                .items
+                .iter()
+                .map(|_| lower_next(&mut children))
+                .collect(),
         }),
         Expr::List(list) => {
             fn lower_list(
@@ -732,7 +754,9 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
                     RecordValueEntry::Field(name, _) => {
                         RecordValueEntry::Field(name.clone(), lower_next(&mut children))
                     }
-                    RecordValueEntry::Spread(_) => RecordValueEntry::Spread(lower_next(&mut children)),
+                    RecordValueEntry::Spread(_) => {
+                        RecordValueEntry::Spread(lower_next(&mut children))
+                    }
                 })
                 .collect();
             Expr::Record(crate::ast::RecordValueExpr { entries })
