@@ -18,5 +18,11 @@ jobs:
           toolchain: 1.85.1
           components: rustfmt
       - run: cargo fmt --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formatted-sources
+          path: |
+            src/
+            tests/
       - name: Test
-        run: cargo test --locked --all-targets --no-default-features
+        run: cargo test --locked --all-targets
