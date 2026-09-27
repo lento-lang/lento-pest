@@ -232,12 +232,35 @@ fn equivalent(a: &[Pat], b: &[Pat]) -> bool {
 /// Returns diagnostics in source order. The specialization's clauses are the
 /// rows of one pattern matrix over the parameter product.
 pub fn analyze_specialization(spec: &Specialization) -> Vec<PatternDiagnostic> {
-    let mut diagnostics = Vec::new();
     let rows: Vec<Vec<Pat>> = spec
         .clauses
         .iter()
         .map(|c| c.patterns.iter().map(simplify).collect())
         .collect();
+    analyze_rows(&rows, &[])
+}
+
+/// Analyze a match against its inferred domain, including constructors not
+/// mentioned by any arm. Guarded arms cannot establish coverage.
+pub fn analyze_typed_match(
+    scrutinee: &crate::types::MonoType,
+    arms: &[crate::semantics::TypedMatchArm],
+) -> Vec<PatternDiagnostic> {
+    let rows = arms.iter().filter(|arm| arm.guard.is_none())
+        .map(|arm| vec![simplify(&arm.pattern)]).collect::<Vec<_>>();
+    let domain = match scrutinee {
+        crate::types::MonoType::Sum { alts, .. } => alts.iter().filter_map(|alt| match alt {
+            crate::types::MonoSumAlt::Constructor { name, payload } => Some(Pat::Constructor(
+                name.clone(), payload.as_ref().map(|_| Box::new(Pat::Wild)))),
+            _ => None,
+        }).collect(),
+        _ => Vec::new(),
+    };
+    analyze_rows(&rows, &[domain])
+}
+
+fn analyze_rows(rows: &[Vec<Pat>], domain: &[Vec<Pat>]) -> Vec<PatternDiagnostic> {
+    let mut diagnostics = Vec::new();
 
     // Duplicate (semantically equivalent) and unreachable detection.
     for (i, row) in rows.iter().enumerate() {
@@ -275,7 +298,7 @@ pub fn analyze_specialization(spec: &Specialization) -> Vec<PatternDiagnostic> {
 
     // Exhaustiveness: is there a value of the parameter product matching NO
     // unguarded row? Compute witnesses for the gaps.
-    let witnesses = uncovered_witnesses(&rows);
+    let witnesses = uncovered_witnesses(rows, domain);
     if !witnesses.is_empty() {
         diagnostics.push(PatternDiagnostic {
             severity: Severity::Warning,
@@ -293,7 +316,7 @@ pub fn analyze_specialization(spec: &Specialization) -> Vec<PatternDiagnostic> {
 /// columns are respected (e.g. `(true, [])` / `(false, [x,...xs])` leaves
 /// `(true, [_,..._])` and `(false, [])` uncovered). Guards are ignored —
 /// guarded rows never count as covering.
-fn uncovered_witnesses(rows: &[Vec<Pat>]) -> Vec<String> {
+fn uncovered_witnesses(rows: &[Vec<Pat>], domain: &[Vec<Pat>]) -> Vec<String> {
     if rows.is_empty() {
         return vec!["_".to_string()];
     }
@@ -303,7 +326,7 @@ fn uncovered_witnesses(rows: &[Vec<Pat>]) -> Vec<String> {
         return Vec::new();
     }
     // Search for one uncovered vector, then render it.
-    match find_uncovered(rows, arity) {
+    match find_uncovered(rows, arity, domain) {
         Some(witness) => vec![render_witness(&witness)],
         None => Vec::new(),
     }
@@ -311,13 +334,13 @@ fn uncovered_witnesses(rows: &[Vec<Pat>]) -> Vec<String> {
 
 /// Recursively search for a vector of `arity` columns that no row covers.
 /// Returns the uncovered vector (as concrete `Pat`s / `Wild`) if one exists.
-fn find_uncovered(rows: &[Vec<Pat>], arity: usize) -> Option<Vec<Pat>> {
+fn find_uncovered(rows: &[Vec<Pat>], arity: usize, domain: &[Vec<Pat>]) -> Option<Vec<Pat>> {
     // Enumerate constructor candidates per column derived from the rows, plus
     // each column's complement. This bounded enumeration is sufficient for
     // Lento's constructor forms (literals, lists, tuples, records).
     let mut col_candidates: Vec<Vec<Pat>> = Vec::new();
     for col in 0..arity {
-        let mut cands: Vec<Pat> = Vec::new();
+        let mut cands: Vec<Pat> = domain.get(col).cloned().unwrap_or_default();
         let mut has_wild_row = false;
         for r in rows {
             match &r[col] {

@@ -48,7 +48,15 @@ fn load(path: &std::path::Path) -> Result<lento::ast::Program, String> {
 }
 
 fn interpret(ast: &lento::ast::Program) -> Result<(), String> {
-    let analysis = lento::analysis::analyze_program(ast)?;
+    let prelude = parse_program(include_str!("prelude.lt"))
+        .map_err(|error| format!("prelude parse error: {error}"))?;
+    let mut program = lento::ast::Program {
+        statements: prelude.statements,
+        spans: prelude.spans,
+    };
+    program.statements.extend(ast.statements.iter().cloned());
+    program.spans.extend(ast.spans.iter().copied());
+    let analysis = lento::analysis::analyze_program(&program)?;
     let lowered = lento::semantics::lower_analyzed_program(&analysis.source, &analysis.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)?;
     if matches!(lowered.statements.last(), Some(lento::ast::Stmt::Expr(_)))
