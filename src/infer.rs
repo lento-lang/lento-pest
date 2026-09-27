@@ -43,6 +43,8 @@ pub enum TypeErrorKind {
     BadOperator { op: String, ty: MonoType },
     /// A record field access on a non-record (or unknown-field) type.
     BadMember { ty: MonoType, field: String },
+    NoOverload { name: String, arguments: Vec<MonoType> },
+    AmbiguousOverload { name: String, arguments: Vec<MonoType> },
 }
 
 impl fmt::Display for TypeError {
@@ -58,6 +60,12 @@ impl fmt::Display for TypeError {
             }
             TypeErrorKind::BadMember { ty, field } => {
                 write!(f, "type {ty:?} has no field `{field}`")
+            }
+            TypeErrorKind::NoOverload { name, arguments } => {
+                write!(f, "no overload of `{name}` accepts arguments {arguments:?}")
+            }
+            TypeErrorKind::AmbiguousOverload { name, arguments } => {
+                write!(f, "ambiguous overload of `{name}` for arguments {arguments:?}")
             }
         }
     }
@@ -134,6 +142,8 @@ pub struct InferCtx {
     /// type arguments concrete.
     pub pending_constraints: Vec<SchemeConstraint>,
     pub type_declarations: BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
+    /// Inferred alternatives for names with more than one specialization.
+    pub overload_schemes: BTreeMap<String, Vec<TypeScheme>>,
 }
 
 impl InferCtx {
@@ -144,6 +154,7 @@ impl InferCtx {
             constraints: Vec::new(),
             pending_constraints: Vec::new(),
             type_declarations: BTreeMap::new(),
+            overload_schemes: BTreeMap::new(),
         }
     }
 
@@ -610,6 +621,101 @@ fn infer_list_element_type(ctx: &mut InferCtx, types: &[MonoType]) -> Result<Mon
     })
 }
 
+/// Gather a curried application before choosing an overload. The first
+/// argument alone rarely distinguishes `map`; the ADT arrives later.
+fn applied_call<'a>(expr: &'a Expr, arguments: &mut Vec<&'a Expr>) -> Option<&'a str> {
+    match expr {
+        Expr::Var(var) => Some(&var.name),
+        Expr::Call(call) => {
+            let name = applied_call(&call.callee, arguments)?;
+            arguments.extend(call.args.iter());
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+fn infer_overloaded_call(
+    ctx: &mut InferCtx,
+    expr: &Expr,
+    env: &TypeEnv,
+) -> Result<Option<crate::semantics::TypedExpr>, TypeError> {
+    use crate::semantics::{TypedExpr, TypedExprKind};
+
+    let mut source_arguments = Vec::new();
+    let Some(name) = applied_call(expr, &mut source_arguments) else {
+        return Ok(None);
+    };
+    let Some(schemes) = ctx.overload_schemes.get(name).cloned() else {
+        return Ok(None);
+    };
+    let arity = |scheme: &TypeScheme| {
+        let mut count = 0;
+        let mut ty = &scheme.body;
+        while let MonoType::Function(_, result) = ty {
+            count += 1;
+            ty = result;
+        }
+        count
+    };
+    if !schemes.iter().any(|scheme| arity(scheme) == source_arguments.len()) {
+        return Ok(None); // Partial applications retain their function type.
+    }
+
+    let mut arguments = Vec::with_capacity(source_arguments.len());
+    for argument in source_arguments {
+        arguments.push(infer_typed_expr(ctx, argument, &mut env.clone())?);
+    }
+    let mut candidates = Vec::new();
+    for scheme in schemes.iter().filter(|scheme| arity(scheme) == arguments.len()) {
+        let mut supply = ctx.supply.clone();
+        let (signature, constraints) = instantiate(&mut supply, scheme);
+        let mut substitution = ctx.subst.clone();
+        let mut result = signature.clone();
+        let mut valid = true;
+        for argument in &arguments {
+            let MonoType::Function(parameter, output) = result else {
+                valid = false;
+                break;
+            };
+            if unify(&mut substitution, &parameter, &argument.ty).is_err() {
+                valid = false;
+                break;
+            }
+            result = *output;
+        }
+        if valid {
+            candidates.push((supply, substitution, signature, result, constraints));
+        }
+    }
+
+    let argument_types = arguments.iter().map(|arg| ctx.resolve(&arg.ty)).collect();
+    let (supply, substitution, signature, result, constraints) = match candidates.len() {
+        0 => return Err(TypeError { kind: TypeErrorKind::NoOverload {
+            name: name.to_string(), arguments: argument_types,
+        } }),
+        1 => candidates.pop().unwrap(),
+        _ => return Err(TypeError { kind: TypeErrorKind::AmbiguousOverload {
+            name: name.to_string(), arguments: argument_types,
+        } }),
+    };
+    ctx.supply = supply;
+    ctx.subst = substitution;
+    ctx.constraints.extend(constraints.clone());
+    ctx.pending_constraints.extend(constraints);
+    Ok(Some(TypedExpr {
+        ty: ctx.resolve(&result),
+        kind: TypedExprKind::Call {
+            callee: Box::new(TypedExpr {
+                ty: ctx.resolve(&signature),
+                kind: TypedExprKind::Var(name.to_string()),
+            }),
+            args: arguments,
+            specialization: None,
+        },
+    }))
+}
+
 pub fn infer_typed_expr(
     ctx: &mut InferCtx,
     expr: &Expr,
@@ -670,6 +776,9 @@ pub fn infer_typed_expr(
             })
         }
         Expr::Call(c) => {
+            if let Some(overloaded) = infer_overloaded_call(ctx, expr, env)? {
+                return Ok(overloaded);
+            }
             let callee = infer_typed_expr(ctx, &c.callee, env)?;
             let mut result = callee.ty.clone();
             let mut args = Vec::with_capacity(c.args.len());
