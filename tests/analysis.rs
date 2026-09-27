@@ -125,6 +125,14 @@ fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline()
 }
 
 #[test]
+fn prelude_map_rejects_unrelated_argument_types() {
+    let source = format!("{}\nmap (x => x) 42\n", include_str!("../src/prelude.lt"));
+    let program = parse_program(&source).expect("program should parse");
+    let error = analyze_program(&program).expect_err("map needs an Option or Result");
+    assert!(error.contains("no overload of `map`"), "{error}");
+}
+
+#[test]
 fn implementation_type_variables_require_impl_quantifiers() {
     let error = analyze("class Seq a { spec reverse : a -> a }\nimpl Seq [a] { fn reverse xs = xs }\n")
         .expect_err("unbound implementation type variable should fail");
