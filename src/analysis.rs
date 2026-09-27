@@ -164,6 +164,12 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         if let Some(first) = set.specializations.first() {
             env.insert(group.name.clone(), first.scheme.clone());
         }
+        if set.specializations.len() > 1 {
+            ctx.overload_schemes.insert(
+                group.name.clone(),
+                set.specializations.iter().map(|candidate| candidate.scheme.clone()).collect(),
+            );
+        }
         overloads.push(set);
     }
 
