@@ -674,7 +674,8 @@ fn type_constructor_application_uses_curried_syntax() {
 #[test]
 fn class_implementation_checks_method_result_and_arity() {
     let source = "class Show a { spec show : a -> str }\nimpl Show int { fn show x = 1 }\n";
-    assert!(analyze(source).unwrap_err().contains("does not match class"));
+    let error = analyze(source).unwrap_err();
+    assert!(error.contains("does not match class"), "{error}");
     let source = "class Show a { spec show : a -> str }\nimpl Show int { fn show x y = \"wrong arity\" }\n";
     assert!(analyze(source).unwrap_err().contains("does not match class"));
     let source = "class Seq a { spec reverse : a -> a }\nimpl all a. Seq [a] { fn reverse xs = [1] }\n";
