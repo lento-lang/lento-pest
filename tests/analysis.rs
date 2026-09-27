@@ -1,4 +1,5 @@
 use lento::analysis::analyze_program;
+use lento::ast::{Decl, Stmt, Ty};
 use lento::parser::parse_program;
 
 fn analyze(source: &str) -> Result<(), String> {
@@ -95,8 +96,8 @@ fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline()
          assert (is_none (map (x => x + 1) None))\n\
          assert (is_ok (Ok 3))\n\
          assert (is_err (Err \"bad\"))\n\
-         let success : Result<int, str> = Ok 3\n\
-         let failure : Result<int, str> = Err \"bad\"\n\
+         let success : Result int str = Ok 3\n\
+         let failure : Result int str = Err \"bad\"\n\
          assert (is_ok success)\n\
          assert (is_err failure)\n\
          assert (map (x => x + 1) (Ok 2) == Ok 3)\n\
@@ -653,4 +654,76 @@ fn canonical_pipeline_rejects_missing_class_instance() {
     )
     .expect_err("missing class instance should fail");
     assert!(error.contains("no instance"), "{error}");
+}
+
+#[test]
+fn type_constructor_application_uses_curried_syntax() {
+    let source = "type Result a e = Ok a | Err e\n                    spec check : all a, e. Result a e -> bool\n                    fn check value = match value { Ok _ => true, Err _ => false }\n                    check (Ok 1)";
+    analyze(source).expect("curried type constructor application should analyze");
+    assert!(parse_program("type Result a e = Ok a | Err e\n                        let value : Result<int, str> = Ok 1").is_err(),
+        "angle bracket type application must be rejected");
+}
+
+#[test]
+fn nested_type_application_requires_parentheses() {
+    // Regression: application arguments must be non-applying atoms. A bare
+    // `type_atom` argument used to greedily absorb trailing identifiers, so
+    // `Pair Result a e bool` would have parsed as `Pair (Result (a e)) bool`.
+    let program = parse_program(
+        "type Result a e = Ok a | Err e\n         spec check : all a, e. Pair (Result a e) bool -> bool\n",
+    )
+    .expect("nested curried application should parse");
+    let program = parse_program(
+        "type Result a e = Ok a | Err e\n         spec check : all a, e. Pair (Result a e) bool -> bool\n",
+    )
+    .expect("nested curried application should parse");
+    let spec = program
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Decl(Decl::Spec(spec)) if spec.name == "check" => Some(spec),
+            _ => None,
+        })
+        .expect("spec should parse");
+    let Ty::Arrow { from, .. } = &spec.ty.ty else {
+        panic!("expected an arrow type");
+    };
+    let Ty::Named { name, args } = &**from else {
+        panic!("expected a named type application: {:#?}", spec.ty.ty);
+    };
+    assert_eq!(name, "Pair");
+    assert_eq!(args.len(), 2, "Pair takes exactly two arguments");
+    let Ty::Named { name, args } = &args[0] else {
+        panic!("Pair's first argument should be a named type application");
+    };
+    assert_eq!(name, "Result");
+    assert_eq!(args.len(), 2, "Result binds the two quantified variables");
+    // The unparenthesized form must not silently bind four arguments.
+    let program = parse_program(
+        "type Result a e = Ok a | Err e\n         spec check : all a, e. Pair Result a e bool -> bool\n",
+    )
+    .expect("unparenthesized form still parses");
+    let spec = program
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Decl(Decl::Spec(spec)) if spec.name == "check" => Some(spec),
+            _ => None,
+        })
+        .expect("spec should parse");
+    let Ty::Arrow { from: applied, .. } = &spec.ty.ty else {
+        panic!("expected an arrow type");
+    };
+    let Ty::Named { name, args } = &**applied else {
+        panic!("expected a named type application: {:#?}", spec.ty.ty);
+    };
+    assert_eq!(name, "Pair");
+    // Without parentheses every trailing identifier becomes its own
+    // argument: `Pair Result a e bool` is Pair applied to four arguments,
+    // never `Pair (Result (a e)) bool`.
+    assert_eq!(args.len(), 4, "identifiers bind as flat arguments");
+    let Ty::Named { name: _, args } = &args[1] else {
+        panic!("expected a named argument");
+    };
+    assert_eq!(args.len(), 0, "arguments never absorb further identifiers");
 }

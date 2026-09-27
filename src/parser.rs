@@ -904,6 +904,8 @@ fn type_(pair: Pair<'_, Rule>) -> Ty {
         Rule::type_base => type_base(pair),
         Rule::named_binder => named_binder(pair),
         Rule::variant_type => variant_type(pair),
+        Rule::ty_app_arg => type_(pair.into_inner().next().unwrap()),
+        Rule::identifier => Ty::Named { name: pair.as_str().to_string(), args: Vec::new() },
         other => panic!("unexpected type rule: {other:?}"),
     }
 }

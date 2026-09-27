@@ -118,7 +118,20 @@ type_base    = {
     | "[" ~ type_atom ~ "]"
     | ty_record
 }
-ty_app_args  = { type_atom+ }
+// Application arguments are non-applying atoms: a bare identifier, a
+// parenthesized type, a list type, or a record. `Result a e` therefore
+// applies `Result` to `a` and `e`; a nested application needs parentheses
+// (`Pair (Option int) bool`). Without this restriction a trailing
+// identifier would be absorbed as the previous argument's own arguments
+// (`Result a e` would parse as `Result (a e)`).
+ty_app_args  = { ty_app_arg+ }
+ty_app_arg   = {
+      identifier
+    | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
+    | "[" ~ type_atom ~ "]"
+    | list_union
+    | ty_record
+}
 list_union    = {
     "[" ~ NEWLINE* ~ type_atom
         ~ (NEWLINE* ~ "|" ~ NEWLINE* ~ type_atom)+
