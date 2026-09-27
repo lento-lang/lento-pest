@@ -1103,7 +1103,7 @@ fn coerce_value_to_type(value: Value, ty: &Ty) -> Result<Value, String> {
 }
 
 /// Like `value_matches_ty` but substitutes type parameters by position, so a
-/// declared `type Pair a = { fst: a, snd: a }` can be tested as `Pair<int>`.
+/// declared `type Pair a = { fst: a, snd: a }` can be tested as `Pair int`.
 fn value_matches_ty_open(ty: &Ty, value: &Value, params: &[String], args: &[Ty], env: &Env) -> bool {
     if let Ty::Named { name, .. } = ty {
         if let Some(i) = params.iter().position(|p| p == name) {

@@ -15,7 +15,7 @@ All found by review; regression coverage lives in `tests/analysis.rs`,
   (`x = "hello"` after `let mut x = 5` checked clean). Mutable lets are
   monomorphic, so the value is now unified with the binding's current type.
 - Parameterized type synonyms silently dropped their type arguments
-  (`Wrapper<int>` ≡ `Wrapper<str>`). Arguments now bind to the synonym's
+  (`Wrapper int` ≡ `Wrapper str`). Arguments now bind to the synonym's
   parameters, mirroring `ctor_instance` for sums.
 - Let annotations now unify before pending class constraints are solved;
   concrete unsatisfied constraints are rejected.

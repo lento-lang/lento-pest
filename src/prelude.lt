@@ -23,20 +23,20 @@ spec map : all a, b. (a -> b) -> Option a -> Option b
 fn map transform (Some value) = Some (transform value)
 fn map _ None = None
 
-spec is_ok : all a, e. Result<a, e> -> bool
+spec is_ok : all a, e. Result a e -> bool
 fn is_ok result = match result { Ok _ => true, Err _ => false }
 
-spec is_err : all a, e. Result<a, e> -> bool
+spec is_err : all a, e. Result a e -> bool
 fn is_err result = match result { Ok _ => false, Err _ => true }
 
-spec map : all a, b, e. (a -> b) -> Result<a, e> -> Result<b, e>
+spec map : all a, b, e. (a -> b) -> Result a e -> Result b e
 fn map transform (Ok value) = Ok (transform value)
 fn map _ (Err error) = Err error
 
-spec map_err : all a, e, f. (e -> f) -> Result<a, e> -> Result<a, f>
+spec map_err : all a, e, f. (e -> f) -> Result a e -> Result a f
 fn map_err transform result = match result { Ok value => Ok value, Err error => Err (transform error) }
 
-spec and_then : all a, b, e. (a -> Result<b, e>) -> Result<a, e> -> Result<b, e>
+spec and_then : all a, b, e. (a -> Result b e) -> Result a e -> Result b e
 fn and_then transform result = match result { Ok value => transform value, Err error => Err error }
 
 class Num a {

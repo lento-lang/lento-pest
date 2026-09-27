@@ -204,7 +204,7 @@ Type syntax includes:
 
 ```text
 int
-list_name<a, b>
+list_name a b
 [a]
 ()
 a -> b
