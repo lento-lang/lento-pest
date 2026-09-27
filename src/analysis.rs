@@ -156,7 +156,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         }
 
         associate_specs(&mut ctx.supply, group, &set)
-            .map_err(|error| format!("specification failed for '{}': {error}; inferred: {:?}", group.name, set.specializations.iter().map(|s| &s.scheme).collect::<Vec<_>>()))?;
+            .map_err(|error| format!("specification failed for '{}': {error}", group.name))?;
 
         // The inferred specialization is now the canonical environment entry
         // for subsequent groups. Calls already being inferred can still use
