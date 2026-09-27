@@ -674,7 +674,7 @@ fn infer_overloaded_call(
         let mut result = signature.clone();
         let mut valid = true;
         for argument in &arguments {
-            let MonoType::Function(parameter, output) = result else {
+            let MonoType::Function(parameter, output) = result.clone() else {
                 valid = false;
                 break;
             };
