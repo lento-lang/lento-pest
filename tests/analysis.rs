@@ -95,6 +95,10 @@ fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline()
          assert (is_none (map (x => x + 1) None))\n\
          assert (is_ok (Ok 3))\n\
          assert (is_err (Err \"bad\"))\n\
+         let success : Result<int, str> = Ok 3\n\
+         let failure : Result<int, str> = Err \"bad\"\n\
+         assert (is_ok success)\n\
+         assert (is_err failure)\n\
          assert (map (x => x + 1) (Ok 2) == Ok 3)\n\
          assert (is_err (map (x => x + 1) (Err \"bad\")))\n\
          assert (map_err (s => concat s \"!\") (Err \"bad\") == Err \"bad!\")\n\
