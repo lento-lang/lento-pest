@@ -134,3 +134,21 @@ fn nested_type_arguments_round_trip_with_parentheses() {
     let printed_again = format_program(&reparsed);
     assert_eq!(printed, printed_again, "type application printing must be stable");
 }
+
+#[test]
+fn multi_argument_ctor_payloads_round_trip() {
+    let source = "type Foo = Ok a b | None\n         ";
+    let printed = format_program(&parse_program(source).expect("should parse"));
+    assert!(printed.contains("Ok a b"), "{printed}");
+    let reparsed = parse_program(&printed).expect("multi-arg payload should reparse");
+    let printed_again = format_program(&reparsed);
+    assert!(printed_again.contains("Ok a b"), "{printed_again}");
+}
+
+#[test]
+fn named_binder_arguments_round_trip_parenthesized() {
+    let source = "type Pair a b = Mk a b\n         spec check : (value : Pair int bool) -> bool\n";
+    let printed = format_program(&parse_program(source).expect("should parse"));
+    let reparsed = parse_program(&printed).expect("printed named binder should reparse");
+    assert_eq!(printed, format_program(&reparsed), "named binder printing must be stable");
+}

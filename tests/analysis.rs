@@ -764,4 +764,8 @@ fn curried_arguments_accept_all_atom_kinds() {
         .expect("a record argument should parse");
     analyze("spec k : Box (ref int) -> unit\n                fn k _ = ()")
         .expect("a ref-headed argument should parse");
+    analyze("type Boxed a = Mk a\n                spec k : Boxed ref int -> unit\n                fn k _ = ()")
+        .expect("a bare ref argument should parse");
+    analyze("type Map k v = Mk k v\n                spec m : Map mut int bool -> unit\n                fn m _ = ()")
+        .expect("a bare mut argument should parse");
 }

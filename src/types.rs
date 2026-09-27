@@ -1080,9 +1080,14 @@ fn absorb_missing_fields(
                         .iter()
                         .find(|(bound_name, _)| bound_name == name)
                         .is_some_and(|(_, bound)| {
+                            // The pinned row image must satisfy the new
+                            // demand: image ⊇ required (sum width, record
+                            // fields). Direction matters — the inverse would
+                            // accept contradictions like `y : [int|str]`
+                            // pinned while `y : [int|str|bool]` is demanded.
                             matches(
-                                required,
                                 bound,
+                                required,
                                 &BTreeSet::new(),
                                 &mut Substitution::new(),
                                 false,

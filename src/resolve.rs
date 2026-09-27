@@ -141,19 +141,8 @@ pub fn resolve_call_checked(
             ));
             continue;
         }
-        let (params, result) = match peel(&body, n) {
-            Some(x) => x,
-            None => {
-                rejections.push((
-                    spec.id,
-                    RejectionReason::Arity {
-                        expected: arity(&body),
-                        got: n,
-                    },
-                ));
-                continue;
-            }
-        };
+        // The exact-arity gate guarantees `peel` succeeds.
+        let (params, result) = peel(&body, n).expect("arity gate guarantees peel");
 
         // 3b. Unify supplied arguments with the candidate's domain.
         let mut subst = Substitution::new();

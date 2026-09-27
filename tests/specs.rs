@@ -121,9 +121,12 @@ fn shared_open_row_must_absorb_consistently() {
     // accept a contradictory shape in the other.
     let contradictory = associate_err(
         "spec f : { x: int, y: int } -> { x: int, y: int, z: int }\n\
-         fn f value = value");
-    assert!(matches!(contradictory, SpecErrorKind::UnsatisfiedSpec { .. }),
-        "expected the contradictory row shape to be rejected, got {contradictory:?}");
+         fn f value = value",
+    );
+    assert!(
+        matches!(contradictory, SpecErrorKind::UnsatisfiedSpec { .. }),
+        "expected the contradictory row shape to be rejected, got {contradictory:?}"
+    );
 }
 
 #[test]
@@ -132,7 +135,62 @@ fn open_row_binding_respects_spec_field_types() {
     // side then demands y : str, which the bound row cannot provide.
     let contradictory = associate_err(
         "spec f : { x: int, y: int } -> { x: str, y: bool }\n\
-         fn f value = { y: false }");
-    assert!(matches!(contradictory, SpecErrorKind::UnsatisfiedSpec { .. }),
-        "expected the type-contradictory ride to be rejected, got {contradictory:?}");
+         fn f value = { y: false }",
+    );
+    assert!(
+        matches!(contradictory, SpecErrorKind::UnsatisfiedSpec { .. }),
+        "expected the type-contradictory ride to be rejected, got {contradictory:?}"
+    );
+}
+
+#[test]
+fn open_row_ride_rejects_spec_demanding_unknown_field() {
+    // The implementation only reads `x`; the spec's result demands `z`,
+    // which the row pinned on the parameter side cannot supply. This is the
+    // headline case the absorb binding fixes (accepted before it).
+    let rejected = associate_err(
+        "spec f : { x: int, y: int } -> { x: int, y: int, z: int }\n\
+         fn f { x, ...rest } = { x: x, ...rest }",
+    );
+    assert!(
+        matches!(rejected, SpecErrorKind::UnsatisfiedSpec { .. }),
+        "expected the unknown-field demand to be rejected, got {rejected:?}"
+    );
+}
+
+#[test]
+fn open_row_ride_accepts_consistent_shape() {
+    // The spec's extra field `y` rides the row in both positions with the
+    // same shape, so the single binding satisfies both demands.
+    let assoc = associate(
+        "spec f : { x: int, y: int } -> { x: int, y: int }\n\
+         fn f { x, ...rest } = { x: x, ...rest }",
+    );
+    assert!(assoc.unsatisfied.is_empty(), "{:?}", assoc.unsatisfied);
+}
+
+#[test]
+fn open_row_binding_rejects_wider_result_demand() {
+    // The row is pinned to `y : [int | str]` on the parameter side; the
+    // result demands `y : [int | str | bool]`, which the image cannot
+    // provide. The pinned image must satisfy the demand, not the reverse.
+    let rejected = associate_err(
+        "spec f : { x: int, y: [int | str] } -> { x: int, y: [int | str | bool] }\n\
+         fn f { x, ...rest } = { x: x, ...rest }",
+    );
+    assert!(
+        matches!(rejected, SpecErrorKind::UnsatisfiedSpec { .. }),
+        "expected the wider result demand to be rejected, got {rejected:?}"
+    );
+}
+
+#[test]
+fn open_row_binding_accepts_narrower_result_demand() {
+    // Reverse of the previous case: the image pinned on the parameter side
+    // is wider than the result demand, so it satisfies it.
+    let assoc = associate(
+        "spec f : { x: int, y: [int | str | bool] } -> { x: int, y: [int | str] }\n\
+         fn f { x, ...rest } = { x: x, ...rest }",
+    );
+    assert!(assoc.unsatisfied.is_empty(), "{:?}", assoc.unsatisfied);
 }
