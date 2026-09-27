@@ -42,7 +42,9 @@ fn block_scope_clones_env_but_shares_cells() {
 
 #[test]
 fn multi_statement_block_returns_final_expression() {
-    let value = eval("let result = {\n    let base = 1\n    let bump = 2\n    base + bump\n}\nresult\n").unwrap();
+    let value =
+        eval("let result = {\n    let base = 1\n    let bump = 2\n    base + bump\n}\nresult\n")
+            .unwrap();
     assert_int(value, 3);
 }
 
@@ -67,18 +69,25 @@ fn immutable_let_is_stored_inline() {
 #[test]
 fn mutable_let_is_stored_in_shared_cell() {
     let (_, env) = eval_with_env("let mut x = 1\n").unwrap();
-    assert!(matches!(env.get("x"), Some(Binding::Cell { mutable: true, .. })));
+    assert!(matches!(
+        env.get("x"),
+        Some(Binding::Cell { mutable: true, .. })
+    ));
 }
 
 #[test]
 fn recursive_function_binding_uses_immutable_cell() {
     let (_, env) = eval_with_env("fn id x = x\n").unwrap();
-    assert!(matches!(env.get("id"), Some(Binding::Cell { mutable: false, .. })));
+    assert!(matches!(
+        env.get("id"),
+        Some(Binding::Cell { mutable: false, .. })
+    ));
 }
 
 #[test]
 fn grouped_function_clauses_evaluate_via_match() {
-    let value = eval("fn factorial 0 = 1\nfn factorial n = n * factorial (n - 1)\nfactorial 5\n").unwrap();
+    let value =
+        eval("fn factorial 0 = 1\nfn factorial n = n * factorial (n - 1)\nfactorial 5\n").unwrap();
     assert_int(value, 120);
 }
 
@@ -91,9 +100,11 @@ fn list_spread_patterns_work_in_match_and_functions() {
     match value {
         Value::Tuple(items) => {
             assert!(matches!(&items[0], Value::Int(3)));
-            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Tuple(a), Value::Tuple(b)]
+            assert!(
+                matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Tuple(a), Value::Tuple(b)]
                 if matches!(a.as_slice(), [Value::Int(1), Value::Int(3)])
-                && matches!(b.as_slice(), [Value::Int(2), Value::Int(4)]))));
+                && matches!(b.as_slice(), [Value::Int(2), Value::Int(4)])))
+            );
         }
         other => panic!("expected tuple, got {other:?}"),
     }
@@ -144,7 +155,11 @@ fn fn_block_syntax_evaluates_and_pretty_prints_in_block_form() {
             ("y".to_string(), Value::Int(9)),
         ]))),
     );
-    let value = eval_in_existing_env("fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\npick_x rec\n", &mut env).unwrap();
+    let value = eval_in_existing_env(
+        "fn pick_x {x: x, ...rest} {\n    (x, rest)\n}\npick_x rec\n",
+        &mut env,
+    )
+    .unwrap();
     match value {
         Value::Tuple(items) => {
             assert!(matches!(&items[0], Value::Int(7)));
@@ -189,7 +204,9 @@ fn ref_on_inline_immutable_binding_fails() {
 
 #[test]
 fn len_intrinsic_works_on_list_tuple_and_string() {
-    let value = eval("let xs = [1, 2, 3]\nlet pair = (1, 2)\nlet s = \"abc\"\n(len xs, len pair, len s)\n").unwrap();
+    let value =
+        eval("let xs = [1, 2, 3]\nlet pair = (1, 2)\nlet s = \"abc\"\n(len xs, len pair, len s)\n")
+            .unwrap();
     match value {
         Value::Tuple(items) => {
             assert_eq!(items.len(), 3);
@@ -244,7 +261,9 @@ fn list_intrinsics_work() {
     match value {
         Value::Tuple(items) => {
             assert_eq!(items.len(), 5);
-            assert!(matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])));
+            assert!(
+                matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]))
+            );
             assert!(matches!(&items[1], Value::Int(3)));
             assert!(matches!(&items[2], Value::List(v) if matches!(v.as_slice(), [Value::Int(2)])));
             assert!(matches!(&items[3], Value::Bool(true)));
@@ -257,7 +276,9 @@ fn list_intrinsics_work() {
 #[test]
 fn concat_is_curried() {
     let value = eval("let join = concat [1, 2]\njoin [3, 4]\n").unwrap();
-    assert!(matches!(value, Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)])));
+    assert!(
+        matches!(value, Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2), Value::Int(3), Value::Int(4)]))
+    );
 }
 
 #[test]
@@ -322,10 +343,18 @@ fn take_drop_reverse_and_slice_work() {
     .unwrap();
     match value {
         Value::Tuple(items) => {
-            assert!(matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2)])));
-            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Int(3), Value::Int(4)])));
-            assert!(matches!(&items[2], Value::List(v) if matches!(v.as_slice(), [Value::Int(4), Value::Int(3), Value::Int(2), Value::Int(1)])));
-            assert!(matches!(&items[3], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(3)])));
+            assert!(
+                matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(1), Value::Int(2)]))
+            );
+            assert!(
+                matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Int(3), Value::Int(4)]))
+            );
+            assert!(
+                matches!(&items[2], Value::List(v) if matches!(v.as_slice(), [Value::Int(4), Value::Int(3), Value::Int(2), Value::Int(1)]))
+            );
+            assert!(
+                matches!(&items[3], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(3)]))
+            );
             assert!(matches!(&items[4], Value::Str(v) if v == "ab"));
             assert!(matches!(&items[5], Value::Str(v) if v == "cd"));
             assert!(matches!(&items[6], Value::Str(v) if v == "dcba"));
@@ -344,7 +373,9 @@ fn join_and_split_work() {
     match value {
         Value::Tuple(items) => {
             assert!(matches!(&items[0], Value::Str(v) if v == "a-b-c"));
-            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Str(a), Value::Str(b), Value::Str(c)] if a == "a" && b == "b" && c == "c")));
+            assert!(
+                matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Str(a), Value::Str(b), Value::Str(c)] if a == "a" && b == "b" && c == "c"))
+            );
         }
         other => panic!("expected tuple, got {other:?}"),
     }
@@ -370,8 +401,12 @@ fn higher_order_list_intrinsics_work() {
     .unwrap();
     match value {
         Value::Tuple(items) => {
-            assert!(matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8), Value::Int(10)])));
-            assert!(matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(4)])));
+            assert!(
+                matches!(&items[0], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(4), Value::Int(6), Value::Int(8), Value::Int(10)]))
+            );
+            assert!(
+                matches!(&items[1], Value::List(v) if matches!(v.as_slice(), [Value::Int(2), Value::Int(4)]))
+            );
             assert!(matches!(&items[2], Value::Int(15)));
             assert!(matches!(&items[3], Value::Bool(true)));
             assert!(matches!(&items[4], Value::Bool(true)));
@@ -383,7 +418,9 @@ fn higher_order_list_intrinsics_work() {
 #[test]
 fn range_descends_when_start_is_greater() {
     let value = eval("range 5 2\n").unwrap();
-    assert!(matches!(value, Value::List(v) if matches!(v.as_slice(), [Value::Int(5), Value::Int(4), Value::Int(3)])));
+    assert!(
+        matches!(value, Value::List(v) if matches!(v.as_slice(), [Value::Int(5), Value::Int(4), Value::Int(3)]))
+    );
 }
 
 #[test]

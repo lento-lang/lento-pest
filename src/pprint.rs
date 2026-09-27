@@ -379,7 +379,7 @@ fn render_pat_atom(out: &mut String, atom: &str, annotation: Option<&Ty>) {
 /// grouping that the left-fold parser loses.
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 enum Prec {
-    Top,   // statement / argument context: lowest, allows any infix
+    Top, // statement / argument context: lowest, allows any infix
     Or,
     And,
     Cmp,
@@ -392,12 +392,9 @@ fn binary_prec(op: &BinaryOp) -> Prec {
     match op {
         BinaryOp::Or => Prec::Or,
         BinaryOp::And => Prec::And,
-        BinaryOp::Eq
-        | BinaryOp::Ne
-        | BinaryOp::Lt
-        | BinaryOp::Gt
-        | BinaryOp::Le
-        | BinaryOp::Ge => Prec::Cmp,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
+            Prec::Cmp
+        }
         BinaryOp::Add | BinaryOp::Sub => Prec::Add,
         BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => Prec::Mul,
     }

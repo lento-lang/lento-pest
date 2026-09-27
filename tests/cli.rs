@@ -10,7 +10,11 @@ fn prelude_flag_loads_class_declarations() {
         .output()
         .unwrap();
     std::fs::remove_file(&path).unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "Less");
 }
 
@@ -23,6 +27,10 @@ fn function_parameter_assignment_uses_the_lambda_cell() {
         .output()
         .unwrap();
     std::fs::remove_file(&path).unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
 }

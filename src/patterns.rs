@@ -134,10 +134,9 @@ fn simplify(p: &Pattern) -> Pat {
             }
         }
         PatKind::Spread(_) => Pat::Wild, // `...rest` matches any suffix list
-        PatKind::Constructor { name, payload } => Pat::Constructor(
-            name.clone(),
-            payload.as_deref().map(simplify).map(Box::new),
-        ),
+        PatKind::Constructor { name, payload } => {
+            Pat::Constructor(name.clone(), payload.as_deref().map(simplify).map(Box::new))
+        }
         PatKind::Record { fields, .. } => Pat::Record(
             fields
                 .iter()
@@ -192,8 +191,9 @@ fn covers1(p: &Pat, q: &Pat) -> bool {
                     _ => false,
                 }
         }
-        (Pat::Constructor(name, None), Pat::Lit(literal))
-            if name.starts_with("@type:") => type_pattern_covers_literal(name, literal),
+        (Pat::Constructor(name, None), Pat::Lit(literal)) if name.starts_with("@type:") => {
+            type_pattern_covers_literal(name, literal)
+        }
         (Pat::Constructor(..), Pat::Wild) => false,
         // List coverage: exact-length vs exact-length, and or-more handling.
         (Pat::List(n, a), Pat::List(m, b)) => {
@@ -246,14 +246,22 @@ pub fn analyze_typed_match(
     scrutinee: &crate::types::MonoType,
     arms: &[crate::semantics::TypedMatchArm],
 ) -> Vec<PatternDiagnostic> {
-    let rows = arms.iter().filter(|arm| arm.guard.is_none())
-        .map(|arm| vec![simplify(&arm.pattern)]).collect::<Vec<_>>();
+    let rows = arms
+        .iter()
+        .filter(|arm| arm.guard.is_none())
+        .map(|arm| vec![simplify(&arm.pattern)])
+        .collect::<Vec<_>>();
     let domain = match scrutinee {
-        crate::types::MonoType::Sum { alts, .. } => alts.iter().filter_map(|alt| match alt {
-            crate::types::MonoSumAlt::Constructor { name, payload } => Some(Pat::Constructor(
-                name.clone(), payload.as_ref().map(|_| Box::new(Pat::Wild)))),
-            _ => None,
-        }).collect(),
+        crate::types::MonoType::Sum { alts, .. } => alts
+            .iter()
+            .filter_map(|alt| match alt {
+                crate::types::MonoSumAlt::Constructor { name, payload } => Some(Pat::Constructor(
+                    name.clone(),
+                    payload.as_ref().map(|_| Box::new(Pat::Wild)),
+                )),
+                _ => None,
+            })
+            .collect(),
         _ => Vec::new(),
     };
     analyze_rows(&rows, &[domain])
@@ -279,14 +287,13 @@ fn analyze_rows(rows: &[Vec<Pat>], domain: &[Vec<Pat>]) -> Vec<PatternDiagnostic
         }
         // Unreachable: some earlier row covers every value this row matches.
         // (Weaker than duplication: earlier is at least as general.)
-        if !diagnostics.iter().any(|d| matches!(
-            d.kind,
-            DiagnosticKind::DuplicateClause { index, .. } if index == i
-        )) {
-            let covered = rows
-                .iter()
-                .take(i)
-                .any(|earlier| covers(earlier, row));
+        if !diagnostics.iter().any(|d| {
+            matches!(
+                d.kind,
+                DiagnosticKind::DuplicateClause { index, .. } if index == i
+            )
+        }) {
+            let covered = rows.iter().take(i).any(|earlier| covers(earlier, row));
             if covered {
                 diagnostics.push(PatternDiagnostic {
                     severity: Severity::Warning,
@@ -322,7 +329,10 @@ fn uncovered_witnesses(rows: &[Vec<Pat>], domain: &[Vec<Pat>]) -> Vec<String> {
     }
     let arity = rows[0].len();
     // An unguarded all-wildcard row is a catch-all: exhaustive.
-    if rows.iter().any(|r| r.iter().all(|p| matches!(p, Pat::Wild))) {
+    if rows
+        .iter()
+        .any(|r| r.iter().all(|p| matches!(p, Pat::Wild)))
+    {
         return Vec::new();
     }
     // Search for one uncovered vector, then render it.
@@ -352,10 +362,7 @@ fn find_uncovered(rows: &[Vec<Pat>], arity: usize, domain: &[Vec<Pat>]) -> Optio
                 Pat::Constructor(name, payload) => {
                     cands.push(Pat::Constructor(name.clone(), payload.clone()));
                     if payload.is_some() {
-                        cands.push(Pat::Constructor(
-                            name.clone(),
-                            Some(Box::new(Pat::Wild)),
-                        ));
+                        cands.push(Pat::Constructor(name.clone(), Some(Box::new(Pat::Wild))));
                     }
                 }
                 Pat::Record(fields) => cands.push(Pat::Record(fields.clone())),

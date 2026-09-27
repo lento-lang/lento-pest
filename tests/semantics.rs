@@ -54,10 +54,7 @@ fn f 0 = 0
 
     // Non-function statements survive in source order outside the groups.
     assert_eq!(collected.statements.len(), 1);
-    assert!(matches!(
-        collected.statements[0],
-        Stmt::Decl(Decl::Type(_))
-    ));
+    assert!(matches!(collected.statements[0], Stmt::Decl(Decl::Type(_))));
 }
 
 #[test]

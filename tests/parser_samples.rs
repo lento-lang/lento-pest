@@ -12,10 +12,7 @@ fn samples_parse_check_and_evaluate() {
     let mut samples = Vec::new();
     collect_samples(Path::new("tests/samples"), &mut samples);
     samples.sort();
-    assert!(
-        !samples.is_empty(),
-        "no samples found under tests/samples/"
-    );
+    assert!(!samples.is_empty(), "no samples found under tests/samples/");
 
     let mut failed = Vec::new();
     for path in &samples {
@@ -54,10 +51,7 @@ fn collect_samples(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn run(source: &str) -> Result<(), String> {
-    let path = std::env::temp_dir().join(format!(
-        "lento-parser-sample-{}.lt",
-        std::process::id()
-    ));
+    let path = std::env::temp_dir().join(format!("lento-parser-sample-{}.lt", std::process::id()));
     std::fs::write(&path, source).map_err(|e| format!("write sample: {e}"))?;
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_lento_rust"))
         .arg(&path)

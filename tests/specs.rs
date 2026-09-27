@@ -41,7 +41,10 @@ fn general_implementation_satisfies_specific_spec() {
     // ∀a. a->a  satisfies  spec int -> int  (Instances(int->int) ⊆ Instances(∀a.a->a)).
     let assoc = associate("spec h: int -> int\nfn h x = x");
     assert_eq!(assoc.signatures.len(), 1);
-    assert!(matches!(assoc.signatures[0].origin, SignatureOrigin::SpecAssisted(_)));
+    assert!(matches!(
+        assoc.signatures[0].origin,
+        SignatureOrigin::SpecAssisted(_)
+    ));
     assert!(assoc.unsatisfied.is_empty());
 }
 
@@ -57,7 +60,10 @@ fn implementation_with_no_spec_gets_inferred_signature_not_obligation() {
     // No spec: valid, and the signature is Inferred (not a spec obligation).
     let assoc = associate("fn id x = x");
     assert_eq!(assoc.signatures.len(), 1);
-    assert!(matches!(assoc.signatures[0].origin, SignatureOrigin::Inferred));
+    assert!(matches!(
+        assoc.signatures[0].origin,
+        SignatureOrigin::Inferred
+    ));
     // The inferred signature is generalized (quantifies its variable).
     assert_eq!(assoc.signatures[0].scheme.quantified.len(), 1);
 }
@@ -66,7 +72,10 @@ fn implementation_with_no_spec_gets_inferred_signature_not_obligation() {
 fn declared_spec_signature_uses_spec_scheme() {
     let assoc = associate("spec id: all a. a -> a\nfn id x = x");
     assert_eq!(assoc.signatures.len(), 1);
-    assert!(matches!(assoc.signatures[0].origin, SignatureOrigin::SpecAssisted(_)));
+    assert!(matches!(
+        assoc.signatures[0].origin,
+        SignatureOrigin::SpecAssisted(_)
+    ));
 }
 
 #[test]
@@ -94,7 +103,10 @@ fn value_pattern_clauses_in_one_specialization_cover_spec() {
     // [] and cons clauses form ONE specialization covering [a] -> int.
     let assoc = associate("spec len2: all a. [a] -> int\nfn len2 [] = 0\nfn len2 [x, ...xs] = 1");
     assert_eq!(assoc.signatures.len(), 1);
-    assert!(matches!(assoc.signatures[0].origin, SignatureOrigin::SpecAssisted(_)));
+    assert!(matches!(
+        assoc.signatures[0].origin,
+        SignatureOrigin::SpecAssisted(_)
+    ));
 }
 
 #[test]

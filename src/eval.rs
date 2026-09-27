@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::ast::{
     BinaryOp, BlockExpr, Decl, Expr, FnDecl, LambdaExpr, LetDecl, Lit, MatchArm, MatchExpr,
-    PatKind, Pattern, Program, RecordValueExpr, Span, Stmt, SumAlt, Ty, TupleExpr, UnaryOp,
+    PatKind, Pattern, Program, RecordValueExpr, Span, Stmt, SumAlt, TupleExpr, Ty, UnaryOp,
     VarExpr,
 };
 use crate::intrinsics::{apply_intrinsic, install_intrinsics, Intrinsic};
@@ -16,12 +16,21 @@ pub type Env = HashMap<String, Binding>;
 #[derive(Debug, Clone)]
 pub enum Binding {
     Inline(Value),
-    Cell { value: CellRef, mutable: bool },
+    Cell {
+        value: CellRef,
+        mutable: bool,
+    },
     /// A nullary or unary constructor introduced by a `type ... = [Name t | ...]`
     /// declaration. `has_payload` distinguishes `Some` from `None`.
-    Constructor { tag: String, has_payload: bool },
+    Constructor {
+        tag: String,
+        has_payload: bool,
+    },
     /// A `type` declaration usable at runtime for typed-pattern checks.
-    TypeDef { params: Vec<String>, ty: Ty },
+    TypeDef {
+        params: Vec<String>,
+        ty: Ty,
+    },
     Methods(Vec<MethodBinding>),
 }
 
@@ -44,7 +53,10 @@ pub enum Value {
     Record(HashMap<String, Value>),
     /// A constructor-tagged sum value: `Some 5` -> tag "Some", payload `5`.
     /// Bare sum alternatives (`type X = int | str`) stay untagged.
-    Sum { tag: String, payload: Rc<Value> },
+    Sum {
+        tag: String,
+        payload: Rc<Value>,
+    },
     Closure(Rc<Closure>),
     Intrinsic(Intrinsic),
     Ref(CellRef),
@@ -182,7 +194,13 @@ fn prepare_runtime_program(program: &Program) -> Program {
     while index < program.statements.len() {
         let Stmt::Decl(Decl::Fn(first)) = &program.statements[index] else {
             statements.push(program.statements[index].clone());
-            spans.push(program.spans.get(index).copied().unwrap_or(Span { line: 0, col: 0 }));
+            spans.push(
+                program
+                    .spans
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Span { line: 0, col: 0 }),
+            );
             index += 1;
             continue;
         };
@@ -192,8 +210,12 @@ fn prepare_runtime_program(program: &Program) -> Program {
         let mut clauses = vec![(first.params.clone(), first.body.clone())];
         let mut end = index + 1;
         while end < program.statements.len() {
-            let Stmt::Decl(Decl::Fn(next)) = &program.statements[end] else { break };
-            if next.name != name || next.params.len() != arity { break; }
+            let Stmt::Decl(Decl::Fn(next)) = &program.statements[end] else {
+                break;
+            };
+            if next.name != name || next.params.len() != arity {
+                break;
+            }
             clauses.push((next.params.clone(), next.body.clone()));
             end += 1;
         }
@@ -203,12 +225,19 @@ fn prepare_runtime_program(program: &Program) -> Program {
                 params: clauses[0].0.clone(),
                 ret: first.ret.clone(),
                 body: clauses[0].1.clone(),
-            }.desugar()
+            }
+            .desugar()
         } else {
             grouped_runtime_fn(name, clauses)
         };
         statements.push(Stmt::Decl(Decl::Let(let_decl)));
-        spans.push(program.spans.get(index).copied().unwrap_or(Span { line: 0, col: 0 }));
+        spans.push(
+            program
+                .spans
+                .get(index)
+                .copied()
+                .unwrap_or(Span { line: 0, col: 0 }),
+        );
         index = end;
     }
     Program { statements, spans }
@@ -223,31 +252,51 @@ fn grouped_runtime_fn(name: String, clauses: Vec<(Vec<Pattern>, Expr)>) -> LetDe
         })
         .collect();
     let scrutinee = if arity == 1 {
-        Expr::Var(VarExpr { name: bind[0].clone() })
+        Expr::Var(VarExpr {
+            name: bind[0].clone(),
+        })
     } else {
         Expr::Tuple(TupleExpr {
-            items: bind.iter().map(|name| Expr::Var(VarExpr { name: name.clone() })).collect(),
+            items: bind
+                .iter()
+                .map(|name| Expr::Var(VarExpr { name: name.clone() }))
+                .collect(),
         })
     };
-    let arms = clauses.into_iter().map(|(params, body)| MatchArm {
-        pattern: if params.len() == 1 {
-            params.into_iter().next().unwrap()
-        } else {
-            Pattern { annotation: None, kind: PatKind::Tuple(params) }
-        },
-        guard: None,
-        body: Box::new(body),
-    }).collect();
-    let mut value = Expr::Match(MatchExpr { scrutinee: Box::new(scrutinee), arms });
+    let arms = clauses
+        .into_iter()
+        .map(|(params, body)| MatchArm {
+            pattern: if params.len() == 1 {
+                params.into_iter().next().unwrap()
+            } else {
+                Pattern {
+                    annotation: None,
+                    kind: PatKind::Tuple(params),
+                }
+            },
+            guard: None,
+            body: Box::new(body),
+        })
+        .collect();
+    let mut value = Expr::Match(MatchExpr {
+        scrutinee: Box::new(scrutinee),
+        arms,
+    });
     for name in bind.iter().rev() {
         value = Expr::Lambda(LambdaExpr {
-            params: vec![Pattern { annotation: None, kind: PatKind::Var(name.clone()) }],
+            params: vec![Pattern {
+                annotation: None,
+                kind: PatKind::Var(name.clone()),
+            }],
             body: Box::new(value),
         });
     }
     LetDecl {
         mutable: false,
-        pattern: Pattern { annotation: None, kind: PatKind::Var(name) },
+        pattern: Pattern {
+            annotation: None,
+            kind: PatKind::Var(name),
+        },
         annotation: None,
         value,
     }
@@ -680,13 +729,7 @@ fn eval_binary_values(op: &BinaryOp, left: Value, right: Value) -> Result<Value,
         },
         BinaryOp::Sub => numeric_binop(left, right, |a, b| a.checked_sub(b), |a, b| a - b, "-"),
         BinaryOp::Mul => numeric_binop(left, right, |a, b| a.checked_mul(b), |a, b| a * b, "*"),
-        BinaryOp::Div => numeric_binop(
-            left,
-            right,
-            |a, b| a.checked_div(b),
-            |a, b| a / b,
-            "/",
-        ),
+        BinaryOp::Div => numeric_binop(left, right, |a, b| a.checked_div(b), |a, b| a / b, "/"),
         BinaryOp::Mod => match (left, right) {
             (Value::Int(a), Value::Int(b)) => a
                 .checked_rem(b)
@@ -789,9 +832,7 @@ fn eval_record(record: &RecordValueExpr, env: &mut Env) -> Result<Value, String>
                         }
                     }
                     other => {
-                        return Err(format!(
-                            "record spread expects a record, got {other}"
-                        ));
+                        return Err(format!("record spread expects a record, got {other}"));
                     }
                 }
             }
@@ -883,7 +924,11 @@ fn collect_pattern_bindings(
         PatKind::Var(name) => {
             // A bare uppercase identifier may name a nullary constructor
             // (`None`); in that case it matches instead of binding.
-            if let Some(Binding::Constructor { tag, has_payload: false }) = env.get(name) {
+            if let Some(Binding::Constructor {
+                tag,
+                has_payload: false,
+            }) = env.get(name)
+            {
                 return Ok(matches!(value, Value::Sum { tag: vtag, .. } if vtag == tag));
             }
             out.push((name.clone(), value.clone()));
@@ -892,7 +937,10 @@ fn collect_pattern_bindings(
         PatKind::Wildcard => Ok(true),
         PatKind::Lit(lit) => Ok(value_eq(value, &eval_lit(lit))),
         PatKind::Constructor { name, payload } => match value {
-            Value::Sum { tag, payload: sum_payload } if tag == name => match payload {
+            Value::Sum {
+                tag,
+                payload: sum_payload,
+            } if tag == name => match payload {
                 Some(pat) => collect_pattern_bindings(pat, sum_payload, env, out),
                 None => Ok(matches!(**sum_payload, Value::Unit)),
             },
@@ -976,11 +1024,17 @@ fn lookup_var(env: &Env, name: &str) -> Result<Value, String> {
     match env.get(name) {
         Some(Binding::Inline(value)) => Ok(value.clone()),
         Some(Binding::Cell { value, .. }) => Ok(value.borrow().clone()),
-        Some(Binding::Constructor { tag, has_payload: false }) => Ok(Value::Sum {
+        Some(Binding::Constructor {
+            tag,
+            has_payload: false,
+        }) => Ok(Value::Sum {
             tag: tag.clone(),
             payload: Rc::new(Value::Unit),
         }),
-        Some(Binding::Constructor { tag, has_payload: true }) => Err(format!(
+        Some(Binding::Constructor {
+            tag,
+            has_payload: true,
+        }) => Err(format!(
             "constructor '{tag}' expects one argument; use '{tag} value'"
         )),
         Some(Binding::TypeDef { .. }) => Err(format!("'{name}' is a type, not a value")),
@@ -995,7 +1049,9 @@ fn method_matches(target: &[Ty], arity: usize, args: &[Value], env: &Env) -> boo
     }
     if args.len() < arity {
         return target.len() == 1
-            && (args.iter().any(|arg| value_matches_ty(arg, &target[0], env))
+            && (args
+                .iter()
+                .any(|arg| value_matches_ty(arg, &target[0], env))
                 || args.len() == 1);
     }
     if target.len() == args.len() {
@@ -1004,7 +1060,10 @@ fn method_matches(target: &[Ty], arity: usize, args: &[Value], env: &Env) -> boo
             .zip(args)
             .all(|(ty, arg)| value_matches_ty(arg, ty, env));
     }
-    target.len() == 1 && args.iter().any(|arg| value_matches_ty(arg, &target[0], env))
+    target.len() == 1
+        && args
+            .iter()
+            .any(|arg| value_matches_ty(arg, &target[0], env))
 }
 
 /// Runtime type test for typed patterns `(n : int)` / `(x : Option)`.
@@ -1054,19 +1113,26 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
         Ty::Tuple(elems) => match value {
             Value::Tuple(items) => {
                 items.len() == elems.len()
-                    && items.iter().zip(elems.iter()).all(|(v, t)| value_matches_ty(v, t, env))
+                    && items
+                        .iter()
+                        .zip(elems.iter())
+                        .all(|(v, t)| value_matches_ty(v, t, env))
             }
             _ => false,
         },
         Ty::RecordType(fields) => match value {
             Value::Record(fs) => fields.iter().all(|(name, t)| {
-                fs.get(name).map(|v| value_matches_ty(v, t, env)).unwrap_or(false)
+                fs.get(name)
+                    .map(|v| value_matches_ty(v, t, env))
+                    .unwrap_or(false)
             }),
             _ => false,
         },
         Ty::OpenRecordType { fields, .. } => match value {
             Value::Record(fs) => fields.iter().all(|(name, t)| {
-                fs.get(name).map(|v| value_matches_ty(v, t, env)).unwrap_or(false)
+                fs.get(name)
+                    .map(|v| value_matches_ty(v, t, env))
+                    .unwrap_or(false)
             }),
             _ => false,
         },
@@ -1104,10 +1170,19 @@ fn coerce_value_to_type(value: Value, ty: &Ty) -> Result<Value, String> {
 
 /// Like `value_matches_ty` but substitutes type parameters by position, so a
 /// declared `type Pair a = { fst: a, snd: a }` can be tested as `Pair int`.
-fn value_matches_ty_open(ty: &Ty, value: &Value, params: &[String], args: &[Ty], env: &Env) -> bool {
+fn value_matches_ty_open(
+    ty: &Ty,
+    value: &Value,
+    params: &[String],
+    args: &[Ty],
+    env: &Env,
+) -> bool {
     if let Ty::Named { name, .. } = ty {
         if let Some(i) = params.iter().position(|p| p == name) {
-            return args.get(i).map(|a| value_matches_ty(value, a, env)).unwrap_or(true);
+            return args
+                .get(i)
+                .map(|a| value_matches_ty(value, a, env))
+                .unwrap_or(true);
         }
     }
     match ty {
@@ -1167,14 +1242,26 @@ pub(crate) fn value_eq(left: &Value, right: &Value) -> bool {
         }
         (Value::Record(a), Value::Record(b)) => {
             a.len() == b.len()
-                && a.iter()
-                    .all(|(key, value)| b.get(key).map(|other| value_eq(value, other)).unwrap_or(false))
+                && a.iter().all(|(key, value)| {
+                    b.get(key)
+                        .map(|other| value_eq(value, other))
+                        .unwrap_or(false)
+                })
         }
-        (Value::Intrinsic(a), Value::Intrinsic(b)) => a.name == b.name && a.args.len() == b.args.len(),
+        (Value::Intrinsic(a), Value::Intrinsic(b)) => {
+            a.name == b.name && a.args.len() == b.args.len()
+        }
         (Value::Ref(a), Value::Ref(b)) => Rc::ptr_eq(a, b),
-        (Value::Sum { tag: ta, payload: pa }, Value::Sum { tag: tb, payload: pb }) => {
-            ta == tb && value_eq(pa, pb)
-        }
+        (
+            Value::Sum {
+                tag: ta,
+                payload: pa,
+            },
+            Value::Sum {
+                tag: tb,
+                payload: pb,
+            },
+        ) => ta == tb && value_eq(pa, pb),
         _ => false,
     }
 }

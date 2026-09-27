@@ -30,10 +30,10 @@ fn unique_concrete_candidate_selected() {
         Resolution::Selected(id) => {
             // The bytes specialization is the annotated one.
             let scheme = &set.specializations[id].scheme;
-            assert_eq!(scheme.body, MonoType::Function(
-                Box::new(con("bytes")),
-                Box::new(con("bytes")),
-            ));
+            assert_eq!(
+                scheme.body,
+                MonoType::Function(Box::new(con("bytes")), Box::new(con("bytes")),)
+            );
         }
         other => panic!("expected Selected, got {other:?}"),
     }
@@ -49,7 +49,10 @@ fn generic_fallback_selected_for_unknown_type() {
             // Generic specialization is unannotated: its scheme is polymorphic.
             let scheme = &set.specializations[id].scheme;
             assert!(matches!(scheme.body, MonoType::Function(_, _)));
-            assert!(!scheme.quantified.is_empty(), "generic keeps a type variable");
+            assert!(
+                !scheme.quantified.is_empty(),
+                "generic keeps a type variable"
+            );
         }
         other => panic!("expected Selected, got {other:?}"),
     }
@@ -73,7 +76,12 @@ fn arity_mismatch_rejected() {
     let set = set_for("fn f x y = x");
     let mut supply = TypeVarSupply::new();
     // Supply three args to a binary function.
-    match resolve_call(&mut supply, &set, &[con("int"), con("int"), con("int")], None) {
+    match resolve_call(
+        &mut supply,
+        &set,
+        &[con("int"), con("int"), con("int")],
+        None,
+    ) {
         Resolution::NoMatch { rejections } => {
             assert!(rejections
                 .iter()
@@ -149,10 +157,10 @@ fn deferred_resolution_resolves_with_later_expected_type() {
     match resolve_deferred(&mut supply, &set, &over, &expected) {
         Resolution::Selected(id) => {
             let scheme = &set.specializations[id].scheme;
-            assert_eq!(scheme.body, MonoType::Function(
-                Box::new(con("bytes")),
-                Box::new(con("bytes")),
-            ));
+            assert_eq!(
+                scheme.body,
+                MonoType::Function(Box::new(con("bytes")), Box::new(con("bytes")),)
+            );
         }
         other => panic!("expected Selected, got {other:?}"),
     }

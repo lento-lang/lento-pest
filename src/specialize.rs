@@ -144,33 +144,64 @@ fn least_generalization(
             }
             Some(MonoType::Constructor(n1.clone(), args))
         }
-        (MonoType::Sum { name: left, args: left_args, alts: left_alts },
-         MonoType::Sum { name: right, args: right_args, alts: right_alts })
-            if left == right && left_args.len() == right_args.len()
-                && left_alts.len() == right_alts.len() =>
+        (
+            MonoType::Sum {
+                name: left,
+                args: left_args,
+                alts: left_alts,
+            },
+            MonoType::Sum {
+                name: right,
+                args: right_args,
+                alts: right_alts,
+            },
+        ) if left == right
+            && left_args.len() == right_args.len()
+            && left_alts.len() == right_alts.len() =>
         {
-            let args = left_args.iter().zip(right_args).map(|(a, b)| {
-                least_generalization(a, b, map, next)
-            }).collect::<Option<Vec<_>>>()?;
-            let alts = left_alts.iter().zip(right_alts).map(|(a, b)| {
-                match (a, b) {
-                    (MonoSumAlt::Constructor { name: left, payload: x },
-                     MonoSumAlt::Constructor { name: right, payload: y }) if left == right => {
+            let args = left_args
+                .iter()
+                .zip(right_args)
+                .map(|(a, b)| least_generalization(a, b, map, next))
+                .collect::<Option<Vec<_>>>()?;
+            let alts = left_alts
+                .iter()
+                .zip(right_alts)
+                .map(|(a, b)| match (a, b) {
+                    (
+                        MonoSumAlt::Constructor {
+                            name: left,
+                            payload: x,
+                        },
+                        MonoSumAlt::Constructor {
+                            name: right,
+                            payload: y,
+                        },
+                    ) if left == right => {
                         let payload = match (x, y) {
                             (Some(x), Some(y)) => Some(least_generalization(x, y, map, next)?),
                             (None, None) => None,
                             _ => return None,
                         };
-                        Some(MonoSumAlt::Constructor { name: left.clone(), payload })
+                        Some(MonoSumAlt::Constructor {
+                            name: left.clone(),
+                            payload,
+                        })
                     }
-                    (MonoSumAlt::Bare(x), MonoSumAlt::Bare(y)) =>
-                        Some(MonoSumAlt::Bare(least_generalization(x, y, map, next)?)),
-                    (MonoSumAlt::Row(x), MonoSumAlt::Row(y)) =>
-                        Some(MonoSumAlt::Row(least_generalization(x, y, map, next)?)),
+                    (MonoSumAlt::Bare(x), MonoSumAlt::Bare(y)) => {
+                        Some(MonoSumAlt::Bare(least_generalization(x, y, map, next)?))
+                    }
+                    (MonoSumAlt::Row(x), MonoSumAlt::Row(y)) => {
+                        Some(MonoSumAlt::Row(least_generalization(x, y, map, next)?))
+                    }
                     _ => None,
-                }
-            }).collect::<Option<Vec<_>>>()?;
-            Some(MonoType::Sum { name: left.clone(), args, alts })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(MonoType::Sum {
+                name: left.clone(),
+                args,
+                alts,
+            })
         }
         (MonoType::Function(f1, t1), MonoType::Function(f2, t2)) => Some(MonoType::Function(
             Box::new(least_generalization(f1, f2, map, next)?),
@@ -186,15 +217,15 @@ fn least_generalization(
             }
             Some(MonoType::Tuple(items))
         }
-        (MonoType::List(x), MonoType::List(y)) => {
-            Some(MonoType::List(Box::new(least_generalization(x, y, map, next)?)))
-        }
-        (MonoType::Ref(x), MonoType::Ref(y)) => {
-            Some(MonoType::Ref(Box::new(least_generalization(x, y, map, next)?)))
-        }
-        (MonoType::Mut(x), MonoType::Mut(y)) => {
-            Some(MonoType::Mut(Box::new(least_generalization(x, y, map, next)?)))
-        }
+        (MonoType::List(x), MonoType::List(y)) => Some(MonoType::List(Box::new(
+            least_generalization(x, y, map, next)?,
+        ))),
+        (MonoType::Ref(x), MonoType::Ref(y)) => Some(MonoType::Ref(Box::new(
+            least_generalization(x, y, map, next)?,
+        ))),
+        (MonoType::Mut(x), MonoType::Mut(y)) => Some(MonoType::Mut(Box::new(
+            least_generalization(x, y, map, next)?,
+        ))),
         _ => None,
     }
 }
@@ -213,7 +244,11 @@ fn declared_domain(ctx: &InferCtx, clause: &crate::ast::FnDecl) -> Vec<Option<Mo
                 // not a nominal restriction.
                 if let crate::ast::Ty::Named { name, args } = ann {
                     if args.is_empty()
-                        && name.chars().next().map(|c| c.is_lowercase()).unwrap_or(false)
+                        && name
+                            .chars()
+                            .next()
+                            .map(|c| c.is_lowercase())
+                            .unwrap_or(false)
                         && !is_known_type_constructor(name)
                     {
                         return None;
@@ -338,7 +373,13 @@ pub fn partition(
                 continue; // arity is part of family identity
             }
             let mut supply = TypeVarSupply::new();
-            if same_specialization(&mut supply, &spec.scheme, &spec.declared_domain, &scheme, &domain) {
+            if same_specialization(
+                &mut supply,
+                &spec.scheme,
+                &spec.declared_domain,
+                &scheme,
+                &domain,
+            ) {
                 spec.clauses.push(SpecializedClause {
                     ty: clause_ty.clone(),
                     body: inferred.clause_bodies[i].clone(),

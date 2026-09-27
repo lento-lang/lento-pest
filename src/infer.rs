@@ -23,8 +23,8 @@ use crate::resolve::{resolve_call, Resolution};
 use crate::semantics::FunctionGroup;
 use crate::specialize::OverloadSet;
 use crate::types::{
-    generalize, instantiate, unify, MonoSumAlt, MonoType, SchemeConstraint, Substitution, TypeEnv, TypeScheme,
-    TypeVarSupply, UnifyError,
+    generalize, instantiate, unify, MonoSumAlt, MonoType, SchemeConstraint, Substitution, TypeEnv,
+    TypeScheme, TypeVarSupply, UnifyError,
 };
 
 /// A typing error with the clause it arose in.
@@ -45,8 +45,14 @@ pub enum TypeErrorKind {
     BadOperator { op: String, ty: MonoType },
     /// A record field access on a non-record (or unknown-field) type.
     BadMember { ty: MonoType, field: String },
-    NoOverload { name: String, arguments: Vec<MonoType> },
-    AmbiguousOverload { name: String, arguments: Vec<MonoType> },
+    NoOverload {
+        name: String,
+        arguments: Vec<MonoType>,
+    },
+    AmbiguousOverload {
+        name: String,
+        arguments: Vec<MonoType>,
+    },
     /// An operation requires an assignable or addressable variable place.
     InvalidPlace(String),
 }
@@ -57,7 +63,10 @@ impl fmt::Display for TypeError {
             TypeErrorKind::Unify(e) => write!(f, "{e}"),
             TypeErrorKind::UnboundVariable(n) => write!(f, "unbound variable `{n}`"),
             TypeErrorKind::PatternMismatch { expected, got } => {
-                write!(f, "pattern `{got}` does not match expected type {expected:?}")
+                write!(
+                    f,
+                    "pattern `{got}` does not match expected type {expected:?}"
+                )
             }
             TypeErrorKind::BadOperator { op, ty } => {
                 write!(f, "operator `{op}` does not apply to {ty:?}")
@@ -69,7 +78,10 @@ impl fmt::Display for TypeError {
                 write!(f, "no overload of `{name}` accepts arguments {arguments:?}")
             }
             TypeErrorKind::AmbiguousOverload { name, arguments } => {
-                write!(f, "ambiguous overload of `{name}` for arguments {arguments:?}")
+                write!(
+                    f,
+                    "ambiguous overload of `{name}` for arguments {arguments:?}"
+                )
             }
             TypeErrorKind::InvalidPlace(message) => write!(f, "{message}"),
         }
@@ -234,12 +246,10 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
     // Intrinsics use broad schemes here.  Class declarations in the prelude
     // replace overloaded names with their constrained schemes; the fallback
     // schemes keep standalone programs and the canonical CLI pipeline typed.
-    let unary = |input: MonoType, output: MonoType| {
-        MonoType::Function(Box::new(input), Box::new(output))
-    };
-    let binary = |left: MonoType, right: MonoType, output: MonoType| {
-        unary(left, unary(right, output))
-    };
+    let unary =
+        |input: MonoType, output: MonoType| MonoType::Function(Box::new(input), Box::new(output));
+    let binary =
+        |left: MonoType, right: MonoType, output: MonoType| unary(left, unary(right, output));
     let list = |element: MonoType| MonoType::List(Box::new(element));
     let var = |id| MonoType::Var(id);
     let poly = |quantified: Vec<u32>, body| TypeScheme {
@@ -248,10 +258,22 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         body,
     };
 
-    env.insert("print".to_string(), poly(vec![a], unary(var(a), ctor::unit())));
-    env.insert("println".to_string(), poly(vec![a], unary(var(a), ctor::unit())));
-    env.insert("typeof".to_string(), poly(vec![a], unary(var(a), ctor::str())));
-    env.insert("assert".to_string(), mono(unary(ctor::bool(), ctor::unit())));
+    env.insert(
+        "print".to_string(),
+        poly(vec![a], unary(var(a), ctor::unit())),
+    );
+    env.insert(
+        "println".to_string(),
+        poly(vec![a], unary(var(a), ctor::unit())),
+    );
+    env.insert(
+        "typeof".to_string(),
+        poly(vec![a], unary(var(a), ctor::str())),
+    );
+    env.insert(
+        "assert".to_string(),
+        mono(unary(ctor::bool(), ctor::unit())),
+    );
     env.insert(
         "concat".to_string(),
         poly(vec![a], binary(var(a), var(a), var(a))),
@@ -260,10 +282,7 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         "head".to_string(),
         poly(vec![a], unary(list(var(a)), var(a))),
     );
-    env.insert(
-        "len".to_string(),
-        poly(vec![a], unary(var(a), ctor::int())),
-    );
+    env.insert("len".to_string(), poly(vec![a], unary(var(a), ctor::int())));
     env.insert(
         "__list_len".to_string(),
         poly(vec![a], unary(list(var(a)), ctor::int())),
@@ -274,22 +293,52 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
     );
     for (name, body) in [
         ("__int_add", binary(ctor::int(), ctor::int(), ctor::int())),
-        ("__float_add", binary(ctor::float(), ctor::float(), ctor::float())),
+        (
+            "__float_add",
+            binary(ctor::float(), ctor::float(), ctor::float()),
+        ),
         ("__int_sub", binary(ctor::int(), ctor::int(), ctor::int())),
-        ("__float_sub", binary(ctor::float(), ctor::float(), ctor::float())),
+        (
+            "__float_sub",
+            binary(ctor::float(), ctor::float(), ctor::float()),
+        ),
         ("__int_mul", binary(ctor::int(), ctor::int(), ctor::int())),
-        ("__float_mul", binary(ctor::float(), ctor::float(), ctor::float())),
+        (
+            "__float_mul",
+            binary(ctor::float(), ctor::float(), ctor::float()),
+        ),
         ("__int_div", binary(ctor::int(), ctor::int(), ctor::int())),
-        ("__float_div", binary(ctor::float(), ctor::float(), ctor::float())),
+        (
+            "__float_div",
+            binary(ctor::float(), ctor::float(), ctor::float()),
+        ),
         ("__int_mod", binary(ctor::int(), ctor::int(), ctor::int())),
         ("__int_abs", unary(ctor::int(), ctor::int())),
         ("__float_abs", unary(ctor::float(), ctor::float())),
-        ("__int_equal", binary(ctor::int(), ctor::int(), ctor::bool())),
-        ("__float_equal", binary(ctor::float(), ctor::float(), ctor::bool())),
-        ("__bool_equal", binary(ctor::bool(), ctor::bool(), ctor::bool())),
-        ("__str_equal", binary(ctor::str(), ctor::str(), ctor::bool())),
-        ("__str_concat", binary(ctor::str(), ctor::str(), ctor::str())),
-        ("__str_contains", binary(ctor::str(), ctor::str(), ctor::bool())),
+        (
+            "__int_equal",
+            binary(ctor::int(), ctor::int(), ctor::bool()),
+        ),
+        (
+            "__float_equal",
+            binary(ctor::float(), ctor::float(), ctor::bool()),
+        ),
+        (
+            "__bool_equal",
+            binary(ctor::bool(), ctor::bool(), ctor::bool()),
+        ),
+        (
+            "__str_equal",
+            binary(ctor::str(), ctor::str(), ctor::bool()),
+        ),
+        (
+            "__str_concat",
+            binary(ctor::str(), ctor::str(), ctor::str()),
+        ),
+        (
+            "__str_contains",
+            binary(ctor::str(), ctor::str(), ctor::bool()),
+        ),
         ("__int_to_string", unary(ctor::int(), ctor::str())),
         ("__float_to_string", unary(ctor::float(), ctor::str())),
         ("__bool_to_string", unary(ctor::bool(), ctor::str())),
@@ -299,12 +348,30 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         env.insert(name.to_string(), mono(body));
     }
     for (name, body) in [
-        ("__list_concat", binary(list(var(a)), list(var(a)), list(var(a)))),
-        ("__list_contains", binary(list(var(a)), var(a), ctor::bool())),
-        ("__list_take", binary(ctor::int(), list(var(a)), list(var(a)))),
-        ("__list_drop", binary(ctor::int(), list(var(a)), list(var(a)))),
+        (
+            "__list_concat",
+            binary(list(var(a)), list(var(a)), list(var(a))),
+        ),
+        (
+            "__list_contains",
+            binary(list(var(a)), var(a), ctor::bool()),
+        ),
+        (
+            "__list_take",
+            binary(ctor::int(), list(var(a)), list(var(a))),
+        ),
+        (
+            "__list_drop",
+            binary(ctor::int(), list(var(a)), list(var(a))),
+        ),
         ("__list_reverse", unary(list(var(a)), list(var(a)))),
-        ("__list_slice", unary(ctor::int(), unary(ctor::int(), unary(list(var(a)), list(var(a)))))),
+        (
+            "__list_slice",
+            unary(
+                ctor::int(),
+                unary(ctor::int(), unary(list(var(a)), list(var(a)))),
+            ),
+        ),
     ] {
         env.insert(name.to_string(), poly(vec![a], body));
     }
@@ -312,7 +379,13 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         ("__str_take", binary(ctor::int(), ctor::str(), ctor::str())),
         ("__str_drop", binary(ctor::int(), ctor::str(), ctor::str())),
         ("__str_reverse", unary(ctor::str(), ctor::str())),
-        ("__str_slice", unary(ctor::int(), unary(ctor::int(), unary(ctor::str(), ctor::str())))),
+        (
+            "__str_slice",
+            unary(
+                ctor::int(),
+                unary(ctor::int(), unary(ctor::str(), ctor::str())),
+            ),
+        ),
     ] {
         env.insert(name.to_string(), mono(body));
     }
@@ -320,34 +393,98 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         "to_string".to_string(),
         poly(vec![a], unary(var(a), ctor::str())),
     );
-    env.insert("tail".to_string(), poly(vec![a], unary(list(var(a)), list(var(a)))));
-    env.insert("is_empty".to_string(), poly(vec![a], unary(list(var(a)), ctor::bool())));
+    env.insert(
+        "tail".to_string(),
+        poly(vec![a], unary(list(var(a)), list(var(a)))),
+    );
+    env.insert(
+        "is_empty".to_string(),
+        poly(vec![a], unary(list(var(a)), ctor::bool())),
+    );
     env.insert("abs".to_string(), poly(vec![a], unary(var(a), var(a))));
-    env.insert("min".to_string(), poly(vec![a], binary(var(a), var(a), var(a))));
-    env.insert("max".to_string(), poly(vec![a], binary(var(a), var(a), var(a))));
-    env.insert("parse_int".to_string(), mono(unary(ctor::str(), ctor::int())));
-    env.insert("contains".to_string(), poly(vec![a, b], binary(var(a), var(b), ctor::bool())));
-    env.insert("take".to_string(), poly(vec![a], binary(ctor::int(), var(a), var(a))));
-    env.insert("drop".to_string(), poly(vec![a], binary(ctor::int(), var(a), var(a))));
+    env.insert(
+        "min".to_string(),
+        poly(vec![a], binary(var(a), var(a), var(a))),
+    );
+    env.insert(
+        "max".to_string(),
+        poly(vec![a], binary(var(a), var(a), var(a))),
+    );
+    env.insert(
+        "parse_int".to_string(),
+        mono(unary(ctor::str(), ctor::int())),
+    );
+    env.insert(
+        "contains".to_string(),
+        poly(vec![a, b], binary(var(a), var(b), ctor::bool())),
+    );
+    env.insert(
+        "take".to_string(),
+        poly(vec![a], binary(ctor::int(), var(a), var(a))),
+    );
+    env.insert(
+        "drop".to_string(),
+        poly(vec![a], binary(ctor::int(), var(a), var(a))),
+    );
     env.insert("reverse".to_string(), poly(vec![a], unary(var(a), var(a))));
-    env.insert("slice".to_string(), poly(vec![a], unary(ctor::int(), unary(ctor::int(), unary(var(a), var(a))))));
-    env.insert("join".to_string(), mono(binary(ctor::str(), list(ctor::str()), ctor::str())));
-    env.insert("split".to_string(), mono(binary(ctor::str(), ctor::str(), list(ctor::str()))));
+    env.insert(
+        "slice".to_string(),
+        poly(
+            vec![a],
+            unary(ctor::int(), unary(ctor::int(), unary(var(a), var(a)))),
+        ),
+    );
+    env.insert(
+        "join".to_string(),
+        mono(binary(ctor::str(), list(ctor::str()), ctor::str())),
+    );
+    env.insert(
+        "split".to_string(),
+        mono(binary(ctor::str(), ctor::str(), list(ctor::str()))),
+    );
     env.insert(
         "map".to_string(),
-        poly(vec![a, b], binary(unary(var(a), var(b)), list(var(a)), list(var(b)))),
+        poly(
+            vec![a, b],
+            binary(unary(var(a), var(b)), list(var(a)), list(var(b))),
+        ),
     );
     env.insert(
         "filter".to_string(),
-        poly(vec![a], binary(unary(var(a), ctor::bool()), list(var(a)), list(var(a)))),
+        poly(
+            vec![a],
+            binary(unary(var(a), ctor::bool()), list(var(a)), list(var(a))),
+        ),
     );
     env.insert(
         "foldl".to_string(),
-        poly(vec![a, b], binary(unary(var(a), unary(var(b), var(a))), var(a), unary(list(var(b)), var(a)))),
+        poly(
+            vec![a, b],
+            binary(
+                unary(var(a), unary(var(b), var(a))),
+                var(a),
+                unary(list(var(b)), var(a)),
+            ),
+        ),
     );
-    env.insert("any".to_string(), poly(vec![a], binary(unary(var(a), ctor::bool()), list(var(a)), ctor::bool())));
-    env.insert("all".to_string(), poly(vec![a], binary(unary(var(a), ctor::bool()), list(var(a)), ctor::bool())));
-    env.insert("range".to_string(), mono(binary(ctor::int(), ctor::int(), list(ctor::int()))));
+    env.insert(
+        "any".to_string(),
+        poly(
+            vec![a],
+            binary(unary(var(a), ctor::bool()), list(var(a)), ctor::bool()),
+        ),
+    );
+    env.insert(
+        "all".to_string(),
+        poly(
+            vec![a],
+            binary(unary(var(a), ctor::bool()), list(var(a)), ctor::bool()),
+        ),
+    );
+    env.insert(
+        "range".to_string(),
+        mono(binary(ctor::int(), ctor::int(), list(ctor::int()))),
+    );
     let _ = b;
     env
 }
@@ -425,10 +562,8 @@ pub fn check_pattern(
             Ok(())
         }
         PatKind::Constructor { name, payload } => {
-            let declared = env.get(name).cloned().ok_or_else(|| {
-                TypeError {
-                    kind: TypeErrorKind::UnboundVariable(name.clone()),
-                }
+            let declared = env.get(name).cloned().ok_or_else(|| TypeError {
+                kind: TypeErrorKind::UnboundVariable(name.clone()),
             })?;
             let ctor_ty = instantiate(&mut ctx.supply, &declared).0;
             let (payload_ty, result_ty) = match (payload, ctor_ty) {
@@ -547,9 +682,11 @@ fn infer_overloaded_call(
     let Some(set) = ctx.overloads.get(name).cloned() else {
         return Ok(None);
     };
-    if !set.specializations.iter().any(|specialization| {
-        callable_arity(&specialization.scheme.body) == source_arguments.len()
-    }) {
+    if !set
+        .specializations
+        .iter()
+        .any(|specialization| callable_arity(&specialization.scheme.body) == source_arguments.len())
+    {
         return Ok(None); // Partial applications retain their function type.
     }
 
@@ -557,23 +694,40 @@ fn infer_overloaded_call(
     for argument in source_arguments {
         arguments.push(infer_typed_expr(ctx, argument, &mut env.clone())?);
     }
-    let argument_types = arguments.iter().map(|arg| ctx.resolve(&arg.ty)).collect::<Vec<_>>();
+    let argument_types = arguments
+        .iter()
+        .map(|arg| ctx.resolve(&arg.ty))
+        .collect::<Vec<_>>();
     let selected = match resolve_call(&mut ctx.supply, &set, &argument_types, None) {
         Resolution::Selected(id) => id,
-        Resolution::NoMatch { .. } => return Err(TypeError { kind: TypeErrorKind::NoOverload {
-            name: name.to_string(), arguments: argument_types,
-        } }),
-        Resolution::Ambiguous { .. } => return Err(TypeError { kind: TypeErrorKind::AmbiguousOverload {
-            name: name.to_string(), arguments: argument_types,
-        } }),
+        Resolution::NoMatch { .. } => {
+            return Err(TypeError {
+                kind: TypeErrorKind::NoOverload {
+                    name: name.to_string(),
+                    arguments: argument_types,
+                },
+            })
+        }
+        Resolution::Ambiguous { .. } => {
+            return Err(TypeError {
+                kind: TypeErrorKind::AmbiguousOverload {
+                    name: name.to_string(),
+                    arguments: argument_types,
+                },
+            })
+        }
     };
-    let (signature, constraints) = instantiate(&mut ctx.supply, &set.specializations[selected].scheme);
+    let (signature, constraints) =
+        instantiate(&mut ctx.supply, &set.specializations[selected].scheme);
     let mut result = signature.clone();
     for argument in &arguments {
         let MonoType::Function(parameter, output) = result.clone() else {
-            return Err(TypeError { kind: TypeErrorKind::NoOverload {
-                name: name.to_string(), arguments: argument_types,
-            } });
+            return Err(TypeError {
+                kind: TypeErrorKind::NoOverload {
+                    name: name.to_string(),
+                    arguments: argument_types,
+                },
+            });
         };
         unify_call_argument(ctx, &argument.ty, &parameter)?;
         result = *output;
@@ -598,8 +752,8 @@ pub fn infer_typed_expr(
     expr: &Expr,
     env: &mut TypeEnv,
 ) -> Result<crate::semantics::TypedExpr, TypeError> {
-    use crate::semantics::{TypedExpr, TypedExprKind, TypedMatchArm};
     use crate::ast::{RecordValueEntry, Stmt};
+    use crate::semantics::{TypedExpr, TypedExprKind, TypedMatchArm};
 
     let composite = |ty, children| TypedExpr {
         ty,
@@ -707,7 +861,12 @@ pub fn infer_typed_expr(
                     ctx.unify(&lhs.ty, &rhs.ty)?;
                     lhs.ty.clone()
                 }
-                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
+                BinaryOp::Eq
+                | BinaryOp::Ne
+                | BinaryOp::Lt
+                | BinaryOp::Gt
+                | BinaryOp::Le
+                | BinaryOp::Ge => {
                     ctx.unify(&lhs.ty, &rhs.ty)?;
                     ctor::bool()
                 }
@@ -862,13 +1021,7 @@ pub fn infer_typed_expr(
                     }
                 }
             }
-            Ok(composite(
-                MonoType::Record {
-                    fields,
-                    rest,
-                },
-                children,
-            ))
+            Ok(composite(MonoType::Record { fields, rest }, children))
         }
         Expr::Member(m) => {
             let object = infer_typed_expr(ctx, &m.obj, env)?;
@@ -910,18 +1063,27 @@ pub fn infer_typed_expr(
             Ok(composite(elem, vec![object, index]))
         }
         Expr::Ref(r) => {
-            if !matches!(r.inner.as_ref(), Expr::Var(v) if ctx.mutable_places.get(&v.name) == Some(&true)) {
+            if !matches!(r.inner.as_ref(), Expr::Var(v) if ctx.mutable_places.get(&v.name) == Some(&true))
+            {
                 return Err(TypeError {
-                    kind: TypeErrorKind::InvalidPlace("ref requires a mutable variable place".into()),
+                    kind: TypeErrorKind::InvalidPlace(
+                        "ref requires a mutable variable place".into(),
+                    ),
                 });
             }
             let inner = infer_typed_expr(ctx, &r.inner, env)?;
-            Ok(composite(MonoType::Ref(Box::new(inner.ty.clone())), vec![inner]))
+            Ok(composite(
+                MonoType::Ref(Box::new(inner.ty.clone())),
+                vec![inner],
+            ))
         }
         Expr::Assign(a) => {
-            if !matches!(a.place.as_ref(), Expr::Var(v) if ctx.mutable_places.get(&v.name) == Some(&true)) {
+            if !matches!(a.place.as_ref(), Expr::Var(v) if ctx.mutable_places.get(&v.name) == Some(&true))
+            {
                 return Err(TypeError {
-                    kind: TypeErrorKind::InvalidPlace("assignment requires a mutable variable place".into()),
+                    kind: TypeErrorKind::InvalidPlace(
+                        "assignment requires a mutable variable place".into(),
+                    ),
                 });
             }
             let value = infer_typed_expr(ctx, &a.value, env)?;
@@ -954,7 +1116,8 @@ fn unify_call_argument(
             },
         ) => {
             for (name, expected_ty) in &expected_fields {
-                let Some((_, actual_ty)) = actual_fields.iter().find(|(field, _)| field == name) else {
+                let Some((_, actual_ty)) = actual_fields.iter().find(|(field, _)| field == name)
+                else {
                     return ctx.unify(
                         &MonoType::Record {
                             fields: actual_fields,
@@ -1033,27 +1196,40 @@ fn validate_intrinsic_call(
         return Ok(());
     }
     let expected = match name.as_str() {
-        "abs" if all_args.len() == 1 => matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "int" || kind == "float"),
-        "concat" if all_args.len() == 2 => match (ctx.resolve(&all_args[0].ty), ctx.resolve(&all_args[1].ty)) {
-            (MonoType::Constructor(left, _), MonoType::Constructor(right, _)) => left == "str" && right == "str",
-            (MonoType::List(left), MonoType::List(right)) => left == right,
-            _ => false,
-        },
-        "contains" if all_args.len() == 2 => match (ctx.resolve(&all_args[0].ty), ctx.resolve(&all_args[1].ty)) {
-            (MonoType::Constructor(left, _), MonoType::Constructor(right, _)) => left == "str" && right == "str",
-            (MonoType::List(element), needle) => *element == needle,
-            _ => false,
-        },
-        "take" | "drop" if all_args.len() == 2 => matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "int")
-            && (matches!(ctx.resolve(&all_args[1].ty), MonoType::Constructor(kind, _) if kind == "str")
-                || matches!(ctx.resolve(&all_args[1].ty), MonoType::List(_))),
-        "reverse" if all_args.len() == 1 => matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "str")
-            || matches!(ctx.resolve(&all_args[0].ty), MonoType::List(_)),
-        "slice" if all_args.len() == 3 => all_args[..2]
-            .iter()
-            .all(|arg| matches!(ctx.resolve(&arg.ty), MonoType::Constructor(kind, _) if kind == "int"))
-            && (matches!(ctx.resolve(&all_args[2].ty), MonoType::Constructor(kind, _) if kind == "str")
-                || matches!(ctx.resolve(&all_args[2].ty), MonoType::List(_))),
+        "abs" if all_args.len() == 1 => {
+            matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "int" || kind == "float")
+        }
+        "concat" if all_args.len() == 2 => {
+            match (ctx.resolve(&all_args[0].ty), ctx.resolve(&all_args[1].ty)) {
+                (MonoType::Constructor(left, _), MonoType::Constructor(right, _)) => {
+                    left == "str" && right == "str"
+                }
+                (MonoType::List(left), MonoType::List(right)) => left == right,
+                _ => false,
+            }
+        }
+        "contains" if all_args.len() == 2 => {
+            match (ctx.resolve(&all_args[0].ty), ctx.resolve(&all_args[1].ty)) {
+                (MonoType::Constructor(left, _), MonoType::Constructor(right, _)) => {
+                    left == "str" && right == "str"
+                }
+                (MonoType::List(element), needle) => *element == needle,
+                _ => false,
+            }
+        }
+        "take" | "drop" if all_args.len() == 2 => {
+            matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "int")
+                && (matches!(ctx.resolve(&all_args[1].ty), MonoType::Constructor(kind, _) if kind == "str")
+                    || matches!(ctx.resolve(&all_args[1].ty), MonoType::List(_)))
+        }
+        "reverse" if all_args.len() == 1 => {
+            matches!(ctx.resolve(&all_args[0].ty), MonoType::Constructor(kind, _) if kind == "str")
+                || matches!(ctx.resolve(&all_args[0].ty), MonoType::List(_))
+        }
+        "slice" if all_args.len() == 3 => all_args[..2].iter().all(
+            |arg| matches!(ctx.resolve(&arg.ty), MonoType::Constructor(kind, _) if kind == "int"),
+        ) && (matches!(ctx.resolve(&all_args[2].ty), MonoType::Constructor(kind, _) if kind == "str")
+            || matches!(ctx.resolve(&all_args[2].ty), MonoType::List(_))),
         _ => true,
     };
     if expected {
@@ -1062,7 +1238,10 @@ fn validate_intrinsic_call(
         Err(TypeError {
             kind: TypeErrorKind::BadOperator {
                 op: name.to_string(),
-                ty: all_args.last().map(|arg| ctx.resolve(&arg.ty)).unwrap_or_else(ctor::unit),
+                ty: all_args
+                    .last()
+                    .map(|arg| ctx.resolve(&arg.ty))
+                    .unwrap_or_else(ctor::unit),
             },
         })
     }
@@ -1074,7 +1253,11 @@ fn flatten_typed_call(
 ) -> Option<(String, Vec<crate::semantics::TypedExpr>)> {
     match &callee.kind {
         crate::semantics::TypedExprKind::Var(name) => Some((name.clone(), args.to_vec())),
-        crate::semantics::TypedExprKind::Call { callee, args: prior, .. } => {
+        crate::semantics::TypedExprKind::Call {
+            callee,
+            args: prior,
+            ..
+        } => {
             let (name, mut all_args) = flatten_typed_call(callee, prior)?;
             all_args.extend_from_slice(args);
             Some((name, all_args))
@@ -1084,7 +1267,11 @@ fn flatten_typed_call(
 }
 
 /// Infer only the type when a caller does not need the typed expression tree.
-pub fn infer_expr(ctx: &mut InferCtx, expr: &Expr, env: &mut TypeEnv) -> Result<MonoType, TypeError> {
+pub fn infer_expr(
+    ctx: &mut InferCtx,
+    expr: &Expr,
+    env: &mut TypeEnv,
+) -> Result<MonoType, TypeError> {
     infer_typed_expr(ctx, expr, env).map(|typed| typed.ty)
 }
 
@@ -1205,18 +1392,24 @@ pub(crate) fn resolve_typed_expr(ctx: &InferCtx, expression: &mut crate::semanti
     match &mut expression.kind {
         TypedExprKind::Call { callee, args, .. } => {
             resolve_typed_expr(ctx, callee);
-            for arg in args { resolve_typed_expr(ctx, arg); }
+            for arg in args {
+                resolve_typed_expr(ctx, arg);
+            }
         }
         TypedExprKind::Lambda { body, .. } => resolve_typed_expr(ctx, body),
         TypedExprKind::Match { scrutinee, arms } => {
             resolve_typed_expr(ctx, scrutinee);
             for arm in arms {
-                if let Some(guard) = &mut arm.guard { resolve_typed_expr(ctx, guard); }
+                if let Some(guard) = &mut arm.guard {
+                    resolve_typed_expr(ctx, guard);
+                }
                 resolve_typed_expr(ctx, &mut arm.body);
             }
         }
         TypedExprKind::Composite { children, .. } => {
-            for child in children { resolve_typed_expr(ctx, child); }
+            for child in children {
+                resolve_typed_expr(ctx, child);
+            }
         }
         TypedExprKind::Lit(_) | TypedExprKind::Var(_) | TypedExprKind::Unresolved(_) => {}
     }
@@ -1225,6 +1418,10 @@ pub(crate) fn resolve_typed_expr(ctx: &InferCtx, expression: &mut crate::semanti
 /// Generalize a clause/group type relative to the ambient environment. This
 /// is called once per group *after* the whole group (or its recursive SCC)
 /// has been inferred — never per clause.
-pub fn generalize_group(env: &TypeEnv, ty: &MonoType, constraints: Vec<SchemeConstraint>) -> TypeScheme {
+pub fn generalize_group(
+    env: &TypeEnv,
+    ty: &MonoType,
+    constraints: Vec<SchemeConstraint>,
+) -> TypeScheme {
     generalize(env, ty, constraints)
 }

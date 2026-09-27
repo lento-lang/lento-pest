@@ -12,8 +12,8 @@ use crate::infer::{base_env, check_pattern, infer_clause, infer_expr, infer_type
 use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
 use crate::resolve::{resolve_call_checked, Resolution};
 use crate::semantics::{
-    collect_function_groups, FunctionGroup, SpecOrigin, TypedExpr, TypedExprKind,
-    TypedLet, TypedOverloadSet, TypedPatternClause, TypedProgram, TypedSpecialization,
+    collect_function_groups, FunctionGroup, SpecOrigin, TypedExpr, TypedExprKind, TypedLet,
+    TypedOverloadSet, TypedPatternClause, TypedProgram, TypedSpecialization,
 };
 use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
@@ -71,7 +71,6 @@ pub struct RefinementMetadata {
     pub arity: usize,
     pub has_precondition: bool,
 }
-
 
 /// The result of canonical analysis. Later lowering phases consume the
 /// overload sets; declarations not yet represented in the semantic IR remain
@@ -229,8 +228,9 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
             Stmt::Expr(expression) => {
                 validate_nested_matches(expression, "top-level")?;
                 typed_exprs.push(
-                    infer_typed_expr(&mut ctx, expression, &mut env)
-                        .map_err(|error| format!("top-level expression inference failed: {error}"))?,
+                    infer_typed_expr(&mut ctx, expression, &mut env).map_err(|error| {
+                        format!("top-level expression inference failed: {error}")
+                    })?,
                 );
                 typed_expr_source_indices.push(source_index);
             }
@@ -276,10 +276,15 @@ fn expand_modules(program: &Program) -> Result<Program, String> {
     let mut modules = BTreeMap::<Vec<String>, Vec<Stmt>>::new();
     collect_modules(&program.statements, &mut Vec::new(), &mut modules);
     let root = modules.get(&Vec::new()).cloned().unwrap_or_default();
-    let local_names = root.iter().filter_map(statement_name).collect::<BTreeSet<_>>();
+    let local_names = root
+        .iter()
+        .filter_map(statement_name)
+        .collect::<BTreeSet<_>>();
     let mut statements = Vec::new();
     for statement in &root {
-        let Stmt::Decl(Decl::Use(usage)) = statement else { continue };
+        let Stmt::Decl(Decl::Use(usage)) = statement else {
+            continue;
+        };
         let path = usage.path.clone();
         let imported = module_exports(&path, &modules)?;
         for imported in imported {
@@ -290,9 +295,10 @@ fn expand_modules(program: &Program) -> Result<Program, String> {
             }
         }
     }
-    statements.extend(root.into_iter().filter(|statement| {
-        !matches!(statement, Stmt::Decl(Decl::Use(_)))
-    }));
+    statements.extend(
+        root.into_iter()
+            .filter(|statement| !matches!(statement, Stmt::Decl(Decl::Use(_)))),
+    );
     Ok(Program {
         spans: vec![crate::ast::Span { line: 1, col: 1 }; statements.len()],
         statements,
@@ -325,21 +331,27 @@ fn module_exports(
     let Some(statements) = modules.get(path) else {
         return Err(format!("unknown module '{}'", path.join(".")));
     };
-    let local_names = statements.iter().filter_map(statement_name).collect::<BTreeSet<_>>();
+    let local_names = statements
+        .iter()
+        .filter_map(statement_name)
+        .collect::<BTreeSet<_>>();
     let mut result = Vec::new();
     for statement in statements {
-        let Stmt::Decl(Decl::Use(usage)) = statement else { continue };
+        let Stmt::Decl(Decl::Use(usage)) = statement else {
+            continue;
+        };
         for imported in module_exports(&usage.path, modules)? {
-            if statement_name(&imported)
-                .is_some_and(|name| !local_names.contains(&name))
-            {
+            if statement_name(&imported).is_some_and(|name| !local_names.contains(&name)) {
                 result.push(imported);
             }
         }
     }
-    result.extend(statements.iter().filter(|statement| {
-        !matches!(statement, Stmt::Decl(Decl::Use(_)))
-    }).cloned());
+    result.extend(
+        statements
+            .iter()
+            .filter(|statement| !matches!(statement, Stmt::Decl(Decl::Use(_))))
+            .cloned(),
+    );
     Ok(result)
 }
 
@@ -353,7 +365,9 @@ fn statement_name(statement: &Stmt) -> Option<String> {
             PatKind::Var(name) => Some(name.clone()),
             _ => None,
         },
-        Stmt::Decl(Decl::Impl(_)) | Stmt::Decl(Decl::Mod(_)) | Stmt::Decl(Decl::Use(_))
+        Stmt::Decl(Decl::Impl(_))
+        | Stmt::Decl(Decl::Mod(_))
+        | Stmt::Decl(Decl::Use(_))
         | Stmt::Expr(_) => None,
     }
 }
@@ -384,17 +398,14 @@ fn validate_spec_refinements(
                     spec.name
                 )
             })?;
-            crate::types::unify(
-                &mut ctx.subst,
-                &clause_ty,
-                &crate::infer::ctor::bool(),
-            )
-                .map_err(|error| {
+            crate::types::unify(&mut ctx.subst, &clause_ty, &crate::infer::ctor::bool()).map_err(
+                |error| {
                     format!(
                         "where refinement for spec '{}' must be boolean: {error}",
                         spec.name
                     )
-                })?;
+                },
+            )?;
         }
     }
     Ok(())
@@ -415,9 +426,7 @@ fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
                 collect_named_binders(item, binders);
             }
         }
-        Ty::List(inner) | Ty::Ref(inner) | Ty::Mut(inner) => {
-            collect_named_binders(inner, binders)
-        }
+        Ty::List(inner) | Ty::Ref(inner) | Ty::Mut(inner) => collect_named_binders(inner, binders),
         Ty::Named { args, .. } => {
             for arg in args {
                 collect_named_binders(arg, binders);
@@ -449,7 +458,6 @@ fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
     }
 }
 
-
 #[cfg(feature = "canonical-smt")]
 #[derive(Clone)]
 struct SmtRefinement {
@@ -460,10 +468,7 @@ struct SmtRefinement {
 }
 
 #[cfg(feature = "canonical-smt")]
-fn verify_canonical_smt(
-    program: &Program,
-    groups: &[FunctionGroup],
-) -> Result<(), String> {
+fn verify_canonical_smt(program: &Program, groups: &[FunctionGroup]) -> Result<(), String> {
     let mut refinements = BTreeMap::<String, SmtRefinement>::new();
 
     for group in groups {
@@ -615,7 +620,9 @@ fn verify_canonical_smt_calls(
                             if args.len() != refinement.arity {
                                 return Err(format!(
                                     "cannot verify call to '{}': expected {} arguments, got {}",
-                                    variable.name, refinement.arity, args.len()
+                                    variable.name,
+                                    refinement.arity,
+                                    args.len()
                                 ));
                             }
                             for argument in &args {
@@ -629,15 +636,10 @@ fn verify_canonical_smt_calls(
                                 }
                             }
                             for pre in &refinement.preconditions {
-                                match crate::smt::check_pre(
-                                    &refinement.inputs,
-                                    pre,
-                                    &args,
-                                    &[],
-                                )
-                                .map_err(|error| {
-                                    format!("precondition for '{}': {error}", variable.name)
-                                })? {
+                                match crate::smt::check_pre(&refinement.inputs, pre, &args, &[])
+                                    .map_err(|error| {
+                                        format!("precondition for '{}': {error}", variable.name)
+                                    })? {
                                     crate::smt::Verdict::Proven => {}
                                     crate::smt::Verdict::Counterexample(witness) => {
                                         return Err(format!(
@@ -696,9 +698,7 @@ fn verify_canonical_smt_calls(
                 for statement in &block.body {
                     match statement {
                         Stmt::Expr(expression) => walk(expression, refinements, false)?,
-                        Stmt::Decl(Decl::Let(binding)) => {
-                            walk(&binding.value, refinements, false)?
-                        }
+                        Stmt::Decl(Decl::Let(binding)) => walk(&binding.value, refinements, false)?,
                         _ => {}
                     }
                 }
@@ -725,9 +725,7 @@ fn verify_canonical_smt_calls(
     for statement in &program.statements {
         match statement {
             Stmt::Expr(expression) => walk(expression, refinements, false)?,
-            Stmt::Decl(Decl::Let(binding)) => {
-                walk(&binding.value, refinements, false)?
-            }
+            Stmt::Decl(Decl::Let(binding)) => walk(&binding.value, refinements, false)?,
             _ => {}
         }
     }
@@ -750,9 +748,6 @@ fn curry_function_clause(clause: &crate::ast::FnDecl) -> Expr {
     }
     body
 }
-
-
-
 
 fn resolve_typed_program_calls(
     program: &mut TypedProgram,
@@ -806,10 +801,8 @@ fn resolve_typed_expr_calls(
             }
             let mut applied_type = expression.ty.clone();
             for argument in applied_arguments.iter().rev() {
-                applied_type = MonoType::Function(
-                    Box::new(argument.ty.clone()),
-                    Box::new(applied_type),
-                );
+                applied_type =
+                    MonoType::Function(Box::new(argument.ty.clone()), Box::new(applied_type));
             }
             if contains_type_variable(&applied_type) {
                 return Ok(());
@@ -831,7 +824,12 @@ fn resolve_typed_expr_calls(
                     !args.iter().any(contains_type_variable)
                         && declarations.instances.iter().any(|instance| {
                             instance.class == constraint.name
-                                && instance_satisfies(instance, &args, declarations, &mut Vec::new())
+                                && instance_satisfies(
+                                    instance,
+                                    &args,
+                                    declarations,
+                                    &mut Vec::new(),
+                                )
                         })
                 })
             };
@@ -862,7 +860,7 @@ fn resolve_typed_expr_calls(
         }
         TypedExprKind::Lambda { body, .. } => {
             resolve_typed_expr_calls(body, overloads, declarations)?
-        },
+        }
         TypedExprKind::Match { scrutinee, arms } => {
             resolve_typed_expr_calls(scrutinee, overloads, declarations)?;
             for arm in arms {
@@ -881,7 +879,6 @@ fn resolve_typed_expr_calls(
     }
     Ok(())
 }
-
 
 fn flatten_typed_call<'a>(
     callee: &'a TypedExpr,
@@ -922,9 +919,7 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
             args.iter().any(contains_type_variable)
         }
-        MonoType::Function(from, to) => {
-            contains_type_variable(from) || contains_type_variable(to)
-        }
+        MonoType::Function(from, to) => contains_type_variable(from) || contains_type_variable(to),
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
             contains_type_variable(inner)
         }
@@ -943,7 +938,6 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         }
     }
 }
-
 
 fn build_typed_program(
     groups: &[FunctionGroup],
@@ -989,7 +983,11 @@ fn build_typed_program(
         }
         typed_sets.push(TypedOverloadSet {
             name: set.name.clone(),
-            source_index: group.source_indices.first().copied().unwrap_or(group.source_span.0),
+            source_index: group
+                .source_indices
+                .first()
+                .copied()
+                .unwrap_or(group.source_span.0),
             specializations: typed_specializations,
         });
     }
@@ -1000,7 +998,6 @@ fn build_typed_program(
         expr_source_indices,
     })
 }
-
 
 fn collect_refinement_metadata(groups: &[FunctionGroup]) -> Vec<RefinementMetadata> {
     let mut metadata = Vec::new();
@@ -1031,11 +1028,7 @@ fn collect_refinement_metadata(groups: &[FunctionGroup]) -> Vec<RefinementMetada
     metadata
 }
 
-
-fn validate_refinement_calls(
-    program: &Program,
-    groups: &[FunctionGroup],
-) -> Result<(), String> {
+fn validate_refinement_calls(program: &Program, groups: &[FunctionGroup]) -> Result<(), String> {
     let mut obligations = BTreeMap::<String, usize>::new();
     for group in groups {
         for parsed in &group.explicit_specs {
@@ -1149,9 +1142,7 @@ fn validate_refinement_calls_in_expr(
                 for statement in &block.body {
                     match statement {
                         Stmt::Expr(expression) => walk(expression, obligations, false)?,
-                        Stmt::Decl(Decl::Let(binding)) => {
-                            walk(&binding.value, obligations, false)?
-                        }
+                        Stmt::Decl(Decl::Let(binding)) => walk(&binding.value, obligations, false)?,
                         _ => {}
                     }
                 }
@@ -1266,9 +1257,7 @@ fn collect_expr_names(expression: &Expr, names: &mut BTreeSet<String>) {
             for statement in &block.body {
                 match statement {
                     Stmt::Expr(expression) => collect_expr_names(expression, names),
-                    Stmt::Decl(Decl::Let(binding)) => {
-                        collect_expr_names(&binding.value, names)
-                    }
+                    Stmt::Decl(Decl::Let(binding)) => collect_expr_names(&binding.value, names),
                     _ => {}
                 }
             }
@@ -1291,7 +1280,6 @@ fn collect_expr_names(expression: &Expr, names: &mut BTreeSet<String>) {
     }
 }
 
-
 fn seed_function_type(ctx: &mut InferCtx, group: &FunctionGroup) -> MonoType {
     let arity = group
         .raw_clauses
@@ -1304,8 +1292,6 @@ fn seed_function_type(ctx: &mut InferCtx, group: &FunctionGroup) -> MonoType {
     }
     ty
 }
-
-
 
 fn install_class_methods(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Program) {
     for statement in &program.statements {
@@ -1341,10 +1327,7 @@ fn install_class_methods(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Progra
             }];
             for quantifier in &spec.ty.quantifiers {
                 for constraint in &quantifier.constraints {
-                    constraints.push(crate::types::lower_constraint(
-                        constraint,
-                        &method_binders,
-                    ));
+                    constraints.push(crate::types::lower_constraint(constraint, &method_binders));
                 }
             }
             let body = lower_ty(&spec.ty.ty, &method_binders);
@@ -1369,11 +1352,17 @@ fn validate_implementation_methods(
     env: &TypeEnv,
 ) -> Result<(), String> {
     for statement in &program.statements {
-        let Stmt::Decl(Decl::Impl(implementation)) = statement else { continue };
-        let class = program.statements.iter().find_map(|statement| match statement {
-            Stmt::Decl(Decl::Class(class)) if class.name == implementation.class => Some(class),
-            _ => None,
-        }).ok_or_else(|| format!("unknown class '{}'", implementation.class))?;
+        let Stmt::Decl(Decl::Impl(implementation)) = statement else {
+            continue;
+        };
+        let class = program
+            .statements
+            .iter()
+            .find_map(|statement| match statement {
+                Stmt::Decl(Decl::Class(class)) if class.name == implementation.class => Some(class),
+                _ => None,
+            })
+            .ok_or_else(|| format!("unknown class '{}'", implementation.class))?;
         let mut binders = BTreeMap::new();
         for quantifier in &implementation.quantifiers {
             for variable in &quantifier.vars {
@@ -1385,12 +1374,17 @@ fn validate_implementation_methods(
             binders.insert(parameter.clone(), target);
         }
         for method in &implementation.methods {
-            let spec = class.specs.iter().find(|spec| spec.name == method.name)
+            let spec = class
+                .specs
+                .iter()
+                .find(|spec| spec.name == method.name)
                 .ok_or_else(|| format!("unknown method '{}'", method.name))?;
             let mut method_binders = binders.clone();
             for quantifier in &spec.ty.quantifiers {
                 for variable in &quantifier.vars {
-                    method_binders.entry(variable.clone()).or_insert_with(|| ctx.supply.fresh());
+                    method_binders
+                        .entry(variable.clone())
+                        .or_insert_with(|| ctx.supply.fresh());
                 }
             }
             let required = ctx.lower_surface_ty(&spec.ty.ty, &method_binders);
@@ -1440,7 +1434,10 @@ fn validate_pending_constraints(
             .iter()
             .map(|argument| ctx.resolve(argument))
             .collect::<Vec<_>>();
-        if args.iter().any(|argument| matches!(argument, MonoType::Var(_))) {
+        if args
+            .iter()
+            .any(|argument| matches!(argument, MonoType::Var(_)))
+        {
             continue;
         }
         let Some(class) = declarations
@@ -1463,7 +1460,6 @@ fn validate_pending_constraints(
     }
     Ok(())
 }
-
 
 fn resolve_declarations(
     program: &Program,
@@ -1498,14 +1494,14 @@ fn resolve_declarations(
             Ty::Sum(alternatives) => {
                 for alternative in alternatives {
                     match alternative {
-                        SumAlt::Ctor { name, payload } => metadata.constructors.push(
-                            ConstructorMetadata {
+                        SumAlt::Ctor { name, payload } => {
+                            metadata.constructors.push(ConstructorMetadata {
                                 name: name.clone(),
                                 payload: payload
                                     .as_ref()
                                     .map(|payload| lower_ty(payload, &binders)),
-                            },
-                        ),
+                            })
+                        }
                         SumAlt::Bare(ty) => metadata.fields.push((
                             format!("member{}", metadata.fields.len()),
                             lower_ty(ty, &binders),
@@ -1526,10 +1522,9 @@ fn resolve_declarations(
                     .map(|(name, ty)| (name.clone(), lower_ty(ty, &binders)))
                     .collect();
             }
-            ty => metadata.fields.push((
-                "value".to_string(),
-                lower_ty(ty, &binders),
-            )),
+            ty => metadata
+                .fields
+                .push(("value".to_string(), lower_ty(ty, &binders))),
         }
         declarations.types.push(metadata);
     }
@@ -1585,11 +1580,7 @@ fn resolve_declarations(
     Ok(declarations)
 }
 
-
-fn install_type_declarations(
-    env: &mut TypeEnv,
-    declarations: &DeclarationMetadata,
-) {
+fn install_type_declarations(env: &mut TypeEnv, declarations: &DeclarationMetadata) {
     for declaration in &declarations.types {
         let result = match &declaration.source {
             Ty::Sum(alts) => MonoType::Sum {
@@ -1606,12 +1597,21 @@ fn install_type_declarations(
                         SumAlt::Ctor { name, payload } => MonoSumAlt::Constructor {
                             name: name.clone(),
                             payload: payload.as_ref().map(|payload| {
-                                lower_ty(payload, &declaration
-                                    .parameters
-                                    .iter()
-                                    .cloned()
-                                    .zip(declaration.parameter_ids.iter().copied().map(MonoType::Var))
-                                    .collect())
+                                lower_ty(
+                                    payload,
+                                    &declaration
+                                        .parameters
+                                        .iter()
+                                        .cloned()
+                                        .zip(
+                                            declaration
+                                                .parameter_ids
+                                                .iter()
+                                                .copied()
+                                                .map(MonoType::Var),
+                                        )
+                                        .collect(),
+                                )
                             }),
                         },
                         SumAlt::Bare(ty) => MonoSumAlt::Bare(lower_ty(
@@ -1649,10 +1649,9 @@ fn install_type_declarations(
         };
         for constructor in &declaration.constructors {
             let body = match &constructor.payload {
-                Some(payload) => MonoType::Function(
-                    Box::new(payload.clone()),
-                    Box::new(result.clone()),
-                ),
+                Some(payload) => {
+                    MonoType::Function(Box::new(payload.clone()), Box::new(result.clone()))
+                }
                 None => result.clone(),
             };
             env.insert(
@@ -1780,7 +1779,6 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
     Ok(())
 }
 
-
 fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
     let mut type_names = BTreeSet::from_iter(
         ["int", "float", "str", "bool", "bytes", "unit", "char"]
@@ -1796,10 +1794,7 @@ fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
         match statement {
             Stmt::Decl(Decl::Type(declaration)) => {
                 if !type_names.insert(declaration.name.clone()) {
-                    return Err(format!(
-                        "duplicate type declaration '{}'",
-                        declaration.name
-                    ));
+                    return Err(format!("duplicate type declaration '{}'", declaration.name));
                 }
                 if let Ty::Sum(alternatives) = &declaration.ty {
                     for alternative in alternatives {
@@ -1832,14 +1827,17 @@ fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
                     method_owners.insert(spec.name.clone(), class.name.clone());
                 }
                 if methods.is_empty() {
-                    return Err(format!("class '{}' requires at least one method", class.name));
+                    return Err(format!(
+                        "class '{}' requires at least one method",
+                        class.name
+                    ));
                 }
                 classes.insert(class.name.clone(), (class.params.len(), methods));
             }
             Stmt::Decl(Decl::Impl(implementation)) => {
-                let (parameter_count, required) = classes.get(&implementation.class).ok_or_else(|| {
-                    format!("unknown class '{}'", implementation.class)
-                })?;
+                let (parameter_count, required) = classes
+                    .get(&implementation.class)
+                    .ok_or_else(|| format!("unknown class '{}'", implementation.class))?;
                 if implementation.target.len() != *parameter_count {
                     return Err(format!(
                         "class '{}' expects {} implementation type argument(s), got {}",

@@ -132,27 +132,31 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
             println!("{}", intrinsic.args[0]);
             Ok(Value::Unit)
         }
-        IntrinsicKind::TypeOf => Ok(Value::Str(match &intrinsic.args[0] {
-            Value::Unit => "unit",
-            Value::Bool(_) => "bool",
-            Value::Int(_) => "int",
-            Value::Float(_) => "float",
-            Value::Str(_) => "str",
-            Value::Tuple(_) => "tuple",
-            Value::List(_) => "list",
-            Value::Record(_) => "record",
-            Value::Sum { .. } => "sum",
-            Value::Closure(_) => "function",
-            Value::Intrinsic(_) => "function",
-            Value::Ref(_) => "ref",
-        }
-        .to_string())),
+        IntrinsicKind::TypeOf => Ok(Value::Str(
+            match &intrinsic.args[0] {
+                Value::Unit => "unit",
+                Value::Bool(_) => "bool",
+                Value::Int(_) => "int",
+                Value::Float(_) => "float",
+                Value::Str(_) => "str",
+                Value::Tuple(_) => "tuple",
+                Value::List(_) => "list",
+                Value::Record(_) => "record",
+                Value::Sum { .. } => "sum",
+                Value::Closure(_) => "function",
+                Value::Intrinsic(_) => "function",
+                Value::Ref(_) => "ref",
+            }
+            .to_string(),
+        )),
         IntrinsicKind::Len => match &intrinsic.args[0] {
             Value::List(items) => Ok(Value::Int(items.len() as i64)),
             Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
             Value::Str(text) => Ok(Value::Int(text.chars().count() as i64)),
             Value::Record(fields) => Ok(Value::Int(fields.len() as i64)),
-            value => Err(format!("len expects list, tuple, record, or string; got {value}")),
+            value => Err(format!(
+                "len expects list, tuple, record, or string; got {value}"
+            )),
         },
         IntrinsicKind::ListLen => match &intrinsic.args[0] {
             Value::List(items) => Ok(Value::Int(items.len() as i64)),
@@ -300,7 +304,9 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
                 }
                 Ok(Value::List(out))
             }
-            (func, value) => Err(format!("map expects (function, list); got {func} and {value}")),
+            (func, value) => Err(format!(
+                "map expects (function, list); got {func} and {value}"
+            )),
         },
         IntrinsicKind::Filter => match (&intrinsic.args[0], &intrinsic.args[1]) {
             (func, Value::List(items)) => {
@@ -309,37 +315,47 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
                     match apply_one(func.clone(), item.clone())? {
                         Value::Bool(true) => out.push(item.clone()),
                         Value::Bool(false) => {}
-                        value => return Err(format!("filter predicate must return bool; got {value}")),
+                        value => {
+                            return Err(format!("filter predicate must return bool; got {value}"))
+                        }
                     }
                 }
                 Ok(Value::List(out))
             }
-            (func, value) => Err(format!("filter expects (function, list); got {func} and {value}")),
-        },
-        IntrinsicKind::Foldl => match (&intrinsic.args[0], &intrinsic.args[1], &intrinsic.args[2]) {
-            (func, init, Value::List(items)) => {
-                let mut acc = init.clone();
-                for item in items {
-                    acc = apply_one(apply_one(func.clone(), acc)?, item.clone())?;
-                }
-                Ok(acc)
-            }
-            (func, init, value) => Err(format!(
-                "foldl expects (function, init, list); got {func}, {init}, and {value}"
+            (func, value) => Err(format!(
+                "filter expects (function, list); got {func} and {value}"
             )),
         },
+        IntrinsicKind::Foldl => {
+            match (&intrinsic.args[0], &intrinsic.args[1], &intrinsic.args[2]) {
+                (func, init, Value::List(items)) => {
+                    let mut acc = init.clone();
+                    for item in items {
+                        acc = apply_one(apply_one(func.clone(), acc)?, item.clone())?;
+                    }
+                    Ok(acc)
+                }
+                (func, init, value) => Err(format!(
+                    "foldl expects (function, init, list); got {func}, {init}, and {value}"
+                )),
+            }
+        }
         IntrinsicKind::Any => match (&intrinsic.args[0], &intrinsic.args[1]) {
             (func, Value::List(items)) => {
                 for item in items {
                     match apply_one(func.clone(), item.clone())? {
                         Value::Bool(true) => return Ok(Value::Bool(true)),
                         Value::Bool(false) => {}
-                        value => return Err(format!("any predicate must return bool; got {value}")),
+                        value => {
+                            return Err(format!("any predicate must return bool; got {value}"))
+                        }
                     }
                 }
                 Ok(Value::Bool(false))
             }
-            (func, value) => Err(format!("any expects (function, list); got {func} and {value}")),
+            (func, value) => Err(format!(
+                "any expects (function, list); got {func} and {value}"
+            )),
         },
         IntrinsicKind::All => match (&intrinsic.args[0], &intrinsic.args[1]) {
             (func, Value::List(items)) => {
@@ -347,12 +363,16 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
                     match apply_one(func.clone(), item.clone())? {
                         Value::Bool(true) => {}
                         Value::Bool(false) => return Ok(Value::Bool(false)),
-                        value => return Err(format!("all predicate must return bool; got {value}")),
+                        value => {
+                            return Err(format!("all predicate must return bool; got {value}"))
+                        }
                     }
                 }
                 Ok(Value::Bool(true))
             }
-            (func, value) => Err(format!("all expects (function, list); got {func} and {value}")),
+            (func, value) => Err(format!(
+                "all expects (function, list); got {func} and {value}"
+            )),
         },
         IntrinsicKind::Range => {
             let start = expect_int(&intrinsic.args[0], "range")?;
@@ -400,9 +420,7 @@ fn apply_native(name: &str, args: &[Value]) -> Result<Value, String> {
             [Value::Float(value)] => Ok(Value::Float(value.abs())),
             _ => Err("__float_abs expects float".into()),
         },
-        "__int_equal" | "__float_equal" | "__bool_equal" | "__str_equal" => {
-            equal_native(args)
-        }
+        "__int_equal" | "__float_equal" | "__bool_equal" | "__str_equal" => equal_native(args),
         "__str_concat" => match args {
             [Value::Str(left), Value::Str(right)] => Ok(Value::Str(format!("{left}{right}"))),
             _ => Err("__str_concat expects str, str".into()),
@@ -421,22 +439,28 @@ fn apply_native(name: &str, args: &[Value]) -> Result<Value, String> {
             _ => Err(format!("{name} expects one argument")),
         },
         "__str_contains" => match args {
-            [Value::Str(haystack), Value::Str(needle)] => Ok(Value::Bool(haystack.contains(needle))),
+            [Value::Str(haystack), Value::Str(needle)] => {
+                Ok(Value::Bool(haystack.contains(needle)))
+            }
             _ => Err("__str_contains expects str, str".into()),
         },
         "__list_contains" => match args {
-            [Value::List(items), needle] => Ok(Value::Bool(items.iter().any(|item| value_eq(item, needle)))),
+            [Value::List(items), needle] => {
+                Ok(Value::Bool(items.iter().any(|item| value_eq(item, needle))))
+            }
             _ => Err("__list_contains expects list, value".into()),
         },
-        "__list_take" | "__list_drop" | "__list_reverse" | "__list_slice"
-        | "__str_take" | "__str_drop" | "__str_reverse" | "__str_slice" => {
-            apply_sequence_native(name, args)
-        }
+        "__list_take" | "__list_drop" | "__list_reverse" | "__list_slice" | "__str_take"
+        | "__str_drop" | "__str_reverse" | "__str_slice" => apply_sequence_native(name, args),
         _ => Err(format!("unknown native intrinsic {name}")),
     }
 }
 
-fn int_bin(args: &[Value], op: impl FnOnce(i64, i64) -> Option<i64>, name: &str) -> Result<Value, String> {
+fn int_bin(
+    args: &[Value],
+    op: impl FnOnce(i64, i64) -> Option<i64>,
+    name: &str,
+) -> Result<Value, String> {
     match args {
         [Value::Int(left), Value::Int(right)] => op(*left, *right)
             .map(Value::Int)
@@ -471,38 +495,63 @@ fn apply_sequence_native(name: &str, args: &[Value]) -> Result<Value, String> {
     let operation = &name[6..];
     match (operation, args) {
         ("take", [Value::Int(count), value]) | ("drop", [Value::Int(count), value])
-            if *count >= 0 => {
+            if *count >= 0 =>
+        {
             let count = *count as usize;
             if is_string {
-                let Value::Str(text) = value else { return Err(format!("{name} expects str")); };
+                let Value::Str(text) = value else {
+                    return Err(format!("{name} expects str"));
+                };
                 let chars: Vec<_> = text.chars().collect();
-                let range = if operation == "take" { 0..count.min(chars.len()) } else { count.min(chars.len())..chars.len() };
+                let range = if operation == "take" {
+                    0..count.min(chars.len())
+                } else {
+                    count.min(chars.len())..chars.len()
+                };
                 Ok(Value::Str(chars[range].iter().collect()))
             } else {
-                let Value::List(items) = value else { return Err(format!("{name} expects list")); };
-                let range = if operation == "take" { 0..count.min(items.len()) } else { count.min(items.len())..items.len() };
+                let Value::List(items) = value else {
+                    return Err(format!("{name} expects list"));
+                };
+                let range = if operation == "take" {
+                    0..count.min(items.len())
+                } else {
+                    count.min(items.len())..items.len()
+                };
                 Ok(Value::List(items[range].to_vec()))
             }
         }
         ("reverse", [value]) => {
             if is_string {
-                let Value::Str(text) = value else { return Err(format!("{name} expects str")); };
+                let Value::Str(text) = value else {
+                    return Err(format!("{name} expects str"));
+                };
                 Ok(Value::Str(text.chars().rev().collect()))
             } else {
-                let Value::List(items) = value else { return Err(format!("{name} expects list")); };
+                let Value::List(items) = value else {
+                    return Err(format!("{name} expects list"));
+                };
                 let mut result = items.clone();
                 result.reverse();
                 Ok(Value::List(result))
             }
         }
-        ("slice", [Value::Int(start), Value::Int(length), value]) if *start >= 0 && *length >= 0 => {
+        ("slice", [Value::Int(start), Value::Int(length), value])
+            if *start >= 0 && *length >= 0 =>
+        {
             let (start, length) = (*start as usize, *length as usize);
             if is_string {
-                let Value::Str(text) = value else { return Err(format!("{name} expects str")); };
+                let Value::Str(text) = value else {
+                    return Err(format!("{name} expects str"));
+                };
                 Ok(Value::Str(text.chars().skip(start).take(length).collect()))
             } else {
-                let Value::List(items) = value else { return Err(format!("{name} expects list")); };
-                Ok(Value::List(items.iter().skip(start).take(length).cloned().collect()))
+                let Value::List(items) = value else {
+                    return Err(format!("{name} expects list"));
+                };
+                Ok(Value::List(
+                    items.iter().skip(start).take(length).cloned().collect(),
+                ))
             }
         }
         _ => Err(format!("invalid arguments to {name}")),
@@ -512,7 +561,9 @@ fn apply_sequence_native(name: &str, args: &[Value]) -> Result<Value, String> {
 fn expect_non_negative_int(value: &Value, name: &str) -> Result<usize, String> {
     match value {
         Value::Int(v) if *v >= 0 => Ok(*v as usize),
-        _ => Err(format!("{name} expects a non-negative integer index/count; got {value}")),
+        _ => Err(format!(
+            "{name} expects a non-negative integer index/count; got {value}"
+        )),
     }
 }
 
@@ -525,33 +576,45 @@ fn expect_int(value: &Value, name: &str) -> Result<i64, String> {
 
 fn intrinsic_min_max(left: &Value, right: &Value, want_min: bool) -> Result<Value, String> {
     match (left, right) {
-        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(if want_min { (*a).min(*b) } else { (*a).max(*b) })),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(if (want_min && a <= b) || (!want_min && a >= b) {
-            *a
+        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(if want_min {
+            (*a).min(*b)
         } else {
-            *b
+            (*a).max(*b)
         })),
-        (Value::Int(a), Value::Float(b)) => {
-            let a = *a as f64;
-            Ok(Value::Float(if (want_min && a <= *b) || (!want_min && a >= *b) {
-                a
+        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(
+            if (want_min && a <= b) || (!want_min && a >= b) {
+                *a
             } else {
                 *b
-            }))
+            },
+        )),
+        (Value::Int(a), Value::Float(b)) => {
+            let a = *a as f64;
+            Ok(Value::Float(
+                if (want_min && a <= *b) || (!want_min && a >= *b) {
+                    a
+                } else {
+                    *b
+                },
+            ))
         }
         (Value::Float(a), Value::Int(b)) => {
             let b = *b as f64;
-            Ok(Value::Float(if (want_min && *a <= b) || (!want_min && *a >= b) {
-                *a
-            } else {
-                b
-            }))
+            Ok(Value::Float(
+                if (want_min && *a <= b) || (!want_min && *a >= b) {
+                    *a
+                } else {
+                    b
+                },
+            ))
         }
-        (Value::Str(a), Value::Str(b)) => Ok(Value::Str(if (want_min && a <= b) || (!want_min && a >= b) {
-            a.clone()
-        } else {
-            b.clone()
-        })),
+        (Value::Str(a), Value::Str(b)) => Ok(Value::Str(
+            if (want_min && a <= b) || (!want_min && a >= b) {
+                a.clone()
+            } else {
+                b.clone()
+            },
+        )),
         _ => Err(format!(
             "{} expects comparable numbers or strings; got {} and {}",
             if want_min { "min" } else { "max" },
