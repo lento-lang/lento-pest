@@ -20,7 +20,8 @@ use std::fmt;
 
 use crate::specialize::OverloadSet;
 use crate::types::{
-    instantiate, unify, MonoType, Substitution, TypeScheme, TypeVarSupply,
+    call_type_compatible, instantiate, unify, MonoType, SchemeConstraint, Substitution, TypeScheme,
+    TypeVarSupply,
 };
 
 /// Why a candidate specialization was rejected at a call site.
@@ -98,13 +99,33 @@ pub fn resolve_call(
     arg_types: &[MonoType],
     expected_result: Option<&MonoType>,
 ) -> Resolution {
+    resolve_call_checked(supply, set, arg_types, expected_result, None)
+}
+
+/// A hook deciding whether a candidate's class constraints are satisfiable.
+/// It receives the candidate's unification substitution and its declared
+/// constraints; the acceptor resolves constraint arguments through the
+/// substitution itself.
+type ConstraintAcceptor<'a> = &'a dyn Fn(&Substitution, &[SchemeConstraint]) -> bool;
+
+/// [`resolve_call`] with an optional constraint acceptor. Candidates whose
+/// arguments and result unify are additionally offered to `accept`; a `false`
+/// answer rejects the candidate. The analysis pass uses this to verify class
+/// instances against the declaration metadata; plain resolution passes `None`.
+pub fn resolve_call_checked(
+    supply: &mut TypeVarSupply,
+    set: &OverloadSet,
+    arg_types: &[MonoType],
+    expected_result: Option<&MonoType>,
+    accept_constraints: Option<ConstraintAcceptor>,
+) -> Resolution {
     let n = arg_types.len();
     let mut survivors: Vec<(usize, TypeScheme)> = Vec::new();
     let mut rejections: Vec<(usize, RejectionReason)> = Vec::new();
 
     for spec in &set.specializations {
         // 2. Instantiate the candidate with fresh variables.
-        let (body, _) = instantiate(supply, &spec.scheme);
+        let (body, constraints) = instantiate(supply, &spec.scheme);
 
         // 3a. Arity / application shape.
         if arity(&body) < n {
@@ -136,9 +157,20 @@ pub fn resolve_call(
         let mut rejected = None;
         for (arg, param) in arg_types.iter().zip(params.iter()) {
             if let Err(e) = unify(&mut subst, arg, param) {
-                rejected = Some(RejectionReason::Unification {
-                    detail: format!("{e}"),
-                });
+                // Record coercion: an actual record may carry fields the
+                // closed parameter omits. Fall back to whole-shape
+                // compatibility over the fully applied call type.
+                let mut applied = result.clone();
+                for arg_type in arg_types.iter().rev() {
+                    applied = MonoType::Function(Box::new(arg_type.clone()), Box::new(applied));
+                }
+                if unify(&mut subst, &body, &applied).is_ok() || call_type_compatible(&body, &applied) {
+                    rejected = None;
+                } else {
+                    rejected = Some(RejectionReason::Unification {
+                        detail: format!("{e}"),
+                    });
+                }
                 break;
             }
         }
@@ -149,6 +181,16 @@ pub fn resolve_call(
                 if unify(&mut subst, &resolved_result, expected).is_err() {
                     rejected = Some(RejectionReason::Unification {
                         detail: "result type does not match expected type".to_string(),
+                    });
+                }
+            }
+        }
+        // 3d. Optional constraint acceptor (e.g. class instance checks).
+        if rejected.is_none() {
+            if let Some(accept) = accept_constraints {
+                if !accept(&subst, &constraints) {
+                    rejected = Some(RejectionReason::Unification {
+                        detail: "class instance constraint not satisfied".to_string(),
                     });
                 }
             }

@@ -19,7 +19,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::ast::{BinaryOp, Expr, FnDecl, Lit, PatKind, Pattern, RecordValueEntry, UnaryOp};
+use crate::resolve::{resolve_call, Resolution};
 use crate::semantics::FunctionGroup;
+use crate::specialize::OverloadSet;
 use crate::types::{
     generalize, instantiate, unify, MonoSumAlt, MonoType, SchemeConstraint, Substitution, TypeEnv, TypeScheme,
     TypeVarSupply, UnifyError,
@@ -142,8 +144,8 @@ pub struct InferCtx {
     /// type arguments concrete.
     pub pending_constraints: Vec<SchemeConstraint>,
     pub type_declarations: BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
-    /// Inferred alternatives for names with more than one specialization.
-    pub overload_schemes: BTreeMap<String, Vec<TypeScheme>>,
+    /// Overload sets available while inferring later declarations and calls.
+    pub overloads: BTreeMap<String, OverloadSet>,
 }
 
 impl InferCtx {
@@ -154,7 +156,7 @@ impl InferCtx {
             constraints: Vec::new(),
             pending_constraints: Vec::new(),
             type_declarations: BTreeMap::new(),
-            overload_schemes: BTreeMap::new(),
+            overloads: BTreeMap::new(),
         }
     }
 
@@ -621,8 +623,7 @@ fn infer_list_element_type(ctx: &mut InferCtx, types: &[MonoType]) -> Result<Mon
     })
 }
 
-/// Gather a curried application before choosing an overload. The first
-/// argument alone rarely distinguishes `map`; the ADT arrives later.
+/// Gather a curried application before choosing an overload.
 fn applied_call<'a>(expr: &'a Expr, arguments: &mut Vec<&'a Expr>) -> Option<&'a str> {
     match expr {
         Expr::Var(var) => Some(&var.name),
@@ -632,6 +633,13 @@ fn applied_call<'a>(expr: &'a Expr, arguments: &mut Vec<&'a Expr>) -> Option<&'a
             Some(name)
         }
         _ => None,
+    }
+}
+
+fn callable_arity(ty: &MonoType) -> usize {
+    match ty {
+        MonoType::Function(_, result) => 1 + callable_arity(result),
+        _ => 0,
     }
 }
 
@@ -646,19 +654,12 @@ fn infer_overloaded_call(
     let Some(name) = applied_call(expr, &mut source_arguments) else {
         return Ok(None);
     };
-    let Some(schemes) = ctx.overload_schemes.get(name).cloned() else {
+    let Some(set) = ctx.overloads.get(name).cloned() else {
         return Ok(None);
     };
-    let arity = |scheme: &TypeScheme| {
-        let mut count = 0;
-        let mut ty = &scheme.body;
-        while let MonoType::Function(_, result) = ty {
-            count += 1;
-            ty = result;
-        }
-        count
-    };
-    if !schemes.iter().any(|scheme| arity(scheme) == source_arguments.len()) {
+    if !set.specializations.iter().any(|specialization| {
+        callable_arity(&specialization.scheme.body) == source_arguments.len()
+    }) {
         return Ok(None); // Partial applications retain their function type.
     }
 
@@ -666,41 +667,27 @@ fn infer_overloaded_call(
     for argument in source_arguments {
         arguments.push(infer_typed_expr(ctx, argument, &mut env.clone())?);
     }
-    let mut candidates = Vec::new();
-    for scheme in schemes.iter().filter(|scheme| arity(scheme) == arguments.len()) {
-        let mut supply = ctx.supply.clone();
-        let (signature, constraints) = instantiate(&mut supply, scheme);
-        let mut substitution = ctx.subst.clone();
-        let mut result = signature.clone();
-        let mut valid = true;
-        for argument in &arguments {
-            let MonoType::Function(parameter, output) = result.clone() else {
-                valid = false;
-                break;
-            };
-            if unify(&mut substitution, &parameter, &argument.ty).is_err() {
-                valid = false;
-                break;
-            }
-            result = *output;
-        }
-        if valid {
-            candidates.push((supply, substitution, signature, result, constraints));
-        }
-    }
-
-    let argument_types = arguments.iter().map(|arg| ctx.resolve(&arg.ty)).collect();
-    let (supply, substitution, signature, result, constraints) = match candidates.len() {
-        0 => return Err(TypeError { kind: TypeErrorKind::NoOverload {
+    let argument_types = arguments.iter().map(|arg| ctx.resolve(&arg.ty)).collect::<Vec<_>>();
+    let selected = match resolve_call(&mut ctx.supply, &set, &argument_types, None) {
+        Resolution::Selected(id) => id,
+        Resolution::NoMatch { .. } => return Err(TypeError { kind: TypeErrorKind::NoOverload {
             name: name.to_string(), arguments: argument_types,
         } }),
-        1 => candidates.pop().unwrap(),
-        _ => return Err(TypeError { kind: TypeErrorKind::AmbiguousOverload {
+        Resolution::Ambiguous { .. } => return Err(TypeError { kind: TypeErrorKind::AmbiguousOverload {
             name: name.to_string(), arguments: argument_types,
         } }),
     };
-    ctx.supply = supply;
-    ctx.subst = substitution;
+    let (signature, constraints) = instantiate(&mut ctx.supply, &set.specializations[selected].scheme);
+    let mut result = signature.clone();
+    for argument in &arguments {
+        let MonoType::Function(parameter, output) = result.clone() else {
+            return Err(TypeError { kind: TypeErrorKind::NoOverload {
+                name: name.to_string(), arguments: argument_types,
+            } });
+        };
+        unify_call_argument(ctx, &argument.ty, &parameter)?;
+        result = *output;
+    }
     ctx.constraints.extend(constraints.clone());
     ctx.pending_constraints.extend(constraints);
     Ok(Some(TypedExpr {
@@ -711,7 +698,7 @@ fn infer_overloaded_call(
                 kind: TypedExprKind::Var(name.to_string()),
             }),
             args: arguments,
-            specialization: None,
+            specialization: Some(selected),
         },
     }))
 }
