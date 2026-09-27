@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::ast::{Decl, Expr, PatKind, Program, Stmt, SumAlt, Ty};
 use crate::infer::{base_env, check_pattern, infer_expr, infer_typed_expr, InferCtx};
 use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
+use crate::resolve::{resolve_call_checked, Resolution};
 use crate::semantics::{
     collect_function_groups, FunctionGroup, SpecOrigin, TypedExpr, TypedExprKind,
     TypedLet, TypedOverloadSet, TypedPatternClause, TypedProgram, TypedSpecialization,
@@ -17,7 +18,7 @@ use crate::semantics::{
 use crate::specialize::{partition, OverloadSet};
 use crate::specs::associate_specs;
 use crate::types::{
-    generalize, instantiate, lower_constraint, lower_ty, unify, MonoSumAlt, MonoType,
+    generalize, lower_constraint, lower_ty, unify, MonoSumAlt, MonoType, SchemeConstraint,
     Substitution, TypeEnv, TypeScheme, TypeVarSupply,
 };
 
@@ -155,7 +156,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
             validate_nested_matches(&clause.body, &group.name)?;
         }
 
-        associate_specs(&mut ctx.supply, group, &set)
+        associate_specs(&mut ctx.supply, group, &set, &ctx.type_declarations)
             .map_err(|error| format!("specification failed for '{}': {error}", group.name))?;
 
         // The inferred specialization is now the canonical environment entry
@@ -163,6 +164,9 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
         // the seed above, which is what permits recursion.
         if let Some(first) = set.specializations.first() {
             env.insert(group.name.clone(), first.scheme.clone());
+        }
+        if set.specializations.len() > 1 {
+            ctx.overloads.insert(group.name.clone(), set.clone());
         }
         overloads.push(set);
     }
@@ -803,73 +807,49 @@ fn resolve_typed_expr_calls(
                 return Ok(());
             }
 
-            let mut matches = Vec::new();
-            let mut rejections = Vec::new();
-            for candidate in &set.specializations {
-                if specialization_arity(candidate) != applied_arguments.len() {
-                    continue;
-                }
-                let mut supply = TypeVarSupply::new();
-                let (candidate_type, constraints) = instantiate(&mut supply, &candidate.scheme);
-                let mut substitution = Substitution::new();
-                if unify(&mut substitution, &candidate_type, &applied_type).is_ok()
-                    || crate::types::call_type_compatible(&candidate_type, &applied_type)
-                {
-                    let resolved_constraints = constraints
+            let argument_types = applied_arguments
+                .iter()
+                .map(|argument| argument.ty.clone())
+                .collect::<Vec<_>>();
+            // Candidates must satisfy their class constraints against the
+            // resolved instance metadata.
+            let accept_constraints = |subst: &Substitution, constraints: &[SchemeConstraint]| {
+                constraints.iter().all(|constraint| {
+                    let args = constraint
+                        .args
                         .iter()
-                        .map(|constraint| {
-                            (
-                                constraint.name.clone(),
-                                constraint
-                                    .args
-                                    .iter()
-                                    .map(|argument| substitution.apply(argument))
-                                    .collect::<Vec<_>>(),
-                            )
-                        })
+                        .map(|argument| subst.apply(argument))
                         .collect::<Vec<_>>();
-                    let accepted = resolved_constraints.iter().all(|(class, args)| {
-                        !args.iter().any(contains_type_variable)
-                            && declarations.instances.iter().any(|instance| {
-                                instance.class == *class
-                                    && instance_satisfies(instance, args, declarations, &mut Vec::new())
-                            })
-                    });
-                    if accepted {
-                        matches.push((candidate_specificity(candidate), candidate.id));
-                    } else {
-                        rejections.push(resolved_constraints);
-                    }
-                } else {
-                    rejections.push(vec![(format!("{candidate_type:?}"), vec![applied_type.clone()])]);
-                }
-            }
-            matches.sort_by(|(left_score, left_id), (right_score, right_id)| {
-                right_score
-                    .cmp(left_score)
-                    .then_with(|| left_id.cmp(right_id))
-            });
-            match matches.as_slice() {
-                [] => {
-                    let candidates = set
-                        .specializations
+                    !args.iter().any(contains_type_variable)
+                        && declarations.instances.iter().any(|instance| {
+                            instance.class == constraint.name
+                                && instance_satisfies(instance, &args, declarations, &mut Vec::new())
+                        })
+                })
+            };
+            match resolve_call_checked(
+                &mut TypeVarSupply::new(),
+                set,
+                &argument_types,
+                Some(&expression.ty),
+                Some(&accept_constraints),
+            ) {
+                Resolution::Selected(id) => *specialization = Some(id),
+                Resolution::NoMatch { rejections } => {
+                    let reasons = rejections
                         .iter()
-                        .map(|candidate| {
-                            (&candidate.scheme.body, &candidate.scheme.constraints)
-                        })
-                        .collect::<Vec<_>>();
+                        .map(|(id, reason)| format!("#{id}: {reason}"))
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     return Err(format!(
-                        "no specialization of '{name}' accepts call type {applied_type:?}; candidates: {candidates:?}; constraints rejected: {rejections:?}; instances: {:?}",
-                        declarations.instances
+                        "no specialization of '{name}' accepts call type {applied_type:?}; rejections: {reasons}"
                     ));
                 }
-                [(_, id)] => *specialization = Some(*id),
-                [(best_score, _id), (next_score, _), ..] if best_score == next_score => {
+                Resolution::Ambiguous { .. } => {
                     return Err(format!(
                         "ambiguous overload call to '{name}' for fully typed arguments"
                     ));
                 }
-                [(_, id), ..] => *specialization = Some(*id),
             }
         }
         TypedExprKind::Lambda { body, .. } => {
@@ -956,46 +936,6 @@ fn contains_type_variable(ty: &MonoType) -> bool {
     }
 }
 
-fn candidate_specificity(candidate: &crate::specialize::Specialization) -> (usize, usize) {
-    candidate
-        .declared_domain
-        .iter()
-        .flatten()
-        .map(|ty| {
-            fn size(ty: &MonoType) -> usize {
-                match ty {
-                    MonoType::Var(_) => 0,
-                    MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
-                        1 + args.iter().map(size).sum::<usize>()
-                    }
-                    MonoType::Function(from, to) => 1 + size(from) + size(to),
-                    MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
-                        1 + size(inner)
-                    }
-                    MonoType::Record { fields, .. } => {
-                        1 + fields.iter().map(|(_, ty)| size(ty)).sum::<usize>()
-                    }
-                    MonoType::Sum { args, alts, .. } => {
-                        1 + args.iter().map(size).sum::<usize>()
-                            + alts
-                                .iter()
-                                .map(|alt| match alt {
-                                    MonoSumAlt::Constructor { payload, .. } => {
-                                        payload.as_ref().map_or(0, size)
-                                    }
-                                    MonoSumAlt::Bare(ty) => size(ty),
-                                    MonoSumAlt::Row(ty) => size(ty),
-                                })
-                                .sum::<usize>()
-                    }
-                }
-            }
-            (usize::from(!contains_type_variable(ty)), size(ty))
-        })
-        .fold((0, 0), |(count, total), (concrete, size)| {
-            (count + concrete, total + size)
-        })
-}
 
 fn build_typed_program(
     groups: &[FunctionGroup],

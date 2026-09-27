@@ -23,7 +23,7 @@ use std::fmt;
 use crate::infer::{infer_function_group, InferCtx};
 use crate::semantics::FunctionGroup;
 use crate::types::{
-    alpha_equiv, canonicalize, MonoType, TypeEnv, TypeScheme, TypeVarSupply,
+    alpha_equiv, canonicalize, MonoSumAlt, MonoType, TypeEnv, TypeScheme, TypeVarSupply,
 };
 
 /// One clause assigned to a specialization, with its inferred type.
@@ -143,6 +143,34 @@ fn least_generalization(
                 args.push(least_generalization(x, y, map, next)?);
             }
             Some(MonoType::Constructor(n1.clone(), args))
+        }
+        (MonoType::Sum { name: left, args: left_args, alts: left_alts },
+         MonoType::Sum { name: right, args: right_args, alts: right_alts })
+            if left == right && left_args.len() == right_args.len()
+                && left_alts.len() == right_alts.len() =>
+        {
+            let args = left_args.iter().zip(right_args).map(|(a, b)| {
+                least_generalization(a, b, map, next)
+            }).collect::<Option<Vec<_>>>()?;
+            let alts = left_alts.iter().zip(right_alts).map(|(a, b)| {
+                match (a, b) {
+                    (MonoSumAlt::Constructor { name: left, payload: x },
+                     MonoSumAlt::Constructor { name: right, payload: y }) if left == right => {
+                        let payload = match (x, y) {
+                            (Some(x), Some(y)) => Some(least_generalization(x, y, map, next)?),
+                            (None, None) => None,
+                            _ => return None,
+                        };
+                        Some(MonoSumAlt::Constructor { name: left.clone(), payload })
+                    }
+                    (MonoSumAlt::Bare(x), MonoSumAlt::Bare(y)) =>
+                        Some(MonoSumAlt::Bare(least_generalization(x, y, map, next)?)),
+                    (MonoSumAlt::Row(x), MonoSumAlt::Row(y)) =>
+                        Some(MonoSumAlt::Row(least_generalization(x, y, map, next)?)),
+                    _ => None,
+                }
+            }).collect::<Option<Vec<_>>>()?;
+            Some(MonoType::Sum { name: left.clone(), args, alts })
         }
         (MonoType::Function(f1, t1), MonoType::Function(f2, t2)) => Some(MonoType::Function(
             Box::new(least_generalization(f1, f2, map, next)?),

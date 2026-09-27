@@ -19,7 +19,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use crate::ast::{BinaryOp, Expr, FnDecl, Lit, PatKind, Pattern, RecordValueEntry, UnaryOp};
+use crate::resolve::{resolve_call, Resolution};
 use crate::semantics::FunctionGroup;
+use crate::specialize::OverloadSet;
 use crate::types::{
     generalize, instantiate, unify, MonoSumAlt, MonoType, SchemeConstraint, Substitution, TypeEnv, TypeScheme,
     TypeVarSupply, UnifyError,
@@ -43,6 +45,8 @@ pub enum TypeErrorKind {
     BadOperator { op: String, ty: MonoType },
     /// A record field access on a non-record (or unknown-field) type.
     BadMember { ty: MonoType, field: String },
+    NoOverload { name: String, arguments: Vec<MonoType> },
+    AmbiguousOverload { name: String, arguments: Vec<MonoType> },
 }
 
 impl fmt::Display for TypeError {
@@ -58,6 +62,12 @@ impl fmt::Display for TypeError {
             }
             TypeErrorKind::BadMember { ty, field } => {
                 write!(f, "type {ty:?} has no field `{field}`")
+            }
+            TypeErrorKind::NoOverload { name, arguments } => {
+                write!(f, "no overload of `{name}` accepts arguments {arguments:?}")
+            }
+            TypeErrorKind::AmbiguousOverload { name, arguments } => {
+                write!(f, "ambiguous overload of `{name}` for arguments {arguments:?}")
             }
         }
     }
@@ -134,6 +144,8 @@ pub struct InferCtx {
     /// type arguments concrete.
     pub pending_constraints: Vec<SchemeConstraint>,
     pub type_declarations: BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
+    /// Overload sets available while inferring later declarations and calls.
+    pub overloads: BTreeMap<String, OverloadSet>,
 }
 
 impl InferCtx {
@@ -144,6 +156,7 @@ impl InferCtx {
             constraints: Vec::new(),
             pending_constraints: Vec::new(),
             type_declarations: BTreeMap::new(),
+            overloads: BTreeMap::new(),
         }
     }
 
@@ -174,125 +187,7 @@ impl InferCtx {
         ty: &crate::ast::Ty,
         binders: &BTreeMap<String, MonoType>,
     ) -> MonoType {
-        match ty {
-            crate::ast::Ty::Named { name, args } => {
-                if args.is_empty() {
-                    if let Some(bound) = binders.get(name) {
-                        return bound.clone();
-                    }
-                    if let Some(primitive) = match name.as_str() {
-                        "Int" => Some("int"),
-                        "Float" => Some("float"),
-                        "String" => Some("str"),
-                        "Bool" => Some("bool"),
-                        "Unit" => Some("unit"),
-                        "usize" => Some("int"),
-                        _ => None,
-                    } {
-                        return if primitive == "unit" {
-                            MonoType::Tuple(Vec::new())
-                        } else {
-                            MonoType::Constructor(primitive.to_string(), Vec::new())
-                        };
-                    }
-                }
-                if let Some((parameters, source)) = self.type_declarations.get(name) {
-                    if parameters.len() == args.len() {
-                        let mapping = parameters
-                            .iter()
-                            .zip(args)
-                            .map(|(parameter, argument)| {
-                                (parameter.clone(), self.lower_surface_ty(argument, binders))
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        if let crate::ast::Ty::Sum(_) = source {
-                            if let MonoType::Sum { alts, .. } = self.lower_surface_ty(source, &mapping) {
-                                return MonoType::Sum {
-                                    name: name.clone(),
-                                    args: args
-                                        .iter()
-                                        .map(|argument| self.lower_surface_ty(argument, binders))
-                                        .collect(),
-                                    alts,
-                                };
-                            }
-                        }
-                        return self.lower_surface_ty(source, &mapping);
-                    }
-                }
-                MonoType::Constructor(
-                    name.clone(),
-                    args.iter()
-                        .map(|argument| self.lower_surface_ty(argument, binders))
-                        .collect(),
-                )
-            }
-            crate::ast::Ty::Tuple(items) => MonoType::Tuple(
-                items
-                    .iter()
-                    .map(|item| self.lower_surface_ty(item, binders))
-                    .collect(),
-            ),
-            crate::ast::Ty::List(inner) => {
-                MonoType::List(Box::new(self.lower_surface_ty(inner, binders)))
-            }
-            crate::ast::Ty::Arrow { from, to } => MonoType::Function(
-                Box::new(self.lower_surface_ty(from, binders)),
-                Box::new(self.lower_surface_ty(to, binders)),
-            ),
-            crate::ast::Ty::Ref(inner) => {
-                MonoType::Ref(Box::new(self.lower_surface_ty(inner, binders)))
-            }
-            crate::ast::Ty::Mut(inner) => {
-                MonoType::Mut(Box::new(self.lower_surface_ty(inner, binders)))
-            }
-            crate::ast::Ty::NamedBinder { ty, .. } => self.lower_surface_ty(ty, binders),
-            crate::ast::Ty::Sum(alts) => {
-                MonoType::Sum {
-                    name: format!("<sum:{}>", alts.len()),
-                    args: Vec::new(),
-                    alts: alts
-                        .iter()
-                        .map(|alt| match alt {
-                            crate::ast::SumAlt::Ctor { name, payload } => {
-                                MonoSumAlt::Constructor {
-                                    name: name.clone(),
-                                    payload: payload
-                                        .as_ref()
-                                        .map(|payload| self.lower_surface_ty(payload, binders)),
-                                }
-                            }
-                            crate::ast::SumAlt::Bare(ty) => {
-                                MonoSumAlt::Bare(self.lower_surface_ty(ty, binders))
-                            }
-                            crate::ast::SumAlt::Row(name) => MonoSumAlt::Row(
-                                binders
-                                    .get(name)
-                                    .cloned()
-                                    .unwrap_or_else(|| MonoType::Constructor(name.clone(), Vec::new())),
-                            ),
-                        })
-                        .collect(),
-                }
-            }
-            crate::ast::Ty::RecordType(fields) => MonoType::Record {
-                fields: fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), self.lower_surface_ty(ty, binders)))
-                    .collect(),
-                rest: None,
-            },
-            crate::ast::Ty::OpenRecordType { fields, row } => MonoType::Record {
-                fields: fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), self.lower_surface_ty(ty, binders)))
-                    .collect(),
-                rest: match binders.get(row) {
-                    Some(MonoType::Var(id)) => Some(*id),
-                    _ => None,
-                },
-            },
-        }
+        crate::types::lower_surface_ty(ty, binders, &self.type_declarations)
     }
 }
 
@@ -610,6 +505,86 @@ fn infer_list_element_type(ctx: &mut InferCtx, types: &[MonoType]) -> Result<Mon
     })
 }
 
+/// Gather a curried application before choosing an overload.
+fn applied_call<'a>(expr: &'a Expr, arguments: &mut Vec<&'a Expr>) -> Option<&'a str> {
+    match expr {
+        Expr::Var(var) => Some(&var.name),
+        Expr::Call(call) => {
+            let name = applied_call(&call.callee, arguments)?;
+            arguments.extend(call.args.iter());
+            Some(name)
+        }
+        _ => None,
+    }
+}
+
+fn callable_arity(ty: &MonoType) -> usize {
+    match ty {
+        MonoType::Function(_, result) => 1 + callable_arity(result),
+        _ => 0,
+    }
+}
+
+fn infer_overloaded_call(
+    ctx: &mut InferCtx,
+    expr: &Expr,
+    env: &TypeEnv,
+) -> Result<Option<crate::semantics::TypedExpr>, TypeError> {
+    use crate::semantics::{TypedExpr, TypedExprKind};
+
+    let mut source_arguments = Vec::new();
+    let Some(name) = applied_call(expr, &mut source_arguments) else {
+        return Ok(None);
+    };
+    let Some(set) = ctx.overloads.get(name).cloned() else {
+        return Ok(None);
+    };
+    if !set.specializations.iter().any(|specialization| {
+        callable_arity(&specialization.scheme.body) == source_arguments.len()
+    }) {
+        return Ok(None); // Partial applications retain their function type.
+    }
+
+    let mut arguments = Vec::with_capacity(source_arguments.len());
+    for argument in source_arguments {
+        arguments.push(infer_typed_expr(ctx, argument, &mut env.clone())?);
+    }
+    let argument_types = arguments.iter().map(|arg| ctx.resolve(&arg.ty)).collect::<Vec<_>>();
+    let selected = match resolve_call(&mut ctx.supply, &set, &argument_types, None) {
+        Resolution::Selected(id) => id,
+        Resolution::NoMatch { .. } => return Err(TypeError { kind: TypeErrorKind::NoOverload {
+            name: name.to_string(), arguments: argument_types,
+        } }),
+        Resolution::Ambiguous { .. } => return Err(TypeError { kind: TypeErrorKind::AmbiguousOverload {
+            name: name.to_string(), arguments: argument_types,
+        } }),
+    };
+    let (signature, constraints) = instantiate(&mut ctx.supply, &set.specializations[selected].scheme);
+    let mut result = signature.clone();
+    for argument in &arguments {
+        let MonoType::Function(parameter, output) = result.clone() else {
+            return Err(TypeError { kind: TypeErrorKind::NoOverload {
+                name: name.to_string(), arguments: argument_types,
+            } });
+        };
+        unify_call_argument(ctx, &argument.ty, &parameter)?;
+        result = *output;
+    }
+    ctx.constraints.extend(constraints.clone());
+    ctx.pending_constraints.extend(constraints);
+    Ok(Some(TypedExpr {
+        ty: ctx.resolve(&result),
+        kind: TypedExprKind::Call {
+            callee: Box::new(TypedExpr {
+                ty: ctx.resolve(&signature),
+                kind: TypedExprKind::Var(name.to_string()),
+            }),
+            args: arguments,
+            specialization: Some(selected),
+        },
+    }))
+}
+
 pub fn infer_typed_expr(
     ctx: &mut InferCtx,
     expr: &Expr,
@@ -670,6 +645,9 @@ pub fn infer_typed_expr(
             })
         }
         Expr::Call(c) => {
+            if let Some(overloaded) = infer_overloaded_call(ctx, expr, env)? {
+                return Ok(overloaded);
+            }
             let callee = infer_typed_expr(ctx, &c.callee, env)?;
             let mut result = callee.ty.clone();
             let mut args = Vec::with_capacity(c.args.len());

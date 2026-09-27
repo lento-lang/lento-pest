@@ -1,4 +1,5 @@
 use lento::analysis::analyze_program;
+use lento::ast::{Decl, Stmt, Ty};
 use lento::parser::parse_program;
 
 fn analyze(source: &str) -> Result<(), String> {
@@ -78,6 +79,62 @@ fn prelude_len_uses_type_specific_native_intrinsics() {
         .find(|instance| instance.class == "Len" && !instance.quantified.is_empty())
         .expect("list Len implementation should be polymorphic");
     assert!(!generic_len.target.is_empty());
+}
+
+#[test]
+fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline() {
+    let source = format!(
+        "{}\n{}",
+        include_str!("../src/prelude.lt"),
+        "assert (is_some (Some 1))\n\
+         assert (is_some (Some \"hello\"))\n\
+         assert (is_none None)\n\
+         assert (unwrap_or 0 (Some 3) == 3)\n\
+         assert (unwrap_or 7 None == 7)\n\
+         assert (unwrap_or \"fallback\" (Some \"value\") == \"value\")\n\
+         assert (map (x => x + 1) (Some 2) == Some 3)\n\
+         assert (is_none (map (x => x + 1) None))\n\
+         assert (is_ok (Ok 3))\n\
+         assert (is_err (Err \"bad\"))\n\
+         let success : Result int str = Ok 3\n\
+         let failure : Result int str = Err \"bad\"\n\
+         assert (is_ok success)\n\
+         assert (is_err failure)\n\
+         assert (map (x => x + 1) (Ok 2) == Ok 3)\n\
+         assert (is_err (map (x => x + 1) (Err \"bad\")))\n\
+         assert (map_err (s => concat s \"!\") (Err \"bad\") == Err \"bad!\")\n\
+         assert (map_err (s => concat s \"!\") (Ok 2) == Ok 2)\n\
+         assert (and_then (x => Ok (x + 1)) (Ok 2) == Ok 3)\n\
+         assert (is_err (and_then (x => Ok (x + 1)) (Err \"bad\")))\n\
+         (Left 1, Right \"right\", Break \"stop\", Continue 2, Unbounded, Included 3, Excluded 4)\n",
+    );
+    let program = parse_program(&source).expect("prelude and consumers should parse");
+    let result = analyze_program(&program).expect("prelude and consumers should analyze");
+    assert_eq!(
+        result
+            .overloads
+            .iter()
+            .find(|set| set.name == "map")
+            .expect("map overloads should be collected")
+            .specializations
+            .len(),
+        2
+    );
+    let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
+        .expect("prelude combinators and constructors should evaluate");
+    assert_eq!(
+        value.to_string(),
+        "(Left(1), Right(right), Break(stop), Continue(2), Unbounded, Included(3), Excluded(4))"
+    );
+}
+
+#[test]
+fn prelude_map_rejects_unrelated_argument_types() {
+    let source = format!("{}\nmap (x => x) 42\n", include_str!("../src/prelude.lt"));
+    let program = parse_program(&source).expect("program should parse");
+    let error = analyze_program(&program).expect_err("map needs an Option or Result");
+    assert!(error.contains("no overload of `map`"), "{error}");
 }
 
 #[test]
@@ -597,4 +654,118 @@ fn canonical_pipeline_rejects_missing_class_instance() {
     )
     .expect_err("missing class instance should fail");
     assert!(error.contains("no instance"), "{error}");
+}
+
+#[test]
+fn type_constructor_application_uses_curried_syntax() {
+    let source = "type Result a e = Ok a | Err e\n                    spec check : all a, e. Result a e -> bool\n                    fn check value = match value { Ok _ => true, Err _ => false }\n                    check (Ok 1)";
+    analyze(source).expect("curried type constructor application should analyze");
+    assert!(parse_program("type Result a e = Ok a | Err e\n                        let value : Result<int, str> = Ok 1").is_err(),
+        "angle bracket type application must be rejected");
+}
+
+#[test]
+fn nested_type_application_requires_parentheses() {
+    // Regression: application arguments must be non-applying atoms. A bare
+    // `type_atom` argument used to greedily absorb trailing identifiers, so
+    // `Pair Result a e bool` would have parsed as `Pair (Result (a e)) bool`.
+    let program = parse_program(
+        "type Result a e = Ok a | Err e\n         spec check : all a, e. Pair (Result a e) bool -> bool\n",
+    )
+    .expect("nested curried application should parse");
+    let spec = program
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Decl(Decl::Spec(spec)) if spec.name == "check" => Some(spec),
+            _ => None,
+        })
+        .expect("spec should parse");
+    let Ty::Arrow { from, .. } = &spec.ty.ty else {
+        panic!("expected an arrow type");
+    };
+    let Ty::Named { name, args } = &**from else {
+        panic!("expected a named type application: {:#?}", spec.ty.ty);
+    };
+    assert_eq!(name, "Pair");
+    assert_eq!(args.len(), 2, "Pair takes exactly two arguments");
+    let Ty::Named { name, args } = &args[0] else {
+        panic!("Pair's first argument should be a named type application");
+    };
+    assert_eq!(name, "Result");
+    assert_eq!(args.len(), 2, "Result binds the two quantified variables");
+    // The unparenthesized form must not silently bind four arguments.
+    let program = parse_program(
+        "type Result a e = Ok a | Err e\n         spec check : all a, e. Pair Result a e bool -> bool\n",
+    )
+    .expect("unparenthesized form still parses");
+    let spec = program
+        .statements
+        .iter()
+        .find_map(|stmt| match stmt {
+            Stmt::Decl(Decl::Spec(spec)) if spec.name == "check" => Some(spec),
+            _ => None,
+        })
+        .expect("spec should parse");
+    let Ty::Arrow { from: applied, .. } = &spec.ty.ty else {
+        panic!("expected an arrow type");
+    };
+    let Ty::Named { name, args } = &**applied else {
+        panic!("expected a named type application: {:#?}", spec.ty.ty);
+    };
+    assert_eq!(name, "Pair");
+    // Without parentheses every trailing identifier becomes its own
+    // argument: `Pair Result a e bool` is Pair applied to four arguments,
+    // never `Pair (Result (a e)) bool`.
+    assert_eq!(args.len(), 4, "identifiers bind as flat arguments");
+    let Ty::Named { name: _, args } = &args[1] else {
+        panic!("expected a named argument");
+    };
+    assert_eq!(args.len(), 0, "arguments never absorb further identifiers");
+}
+
+#[test]
+fn record_synonym_spec_is_satisfied_by_field_implementation() {
+    let source = "type Pair a b = { fst: a, snd: b }\n\
+                  spec first : all a, b. Pair a b -> a\n\
+                  fn first value = value.fst\n\
+                  first { fst: 1, snd: \"two\" }";
+    analyze(source).expect("a record synonym spec should be covered by its field implementation");
+}
+
+#[test]
+fn record_synonym_spec_rejects_missing_field() {
+    let source = "type Pair a b = { fst: a, snd: b }\n\
+                  spec wrong : all a, b. Pair a b -> a\n\
+                  fn wrong value = value.nope";
+    let error = analyze(source).expect_err("a missing field must not satisfy a record synonym spec");
+    assert!(error.contains("no instance") || error.contains("field") || error.contains("not implemented"),
+        "{error}");
+}
+
+#[test]
+fn over_arity_candidates_do_not_shadow_exact_arity() {
+    // `f 1` must resolve to the one-argument clause; the two-argument clause
+    // participates in the overload set but must not make the exact-arity
+    // call ambiguous.
+    analyze("fn f x = x\n               fn f x y = x\n               f 1")
+        .expect("an exact-arity call should ignore over-arity candidates");
+}
+
+#[test]
+fn curried_arguments_accept_all_atom_kinds() {
+    // Unit, list, record, and ref atoms are legal curried arguments; each
+    // used to panic in the parser after the curried grammar change.
+    analyze("type Pair a b = Mk a b\n                type Boxed a = Mk a\n                spec f : all a. Pair () bool -> bool\n                fn f value = true")
+        .expect("a unit type argument should parse");
+    analyze("spec g : List [int | str] -> unit\n                fn g _ = ()")
+        .expect("a list-union argument should parse");
+    analyze("spec h : Map { x: int } bool -> unit\n                fn h _ = ()")
+        .expect("a record argument should parse");
+    analyze("spec k : Box (ref int) -> unit\n                fn k _ = ()")
+        .expect("a ref-headed argument should parse");
+    analyze("type Boxed a = Mk a\n                spec k : Boxed ref int -> unit\n                fn k _ = ()")
+        .expect("a bare ref argument should parse");
+    analyze("type Map k v = Mk k v\n                spec m : Map mut int bool -> unit\n                fn m _ = ()")
+        .expect("a bare mut argument should parse");
 }

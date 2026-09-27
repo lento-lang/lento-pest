@@ -60,7 +60,7 @@ class_member_sep = _{ (";" ~ NEWLINE*) | NEWLINE+ | &"}" }
 // `spec name : spec_type`
 spec_decl      = { "spec" ~ identifier ~ ":" ~ spec_type }
 
-// `type name params* = <type>` — the right-hand side is either a plain type
+// `type name params* = type` — the right-hand side is either a plain type
 // (a synonym), a `[alt | alt]` sum, or an unbracketed alternation
 // `alt | alt` (general sums: `int | str`; constructor sums: `Some a | None`).
 // In unbracketed alternations an uppercase identifier is always a
@@ -113,13 +113,28 @@ ty_mut       = { "mut" ~ type_atom }
 // Record types `{ a: int, b: bool }` list named fields.
 type_base    = {
       list_union
-    | identifier ~ type_args? ~ ty_app_args?
+    | identifier ~ ty_app_args?
     | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
     | "[" ~ type_atom ~ "]"
     | ty_record
 }
-type_args    = { "<" ~ type_atom ~ ("," ~ type_atom)* ~ ">" }
-ty_app_args  = { type_atom+ }
+// Application arguments are non-applying atoms: a bare identifier (or
+// `ref`/`mut`-headed atom), a parenthesized type, a list type, or a record.
+// `Result a e` therefore
+// applies `Result` to `a` and `e`; a nested application needs parentheses
+// (`Pair (Option int) bool`). Without this restriction a trailing
+// identifier would be absorbed as the previous argument's own arguments
+// (`Result a e` would parse as `Result (a e)`).
+ty_app_args  = { ty_app_arg+ }
+ty_app_arg   = {
+      ty_ref
+    | ty_mut
+    | identifier
+    | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
+    | "[" ~ type_atom ~ "]"
+    | list_union
+    | ty_record
+}
 list_union    = {
     "[" ~ NEWLINE* ~ type_atom
         ~ (NEWLINE* ~ "|" ~ NEWLINE* ~ type_atom)+

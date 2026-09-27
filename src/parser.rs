@@ -904,6 +904,17 @@ fn type_(pair: Pair<'_, Rule>) -> Ty {
         Rule::type_base => type_base(pair),
         Rule::named_binder => named_binder(pair),
         Rule::variant_type => variant_type(pair),
+        Rule::ty_app_arg => {
+            // A unit argument `()` has no child; other atoms are wrapped by
+            // `ty_app_arg` in the grammar.
+            match pair.into_inner().next() {
+                Some(inner) => type_(inner),
+                None => Ty::Tuple(Vec::new()),
+            }
+        }
+        Rule::identifier => Ty::Named { name: pair.as_str().to_string(), args: Vec::new() },
+        Rule::list_union => list_union(pair),
+        Rule::ty_record => ty_record(pair),
         other => panic!("unexpected type rule: {other:?}"),
     }
 }
@@ -944,11 +955,6 @@ fn type_base(pair: Pair<'_, Rule>) -> Ty {
             let mut args = Vec::new();
             for k in kids.iter().skip(1) {
                 match k.as_rule() {
-                    Rule::type_args => {
-                        for arg in k.clone().into_inner() {
-                            args.push(type_(arg));
-                        }
-                    }
                     Rule::ty_app_args => {
                         for arg in k.clone().into_inner() {
                             args.push(type_(arg));

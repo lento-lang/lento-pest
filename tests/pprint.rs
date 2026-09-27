@@ -111,3 +111,44 @@ fn len xs = xs.len
     assert!(printed.contains("=>"));
     assert!(printed.contains("all a, b"));
 }
+
+#[test]
+fn pretty_printed_type_applications_are_curried() {
+    let ast = parse_program(
+        "type Result a e = Ok a | Err e\n         spec check : all a, e. Result a e -> bool\n",
+    )
+    .expect("curried type application should parse");
+    let printed = format_program(&ast);
+    assert!(printed.contains("Result a e"), "{printed}");
+    assert!(!printed.contains("<a") && !printed.contains("<a,"), "{printed}");
+}
+
+#[test]
+fn nested_type_arguments_round_trip_with_parentheses() {
+    let source = "type Result a e = Ok a | Err e\n         type Pair a b = Mk a b\n         spec check : all a, e. Pair (Result a e) bool -> bool\n";
+    let printed = format_program(&parse_program(source).expect("should parse"));
+    assert!(printed.contains("Pair (Result a e) bool"), "{printed}");
+    // The printed form must parse to the same shape, not flatten to four
+    // arguments on `Pair`.
+    let reparsed = parse_program(&printed).expect("printed form should reparse");
+    let printed_again = format_program(&reparsed);
+    assert_eq!(printed, printed_again, "type application printing must be stable");
+}
+
+#[test]
+fn multi_argument_ctor_payloads_round_trip() {
+    let source = "type Foo = Ok a b | None\n         ";
+    let printed = format_program(&parse_program(source).expect("should parse"));
+    assert!(printed.contains("Ok a b"), "{printed}");
+    let reparsed = parse_program(&printed).expect("multi-arg payload should reparse");
+    let printed_again = format_program(&reparsed);
+    assert!(printed_again.contains("Ok a b"), "{printed_again}");
+}
+
+#[test]
+fn named_binder_arguments_round_trip_parenthesized() {
+    let source = "type Pair a b = Mk a b\n         spec check : (value : Pair int bool) -> bool\n";
+    let printed = format_program(&parse_program(source).expect("should parse"));
+    let reparsed = parse_program(&printed).expect("printed named binder should reparse");
+    assert_eq!(printed, format_program(&reparsed), "named binder printing must be stable");
+}

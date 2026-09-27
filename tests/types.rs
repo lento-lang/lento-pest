@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 use lento::ast::{Constraint, Ty};
 use lento::types::{
-    alpha_equiv, canonicalize, dominates, generalize, instantiate, is_instance, lower_ty,
-    skolemize, unify, MonoType, SchemeConstraint, Substitution, TypeEnv, TypeScheme, TypeVarSupply,
-    UnifyError,
+    alpha_equiv, canonicalize, dominates, generalize, implementation_covers_spec, instantiate,
+    is_instance, lower_ty, skolemize, unify, MonoSumAlt, MonoType, SchemeConstraint, Substitution,
+    TypeEnv, TypeScheme, TypeVarSupply, UnifyError,
 };
 
 fn var(id: u32) -> MonoType {
@@ -111,6 +111,35 @@ fn unification_rejects_mismatched_constructors() {
     let mut s = Substitution::new();
     let err = unify(&mut s, &con("int", vec![]), &con("str", vec![])).unwrap_err();
     assert!(matches!(err, UnifyError::Mismatch { .. }));
+}
+
+#[test]
+fn nominal_sum_and_named_type_representations_agree() {
+    let option = MonoType::Sum {
+        name: "Option".into(),
+        args: vec![var(0)],
+        alts: vec![
+            MonoSumAlt::Constructor { name: "None".into(), payload: None },
+            MonoSumAlt::Constructor { name: "Some".into(), payload: Some(var(0)) },
+        ],
+    };
+    let named = con("Option", vec![con("int", vec![])]);
+    let mut substitution = Substitution::new();
+    unify(&mut substitution, &option, &named).expect("same nominal sum should unify");
+    assert_eq!(substitution.apply(&var(0)), con("int", vec![]));
+    assert!(unify(&mut Substitution::new(), &option, &con("Other", vec![var(0)])).is_err());
+
+    let implementation = TypeScheme {
+        quantified: vec![0],
+        constraints: vec![],
+        body: arrow(option, con("bool", vec![])),
+    };
+    let specification = TypeScheme {
+        quantified: vec![1],
+        constraints: vec![],
+        body: arrow(con("Option", vec![var(1)]), con("bool", vec![])),
+    };
+    assert!(implementation_covers_spec(&mut TypeVarSupply::new(), &implementation, &specification));
 }
 
 #[test]

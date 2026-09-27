@@ -19,6 +19,10 @@
 // 2. A `fn` clause following a spec's `where` block is absorbed into the
 //    where conditions (no statement boundary after a where block), so such
 //    a program is not printer-round-trippable either.
+// 3. Constructor alternation payloads are single-atom curried forms; a
+//    hand-written multi-argument payload stores as a `Ty::Tuple` and prints
+//    space-separated (`Ok a b`), which reparses to the same tuple payload.
+//    A genuine 1-tuple payload degrades to a bare atom on reparse.
 
 use std::fmt::Write;
 
@@ -185,13 +189,32 @@ fn type_str(t: &Ty) -> String {
     s
 }
 
+fn format_type_application_arg(out: &mut String, ty: &Ty) {
+    // Anything that could otherwise absorb a following identifier must be
+    // parenthesized: an application (`Option int` would otherwise bind the
+    // next identifier as its own argument), a function arrow, a sum, and
+    // `ref`/`mut` (whose keyword is an identifier-shaped atom).
+    let needs_parens = match ty {
+        Ty::Arrow { .. } | Ty::Sum(_) | Ty::Ref(_) | Ty::Mut(_) | Ty::NamedBinder { .. } => true,
+        Ty::Named { args, .. } => !args.is_empty(),
+        _ => false,
+    };
+    if needs_parens {
+        out.push('(');
+        format_type(out, ty);
+        out.push(')');
+    } else {
+        format_type(out, ty);
+    }
+}
+
 fn format_type(out: &mut String, ty: &Ty) {
     match ty {
         Ty::Named { name, args } => {
             let _ = write!(out, "{name}");
-            if !args.is_empty() {
-                let as_: Vec<String> = args.iter().map(type_str).collect();
-                let _ = write!(out, "<{}>", as_.join(", "));
+            for arg in args {
+                out.push(' ');
+                format_type_application_arg(out, arg);
             }
         }
         Ty::Tuple(tys) => {
@@ -226,7 +249,26 @@ fn format_type(out: &mut String, ty: &Ty) {
                 .iter()
                 .map(|alt| match alt {
                     SumAlt::Ctor { name, payload } => match payload {
-                        Some(p) => format!("{name} {}", type_str(p)),
+                        Some(Ty::Tuple(items)) if items.len() > 1 => {
+                            // Multi-argument payloads parse as a tuple of
+                            // atoms; printing `Ok (a, b)` would not reparse,
+                            // but the flat curried form does.
+                            let rendered = items
+                                .iter()
+                                .map(|item| {
+                                    let mut rendered = String::new();
+                                    format_type_application_arg(&mut rendered, item);
+                                    rendered
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ");
+                            format!("{name} {rendered}")
+                        }
+                        Some(p) => {
+                            let mut rendered = String::new();
+                            format_type_application_arg(&mut rendered, p);
+                            format!("{name} {rendered}")
+                        }
                         None => name.clone(),
                     },
                     SumAlt::Bare(ty) => type_str(ty),
