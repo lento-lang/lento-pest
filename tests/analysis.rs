@@ -81,6 +81,40 @@ fn prelude_len_uses_type_specific_native_intrinsics() {
 }
 
 #[test]
+fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline() {
+    let source = format!(
+        "{}\n{}",
+        include_str!("../src/prelude.lt"),
+        "assert (is_some (Some 1))\n\
+         assert (is_some (Some \"hello\"))\n\
+         assert (is_none None)\n\
+         assert (unwrap_or 0 (Some 3) == 3)\n\
+         assert (unwrap_or 7 None == 7)\n\
+         assert (unwrap_or \"fallback\" (Some \"value\") == \"value\")\n\
+         assert (map_option (x => x + 1) (Some 2) == Some 3)\n\
+         assert (is_none (map_option (x => x + 1) None))\n\
+         assert (is_ok (Ok 3))\n\
+         assert (is_err (Err \"bad\"))\n\
+         assert (map_result (x => x + 1) (Ok 2) == Ok 3)\n\
+         assert (is_err (map_result (x => x + 1) (Err \"bad\")))\n\
+         assert (map_err (s => concat s \"!\") (Err \"bad\") == Err \"bad!\")\n\
+         assert (map_err (s => concat s \"!\") (Ok 2) == Ok 2)\n\
+         assert (and_then_result (x => Ok (x + 1)) (Ok 2) == Ok 3)\n\
+         assert (is_err (and_then_result (x => Ok (x + 1)) (Err \"bad\")))\n\
+         (Left 1, Right \"right\", Break \"stop\", Continue 2, Unbounded, Included 3, Excluded 4)\n",
+    );
+    let program = parse_program(&source).expect("prelude and consumers should parse");
+    let result = analyze_program(&program).expect("prelude and consumers should analyze");
+    let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
+        .expect("prelude combinators and constructors should evaluate");
+    assert_eq!(
+        value.to_string(),
+        "(Left(1), Right(right), Break(stop), Continue(2), Unbounded, Included(3), Excluded(4))"
+    );
+}
+
+#[test]
 fn implementation_type_variables_require_impl_quantifiers() {
     let error = analyze("class Seq a { spec reverse : a -> a }\nimpl Seq [a] { fn reverse xs = xs }\n")
         .expect_err("unbound implementation type variable should fail");
