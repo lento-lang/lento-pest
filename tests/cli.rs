@@ -1,7 +1,7 @@
 use std::process::Command;
 
 #[test]
-fn normal_file_execution_loads_the_prelude() {
+fn prelude_flag_loads_class_declarations() {
     let path = std::env::temp_dir().join(format!("lento-prelude-{}.lt", std::process::id()));
     std::fs::write(&path, "Less\n").unwrap();
     let output = Command::new(env!("CARGO_BIN_EXE_lento_rust"))

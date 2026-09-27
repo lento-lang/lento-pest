@@ -672,6 +672,16 @@ fn type_constructor_application_uses_curried_syntax() {
 }
 
 #[test]
+fn class_implementation_checks_method_result_and_arity() {
+    let source = "class Show a { spec show : a -> str }\nimpl Show int { fn show x = 1 }\n";
+    assert!(analyze(source).unwrap_err().contains("does not match class"));
+    let source = "class Show a { spec show : a -> str }\nimpl Show int { fn show x y = \"wrong arity\" }\n";
+    assert!(analyze(source).unwrap_err().contains("does not match class"));
+    let source = "class Seq a { spec reverse : a -> a }\nimpl all a. Seq [a] { fn reverse xs = [1] }\n";
+    assert!(analyze(source).unwrap_err().contains("does not match class"));
+}
+
+#[test]
 fn nested_type_application_requires_parentheses() {
     // Regression: application arguments must be non-applying atoms. A bare
     // `type_atom` argument used to greedily absorb trailing identifiers, so
@@ -729,10 +739,6 @@ fn nested_type_application_requires_parentheses() {
         panic!("expected a named argument");
     };
     assert_eq!(args.len(), 0, "arguments never absorb further identifiers");
-}
-
-#[test]
-fn record_synonym_spec_is_satisfied_by_field_implementation() {
     let source = "type Pair a b = { fst: a, snd: b }\n\
                   spec first : all a, b. Pair a b -> a\n\
                   fn first value = value.fst\n\

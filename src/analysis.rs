@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::ast::{Decl, Expr, PatKind, Program, Stmt, SumAlt, Ty};
-use crate::infer::{base_env, check_pattern, infer_expr, infer_typed_expr, InferCtx};
+use crate::infer::{base_env, check_pattern, infer_clause, infer_expr, infer_typed_expr, InferCtx};
 use crate::patterns::{analyze_specialization, DiagnosticKind, Severity};
 use crate::resolve::{resolve_call_checked, Resolution};
 use crate::semantics::{
@@ -113,6 +113,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     }
     install_type_declarations(&mut env, &declarations);
     install_class_methods(&mut env, &mut ctx, program);
+    validate_implementation_methods(program, &mut ctx, &env)?;
     validate_spec_refinements(program, &mut ctx, &env)?;
     let refinements = collect_refinement_metadata(&collected.function_groups);
     validate_refinement_calls(program, &collected.function_groups)?;
@@ -207,6 +208,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
                 check_pattern(&mut ctx, &binding.pattern, &value.ty, &mut env)
                     .map_err(|error| format!("top-level binding failed: {error}"))?;
                 if let PatKind::Var(name) = &binding.pattern.kind {
+                    ctx.mutable_places.insert(name.clone(), binding.mutable);
                     let resolved = ctx.resolve(&value.ty);
                     let scheme = if !binding.mutable && crate::infer::is_value(&binding.value) {
                         generalize(&env, &resolved, ctx.constraints.clone())
@@ -1356,6 +1358,68 @@ fn install_class_methods(env: &mut TypeEnv, ctx: &mut InferCtx, program: &Progra
             );
         }
     }
+}
+
+/// Check executable methods against the instantiated class signatures. The
+/// declaration validator checks names and overlap, but cannot establish that
+/// an implementation actually provides the promised type.
+fn validate_implementation_methods(
+    program: &Program,
+    ctx: &mut InferCtx,
+    env: &TypeEnv,
+) -> Result<(), String> {
+    for statement in &program.statements {
+        let Stmt::Decl(Decl::Impl(implementation)) = statement else { continue };
+        let class = program.statements.iter().find_map(|statement| match statement {
+            Stmt::Decl(Decl::Class(class)) if class.name == implementation.class => Some(class),
+            _ => None,
+        }).ok_or_else(|| format!("unknown class '{}'", implementation.class))?;
+        let mut binders = BTreeMap::new();
+        for quantifier in &implementation.quantifiers {
+            for variable in &quantifier.vars {
+                binders.insert(variable.clone(), ctx.supply.fresh());
+            }
+        }
+        for (parameter, target) in class.params.iter().zip(&implementation.target) {
+            let target = ctx.lower_surface_ty(target, &binders);
+            binders.insert(parameter.clone(), target);
+        }
+        for method in &implementation.methods {
+            let spec = class.specs.iter().find(|spec| spec.name == method.name)
+                .ok_or_else(|| format!("unknown method '{}'", method.name))?;
+            let mut method_binders = binders.clone();
+            for quantifier in &spec.ty.quantifiers {
+                for variable in &quantifier.vars {
+                    method_binders.entry(variable.clone()).or_insert_with(|| ctx.supply.fresh());
+                }
+            }
+            let required = ctx.lower_surface_ty(&spec.ty.ty, &method_binders);
+            let inferred = infer_clause(ctx, method, env).map_err(|error| {
+                format!("method '{}' in impl '{}': {error}", method.name, class.name)
+            })?;
+            // A method must cover every use promised by its class signature.
+            // Ordinary unification would specialize a quantified class type
+            // (for example `a -> a`) to an accidental `int -> int` method.
+            let inferred = ctx.resolve(&inferred.ty);
+            let implementation = crate::types::TypeScheme {
+                quantified: inferred.free_vars(),
+                constraints: Vec::new(),
+                body: inferred,
+            };
+            let signature = crate::types::TypeScheme {
+                quantified: required.free_vars(),
+                constraints: Vec::new(),
+                body: required,
+            };
+            if !crate::types::is_instance(&mut ctx.supply, &implementation, &signature) {
+                return Err(format!(
+                    "method '{}' does not match class '{}' signature",
+                    method.name, class.name
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_class_constraints(

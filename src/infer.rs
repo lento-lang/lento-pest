@@ -47,6 +47,8 @@ pub enum TypeErrorKind {
     BadMember { ty: MonoType, field: String },
     NoOverload { name: String, arguments: Vec<MonoType> },
     AmbiguousOverload { name: String, arguments: Vec<MonoType> },
+    /// An operation requires an assignable or addressable variable place.
+    InvalidPlace(String),
 }
 
 impl fmt::Display for TypeError {
@@ -69,6 +71,7 @@ impl fmt::Display for TypeError {
             TypeErrorKind::AmbiguousOverload { name, arguments } => {
                 write!(f, "ambiguous overload of `{name}` for arguments {arguments:?}")
             }
+            TypeErrorKind::InvalidPlace(message) => write!(f, "{message}"),
         }
     }
 }
@@ -146,6 +149,9 @@ pub struct InferCtx {
     pub type_declarations: BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
     /// Overload sets available while inferring later declarations and calls.
     pub overloads: BTreeMap<String, OverloadSet>,
+    /// Lexically scoped mutability of term bindings; type schemes alone do not
+    /// distinguish mutable cells from immutable values.
+    pub mutable_places: BTreeMap<String, bool>,
 }
 
 impl InferCtx {
@@ -157,6 +163,7 @@ impl InferCtx {
             pending_constraints: Vec::new(),
             type_declarations: BTreeMap::new(),
             overloads: BTreeMap::new(),
+            mutable_places: BTreeMap::new(),
         }
     }
 
@@ -371,6 +378,7 @@ pub fn check_pattern(
                 .map(|annotation| ctx.lower_surface_ty(annotation, &BTreeMap::new()))
                 .unwrap_or_else(|| expected.clone());
             env.insert(name.clone(), TypeScheme::mono(binding));
+            ctx.mutable_places.insert(name.clone(), false);
             Ok(())
         }
         PatKind::Wildcard => Ok(()),
@@ -624,6 +632,7 @@ pub fn infer_typed_expr(
             None => Err(unbound(&v.name)),
         },
         Expr::Lambda(l) => {
+            let saved_places = ctx.mutable_places.clone();
             let mut local = env.clone();
             let mut param_tys = Vec::new();
             for p in &l.params {
@@ -635,6 +644,7 @@ pub fn infer_typed_expr(
                 param_tys.push(pt);
             }
             let body = infer_typed_expr(ctx, &l.body, &mut local)?;
+            ctx.mutable_places = saved_places;
             let mut ty = body.ty.clone();
             for pt in param_tys.into_iter().rev() {
                 ty = MonoType::Function(Box::new(pt), Box::new(ty));
@@ -740,6 +750,7 @@ pub fn infer_typed_expr(
             Ok(composite(MonoType::List(Box::new(element)), children))
         }
         Expr::Block(b) => {
+            let saved_places = ctx.mutable_places.clone();
             let mut local = env.clone();
             let mut last = ctor::unit();
             let mut children = Vec::new();
@@ -768,12 +779,16 @@ pub fn infer_typed_expr(
                             ctx.unify(&value.ty, &annotation)?;
                         }
                         check_pattern(ctx, &binding.pattern, &value.ty, &mut local)?;
+                        if let PatKind::Var(name) = &binding.pattern.kind {
+                            ctx.mutable_places.insert(name.clone(), binding.mutable);
+                        }
                         let _pending = &ctx.pending_constraints[pending_start..];
                         children.push(value);
                     }
                     _ => {}
                 }
             }
+            ctx.mutable_places = saved_places;
             Ok(composite(last, children))
         }
         Expr::Match(m) => {
@@ -782,6 +797,7 @@ pub fn infer_typed_expr(
             let result = ctx.fresh();
             let mut arms = Vec::with_capacity(m.arms.len());
             for arm in &m.arms {
+                let saved_places = ctx.mutable_places.clone();
                 let mut local = env.clone();
                 check_pattern(ctx, &arm.pattern, &scrutinee.ty, &mut local)?;
                 let guard = if let Some(guard) = &arm.guard {
@@ -798,6 +814,7 @@ pub fn infer_typed_expr(
                     guard,
                     body,
                 });
+                ctx.mutable_places = saved_places;
             }
             Ok(TypedExpr {
                 ty: result,
@@ -815,6 +832,7 @@ pub fn infer_typed_expr(
                 match entry {
                     RecordValueEntry::Field(name, expression) => {
                         let field = infer_typed_expr(ctx, expression, env)?;
+                        fields.retain(|(existing, _)| existing != name);
                         fields.push((name.clone(), field.ty.clone()));
                         children.push(field);
                     }
@@ -825,7 +843,10 @@ pub fn infer_typed_expr(
                                 fields: spread_fields,
                                 rest: spread_rest,
                             } => {
-                                fields.extend(spread_fields);
+                                for (name, ty) in spread_fields {
+                                    fields.retain(|(existing, _)| existing != &name);
+                                    fields.push((name, ty));
+                                }
                                 rest = spread_rest;
                             }
                             other => {
@@ -889,12 +910,23 @@ pub fn infer_typed_expr(
             Ok(composite(elem, vec![object, index]))
         }
         Expr::Ref(r) => {
+            if !matches!(r.inner.as_ref(), Expr::Var(v) if ctx.mutable_places.get(&v.name) == Some(&true)) {
+                return Err(TypeError {
+                    kind: TypeErrorKind::InvalidPlace("ref requires a mutable variable place".into()),
+                });
+            }
             let inner = infer_typed_expr(ctx, &r.inner, env)?;
             Ok(composite(MonoType::Ref(Box::new(inner.ty.clone())), vec![inner]))
         }
         Expr::Assign(a) => {
+            if !matches!(a.place.as_ref(), Expr::Var(v) if ctx.mutable_places.get(&v.name) == Some(&true)) {
+                return Err(TypeError {
+                    kind: TypeErrorKind::InvalidPlace("assignment requires a mutable variable place".into()),
+                });
+            }
             let value = infer_typed_expr(ctx, &a.value, env)?;
             let place = infer_typed_expr(ctx, &a.place, env)?;
+            ctx.unify(&place.ty, &value.ty)?;
             Ok(composite(ctor::unit(), vec![place, value]))
         }
     }
@@ -1073,6 +1105,7 @@ pub fn infer_clause(
     clause: &FnDecl,
     env: &TypeEnv,
 ) -> Result<InferredClause, TypeError> {
+    let saved_places = ctx.mutable_places.clone();
     let constraints_start = ctx.constraints.len();
     let mut local = env.clone();
     let mut param_tys = Vec::with_capacity(clause.params.len());
@@ -1087,6 +1120,7 @@ pub fn infer_clause(
         param_tys.push(pi);
     }
     let body = infer_typed_expr(ctx, &clause.body, &mut local)?;
+    ctx.mutable_places = saved_places;
     let result_ty = match &clause.ret {
         Some(ret) => {
             let declared = ctx.lower_surface_ty(ret, &BTreeMap::new());
