@@ -904,8 +904,17 @@ fn type_(pair: Pair<'_, Rule>) -> Ty {
         Rule::type_base => type_base(pair),
         Rule::named_binder => named_binder(pair),
         Rule::variant_type => variant_type(pair),
-        Rule::ty_app_arg => type_(pair.into_inner().next().unwrap()),
+        Rule::ty_app_arg => {
+            // A unit argument `()` has no child; other atoms are wrapped by
+            // `ty_app_arg` in the grammar.
+            match pair.into_inner().next() {
+                Some(inner) => type_(inner),
+                None => Ty::Tuple(Vec::new()),
+            }
+        }
         Rule::identifier => Ty::Named { name: pair.as_str().to_string(), args: Vec::new() },
+        Rule::list_union => list_union(pair),
+        Rule::ty_record => ty_record(pair),
         other => panic!("unexpected type rule: {other:?}"),
     }
 }

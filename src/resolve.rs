@@ -127,8 +127,11 @@ pub fn resolve_call_checked(
         // 2. Instantiate the candidate with fresh variables.
         let (body, constraints) = instantiate(supply, &spec.scheme);
 
-        // 3a. Arity / application shape.
-        if arity(&body) < n {
+        // 3a. Arity / application shape. Resolution is exact: a candidate
+        // taking a different number of arguments than supplied is rejected.
+        // Partial applications never reach this resolver — callers pre-gate
+        // on exact arity and keep the plain function type instead.
+        if arity(&body) != n {
             rejections.push((
                 spec.id,
                 RejectionReason::Arity {
@@ -164,7 +167,11 @@ pub fn resolve_call_checked(
                 for arg_type in arg_types.iter().rev() {
                     applied = MonoType::Function(Box::new(arg_type.clone()), Box::new(applied));
                 }
-                if unify(&mut subst, &body, &applied).is_ok() || call_type_compatible(&body, &applied) {
+                // `call_type_compatible` only: the per-argument unify above
+                // already failed for this candidate, so a whole-shape unify
+                // cannot succeed — and its partial bindings would pollute
+                // the substitution used for constraint resolution.
+                if call_type_compatible(&body, &applied) {
                     rejected = None;
                 } else {
                     rejected = Some(RejectionReason::Unification {

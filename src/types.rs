@@ -1058,6 +1058,55 @@ pub fn call_type_compatible(expected: &MonoType, actual: &MonoType) -> bool {
 /// `matchable` may be bound; all other variables are rigid constants and are
 /// never bound. Lookup is non-chasing: a bound variable maps directly to its
 /// (rigid) image, which never contains a matchable variable.
+/// Bind the implementation's open row variable so it carries exactly the
+/// spec fields the implementation does not declare. Returns `false` when the
+/// row cannot absorb them: it is not a matchable variable, or it is already
+/// bound (through a shared row elsewhere in the implementation type) to a
+/// record missing one of the required fields. Binding once keeps coverage
+/// sound: two positions sharing a row cannot demand contradictory shapes.
+fn absorb_missing_fields(
+    rest: Option<TypeVarId>,
+    missing: &[(String, MonoType)],
+    matchable: &BTreeSet<TypeVarId>,
+    subst: &mut Substitution,
+) -> bool {
+    let Some(mut var) = rest else { return false };
+    loop {
+        match subst.get(var) {
+            Some(MonoType::Var(next)) => var = *next,
+            Some(MonoType::Record { fields, rest: None }) => {
+                return missing.iter().all(|(name, required)| {
+                    fields
+                        .iter()
+                        .find(|(bound_name, _)| bound_name == name)
+                        .is_some_and(|(_, bound)| {
+                            matches(
+                                required,
+                                bound,
+                                &BTreeSet::new(),
+                                &mut Substitution::new(),
+                                false,
+                            )
+                        })
+                });
+            }
+            Some(_) => return false,
+            None => break,
+        }
+    }
+    if !matchable.contains(&var) {
+        return false;
+    }
+    subst.insert(
+        var,
+        MonoType::Record {
+            fields: missing.to_vec(),
+            rest: None,
+        },
+    );
+    true
+}
+
 fn matches(
     left: &MonoType,
     right: &MonoType,
@@ -1083,23 +1132,40 @@ fn matches(
                     .zip(a2.clone().iter())
                     .all(|(x, y)| matches(x, y, matchable, subst, open_absorption))
         }
-        (MonoType::Sum { name: sum_name, args: sum_args, .. }, MonoType::Constructor(name, args)) => {
+        (
+            MonoType::Sum {
+                name: sum_name,
+                args: sum_args,
+                ..
+            },
+            MonoType::Constructor(name, args),
+        ) => {
             sum_name == name
                 && sum_args.len() == args.len()
-                && sum_args.iter().zip(args).all(|(sum_arg, arg)| {
-                    matches(sum_arg, arg, matchable, subst, open_absorption)
-                })
+                && sum_args
+                    .iter()
+                    .zip(args)
+                    .all(|(sum_arg, arg)| matches(sum_arg, arg, matchable, subst, open_absorption))
         }
-        (MonoType::Constructor(name, args), MonoType::Sum { name: sum_name, args: sum_args, .. }) => {
+        (
+            MonoType::Constructor(name, args),
+            MonoType::Sum {
+                name: sum_name,
+                args: sum_args,
+                ..
+            },
+        ) => {
             sum_name == name
                 && args.len() == sum_args.len()
-                && args.iter().zip(sum_args).all(|(arg, sum_arg)| {
-                    matches(arg, sum_arg, matchable, subst, open_absorption)
-                })
+                && args
+                    .iter()
+                    .zip(sum_args)
+                    .all(|(arg, sum_arg)| matches(arg, sum_arg, matchable, subst, open_absorption))
         }
         (MonoType::Function(f1, t1), MonoType::Function(f2, t2)) => {
             let (f1, t1, f2, t2) = (f1.clone(), t1.clone(), f2.clone(), t2.clone());
-            matches(&f1, &f2, matchable, subst, open_absorption) && matches(&t1, &t2, matchable, subst, open_absorption)
+            matches(&f1, &f2, matchable, subst, open_absorption)
+                && matches(&t1, &t2, matchable, subst, open_absorption)
         }
         (MonoType::Tuple(a), MonoType::Tuple(b)) => {
             a.len() == b.len()
@@ -1130,16 +1196,23 @@ fn matches(
             // Spec coverage (`open_absorption`) reads the record
             // specification as "the implementation may only read the fields
             // the spec provides": every implementation field must appear in
-            // the spec, while the spec's additional fields may ride the
-            // implementation's open row variable. Plain call compatibility
-            // keeps the inverse reading: an actual record may carry fields
-            // the closed parameter omits.
-            let fields_match = right_fields.iter().all(|(name, right)| {
+            // the spec, while the spec's additional fields ride the
+            // implementation's open row variable — bound once, so every
+            // position sharing the row must accept the same shape. Plain
+            // call compatibility keeps the inverse reading: an actual
+            // record may carry fields the closed parameter omits.
+            let mut fields_match = true;
+            let mut missing = Vec::new();
+            for (name, right) in right_fields.iter() {
                 match left_fields.iter().find(|(left_name, _)| left_name == name) {
-                    Some((_, left)) => matches(left, right, matchable, subst, open_absorption),
-                    None => open_absorption && left_rest.is_some(),
+                    Some((_, left)) => {
+                        if !matches(left, right, matchable, subst, open_absorption) {
+                            fields_match = false;
+                        }
+                    }
+                    None => missing.push((name.clone(), right.clone())),
                 }
-            });
+            }
             let left_fields_provided = !open_absorption
                 || left_fields.iter().all(|(name, left)| {
                     right_fields
@@ -1149,7 +1222,12 @@ fn matches(
                             matches(left, right, matchable, subst, open_absorption)
                         })
                 });
-            fields_match && left_fields_provided && (right_rest.is_none() || left_rest.is_some())
+            let missing_absorbed = missing.is_empty()
+                || open_absorption && absorb_missing_fields(*left_rest, &missing, matchable, subst);
+            fields_match
+                && left_fields_provided
+                && missing_absorbed
+                && (right_rest.is_none() || left_rest.is_some())
         }
         (MonoType::Sum { alts: left, .. }, MonoType::Sum { alts: right, .. }) => {
             let left_rows = left.iter().any(|alt| matches!(alt, MonoSumAlt::Row(_)));
@@ -1172,7 +1250,6 @@ fn matches(
         _ => false,
     }
 }
-
 /// Strict specificity: `a` dominates `b` iff `a` is an instance of `b` and
 /// `b` is not an instance of `a`.
 pub fn dominates(supply: &mut TypeVarSupply, a: &TypeScheme, b: &TypeScheme) -> bool {
@@ -1264,127 +1341,145 @@ pub fn lower_surface_ty(
     binders: &BTreeMap<String, MonoType>,
     type_declarations: &BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
 ) -> MonoType {
-        match ty {
-            crate::ast::Ty::Named { name, args } => {
-                if args.is_empty() {
-                    if let Some(bound) = binders.get(name) {
-                        return bound.clone();
-                    }
-                    if name == "unit" {
-                        return MonoType::Tuple(Vec::new());
-                    }
-                    if let Some(primitive) = match name.as_str() {
-                        "Int" => Some("int"),
-                        "Float" => Some("float"),
-                        "String" => Some("str"),
-                        "Bool" => Some("bool"),
-                        "Unit" => Some("unit"),
-                        "usize" => Some("int"),
-                        _ => None,
-                    } {
-                        return if primitive == "unit" {
-                            MonoType::Tuple(Vec::new())
-                        } else {
-                            MonoType::Constructor(primitive.to_string(), Vec::new())
-                        };
-                    }
+    match ty {
+        crate::ast::Ty::Named { name, args } => {
+            if args.is_empty() {
+                if let Some(bound) = binders.get(name) {
+                    return bound.clone();
                 }
-                if let Some((parameters, source)) = type_declarations.get(name) {
-                    if parameters.len() == args.len() {
-                        let mapping = parameters
-                            .iter()
-                            .zip(args)
-                            .map(|(parameter, argument)| {
-                                (parameter.clone(), lower_surface_ty(argument, binders, type_declarations))
-                            })
-                            .collect::<BTreeMap<_, _>>();
-                        if let crate::ast::Ty::Sum(_) = source {
-                            if let MonoType::Sum { alts, .. } = lower_surface_ty(source, &mapping, type_declarations) {
-                                return MonoType::Sum {
-                                    name: name.clone(),
-                                    args: args
-                                        .iter()
-                                        .map(|argument| lower_surface_ty(argument, binders, type_declarations))
-                                        .collect(),
-                                    alts,
-                                };
-                            }
-                        }
-                        return lower_surface_ty(source, &mapping, type_declarations);
-                    }
+                if name == "unit" {
+                    return MonoType::Tuple(Vec::new());
                 }
-                MonoType::Constructor(
-                    name.clone(),
-                    args.iter()
-                        .map(|argument| lower_surface_ty(argument, binders, type_declarations))
-                        .collect(),
-                )
-            }
-            crate::ast::Ty::Tuple(items) => MonoType::Tuple(
-                items
-                    .iter()
-                    .map(|item| lower_surface_ty(item, binders, type_declarations))
-                    .collect(),
-            ),
-            crate::ast::Ty::List(inner) => {
-                MonoType::List(Box::new(lower_surface_ty(inner, binders, type_declarations)))
-            }
-            crate::ast::Ty::Arrow { from, to } => MonoType::Function(
-                Box::new(lower_surface_ty(from, binders, type_declarations)),
-                Box::new(lower_surface_ty(to, binders, type_declarations)),
-            ),
-            crate::ast::Ty::Ref(inner) => {
-                MonoType::Ref(Box::new(lower_surface_ty(inner, binders, type_declarations)))
-            }
-            crate::ast::Ty::Mut(inner) => {
-                MonoType::Mut(Box::new(lower_surface_ty(inner, binders, type_declarations)))
-            }
-            crate::ast::Ty::NamedBinder { ty, .. } => lower_surface_ty(ty, binders, type_declarations),
-            crate::ast::Ty::Sum(alts) => {
-                MonoType::Sum {
-                    name: format!("<sum:{}>", alts.len()),
-                    args: Vec::new(),
-                    alts: alts
-                        .iter()
-                        .map(|alt| match alt {
-                            crate::ast::SumAlt::Ctor { name, payload } => {
-                                MonoSumAlt::Constructor {
-                                    name: name.clone(),
-                                    payload: payload
-                                        .as_ref()
-                                        .map(|payload| lower_surface_ty(payload, binders, type_declarations)),
-                                }
-                            }
-                            crate::ast::SumAlt::Bare(ty) => {
-                                MonoSumAlt::Bare(lower_surface_ty(ty, binders, type_declarations))
-                            }
-                            crate::ast::SumAlt::Row(name) => MonoSumAlt::Row(
-                                binders
-                                    .get(name)
-                                    .cloned()
-                                    .unwrap_or_else(|| MonoType::Constructor(name.clone(), Vec::new())),
-                            ),
-                        })
-                        .collect(),
-                }
-            }
-            crate::ast::Ty::RecordType(fields) => MonoType::Record {
-                fields: fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), lower_surface_ty(ty, binders, type_declarations)))
-                    .collect(),
-                rest: None,
-            },
-            crate::ast::Ty::OpenRecordType { fields, row } => MonoType::Record {
-                fields: fields
-                    .iter()
-                    .map(|(name, ty)| (name.clone(), lower_surface_ty(ty, binders, type_declarations)))
-                    .collect(),
-                rest: match binders.get(row) {
-                    Some(MonoType::Var(id)) => Some(*id),
+                if let Some(primitive) = match name.as_str() {
+                    "Int" => Some("int"),
+                    "Float" => Some("float"),
+                    "String" => Some("str"),
+                    "Bool" => Some("bool"),
+                    "Unit" => Some("unit"),
+                    "usize" => Some("int"),
                     _ => None,
-                },
-            },
+                } {
+                    return if primitive == "unit" {
+                        MonoType::Tuple(Vec::new())
+                    } else {
+                        MonoType::Constructor(primitive.to_string(), Vec::new())
+                    };
+                }
+            }
+            if let Some((parameters, source)) = type_declarations.get(name) {
+                if parameters.len() == args.len() {
+                    let mapping = parameters
+                        .iter()
+                        .zip(args)
+                        .map(|(parameter, argument)| {
+                            (
+                                parameter.clone(),
+                                lower_surface_ty(argument, binders, type_declarations),
+                            )
+                        })
+                        .collect::<BTreeMap<_, _>>();
+                    if let crate::ast::Ty::Sum(_) = source {
+                        if let MonoType::Sum { alts, .. } =
+                            lower_surface_ty(source, &mapping, type_declarations)
+                        {
+                            return MonoType::Sum {
+                                name: name.clone(),
+                                args: args
+                                    .iter()
+                                    .map(|argument| {
+                                        lower_surface_ty(argument, binders, type_declarations)
+                                    })
+                                    .collect(),
+                                alts,
+                            };
+                        }
+                    }
+                    return lower_surface_ty(source, &mapping, type_declarations);
+                }
+            }
+            MonoType::Constructor(
+                name.clone(),
+                args.iter()
+                    .map(|argument| lower_surface_ty(argument, binders, type_declarations))
+                    .collect(),
+            )
         }
+        crate::ast::Ty::Tuple(items) => MonoType::Tuple(
+            items
+                .iter()
+                .map(|item| lower_surface_ty(item, binders, type_declarations))
+                .collect(),
+        ),
+        crate::ast::Ty::List(inner) => MonoType::List(Box::new(lower_surface_ty(
+            inner,
+            binders,
+            type_declarations,
+        ))),
+        crate::ast::Ty::Arrow { from, to } => MonoType::Function(
+            Box::new(lower_surface_ty(from, binders, type_declarations)),
+            Box::new(lower_surface_ty(to, binders, type_declarations)),
+        ),
+        crate::ast::Ty::Ref(inner) => MonoType::Ref(Box::new(lower_surface_ty(
+            inner,
+            binders,
+            type_declarations,
+        ))),
+        crate::ast::Ty::Mut(inner) => MonoType::Mut(Box::new(lower_surface_ty(
+            inner,
+            binders,
+            type_declarations,
+        ))),
+        crate::ast::Ty::NamedBinder { ty, .. } => lower_surface_ty(ty, binders, type_declarations),
+        crate::ast::Ty::Sum(alts) => MonoType::Sum {
+            name: format!("<sum:{}>", alts.len()),
+            args: Vec::new(),
+            alts: alts
+                .iter()
+                .map(|alt| match alt {
+                    crate::ast::SumAlt::Ctor { name, payload } => MonoSumAlt::Constructor {
+                        name: name.clone(),
+                        payload: payload
+                            .as_ref()
+                            .map(|payload| lower_surface_ty(payload, binders, type_declarations)),
+                    },
+                    crate::ast::SumAlt::Bare(ty) => {
+                        MonoSumAlt::Bare(lower_surface_ty(ty, binders, type_declarations))
+                    }
+                    crate::ast::SumAlt::Row(name) => MonoSumAlt::Row(
+                        binders
+                            .get(name)
+                            .cloned()
+                            .unwrap_or_else(|| MonoType::Constructor(name.clone(), Vec::new())),
+                    ),
+                })
+                .collect(),
+        },
+        crate::ast::Ty::RecordType(fields) => MonoType::Record {
+            fields: fields
+                .iter()
+                .map(|(name, ty)| {
+                    (
+                        name.clone(),
+                        lower_surface_ty(ty, binders, type_declarations),
+                    )
+                })
+                .collect(),
+            rest: None,
+        },
+        crate::ast::Ty::OpenRecordType { fields, row } => MonoType::Record {
+            fields: fields
+                .iter()
+                .map(|(name, ty)| {
+                    (
+                        name.clone(),
+                        lower_surface_ty(ty, binders, type_declarations),
+                    )
+                })
+                .collect(),
+            rest: match binders.get(row) {
+                Some(MonoType::Var(id)) => Some(*id),
+                _ => None,
+            },
+        },
     }
-
+}

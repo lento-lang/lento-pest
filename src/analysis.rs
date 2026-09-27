@@ -835,9 +835,14 @@ fn resolve_typed_expr_calls(
                 Some(&accept_constraints),
             ) {
                 Resolution::Selected(id) => *specialization = Some(id),
-                Resolution::NoMatch { .. } => {
+                Resolution::NoMatch { rejections } => {
+                    let reasons = rejections
+                        .iter()
+                        .map(|(id, reason)| format!("#{id}: {reason}"))
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     return Err(format!(
-                        "no specialization of '{name}' accepts call type {applied_type:?}"
+                        "no specialization of '{name}' accepts call type {applied_type:?}; rejections: {reasons}"
                     ));
                 }
                 Resolution::Ambiguous { .. } => {

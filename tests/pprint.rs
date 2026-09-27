@@ -122,3 +122,15 @@ fn pretty_printed_type_applications_are_curried() {
     assert!(printed.contains("Result a e"), "{printed}");
     assert!(!printed.contains("<a") && !printed.contains("<a,"), "{printed}");
 }
+
+#[test]
+fn nested_type_arguments_round_trip_with_parentheses() {
+    let source = "type Result a e = Ok a | Err e\n         type Pair a b = Mk a b\n         spec check : all a, e. Pair (Result a e) bool -> bool\n";
+    let printed = format_program(&parse_program(source).expect("should parse"));
+    assert!(printed.contains("Pair (Result a e) bool"), "{printed}");
+    // The printed form must parse to the same shape, not flatten to four
+    // arguments on `Pair`.
+    let reparsed = parse_program(&printed).expect("printed form should reparse");
+    let printed_again = format_program(&reparsed);
+    assert_eq!(printed, printed_again, "type application printing must be stable");
+}

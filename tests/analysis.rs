@@ -673,10 +673,6 @@ fn nested_type_application_requires_parentheses() {
         "type Result a e = Ok a | Err e\n         spec check : all a, e. Pair (Result a e) bool -> bool\n",
     )
     .expect("nested curried application should parse");
-    let program = parse_program(
-        "type Result a e = Ok a | Err e\n         spec check : all a, e. Pair (Result a e) bool -> bool\n",
-    )
-    .expect("nested curried application should parse");
     let spec = program
         .statements
         .iter()
@@ -745,4 +741,27 @@ fn record_synonym_spec_rejects_missing_field() {
     let error = analyze(source).expect_err("a missing field must not satisfy a record synonym spec");
     assert!(error.contains("no instance") || error.contains("field") || error.contains("not implemented"),
         "{error}");
+}
+
+#[test]
+fn over_arity_candidates_do_not_shadow_exact_arity() {
+    // `f 1` must resolve to the one-argument clause; the two-argument clause
+    // participates in the overload set but must not make the exact-arity
+    // call ambiguous.
+    analyze("fn f x = x\n               fn f x y = x\n               f 1")
+        .expect("an exact-arity call should ignore over-arity candidates");
+}
+
+#[test]
+fn curried_arguments_accept_all_atom_kinds() {
+    // Unit, list, record, and ref atoms are legal curried arguments; each
+    // used to panic in the parser after the curried grammar change.
+    analyze("type Pair a b = Mk a b\n                type Boxed a = Mk a\n                spec f : all a. Pair () bool -> bool\n                fn f value = true")
+        .expect("a unit type argument should parse");
+    analyze("spec g : List [int | str] -> unit\n                fn g _ = ()")
+        .expect("a list-union argument should parse");
+    analyze("spec h : Map { x: int } bool -> unit\n                fn h _ = ()")
+        .expect("a record argument should parse");
+    analyze("spec k : Box (ref int) -> unit\n                fn k _ = ()")
+        .expect("a ref-headed argument should parse");
 }

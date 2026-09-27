@@ -186,13 +186,21 @@ fn type_str(t: &Ty) -> String {
 }
 
 fn format_type_application_arg(out: &mut String, ty: &Ty) {
-    match ty {
-        Ty::Arrow { .. } | Ty::Sum(_) => {
-            out.push('(');
-            format_type(out, ty);
-            out.push(')');
-        }
-        _ => format_type(out, ty),
+    // Anything that could otherwise absorb a following identifier must be
+    // parenthesized: an application (`Option int` would otherwise bind the
+    // next identifier as its own argument), a function arrow, a sum, and
+    // `ref`/`mut` (whose keyword is an identifier-shaped atom).
+    let needs_parens = match ty {
+        Ty::Arrow { .. } | Ty::Sum(_) | Ty::Ref(_) | Ty::Mut(_) => true,
+        Ty::Named { args, .. } => !args.is_empty(),
+        _ => false,
+    };
+    if needs_parens {
+        out.push('(');
+        format_type(out, ty);
+        out.push(')');
+    } else {
+        format_type(out, ty);
     }
 }
 
@@ -237,7 +245,11 @@ fn format_type(out: &mut String, ty: &Ty) {
                 .iter()
                 .map(|alt| match alt {
                     SumAlt::Ctor { name, payload } => match payload {
-                        Some(p) => format!("{name} {}", type_str(p)),
+                        Some(p) => {
+                            let mut rendered = String::new();
+                            format_type_application_arg(&mut rendered, p);
+                            format!("{name} {rendered}")
+                        }
                         None => name.clone(),
                     },
                     SumAlt::Bare(ty) => type_str(ty),

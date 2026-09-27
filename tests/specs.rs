@@ -31,7 +31,9 @@ fn associate_err(src: &str) -> SpecErrorKind {
     let env = base_env(&mut ctx.supply);
     let set = partition(&mut ctx, group, &env).unwrap();
     let mut supply = TypeVarSupply::new();
-    associate_specs(&mut supply, group, &set, &BTreeMap::new()).unwrap_err().kind
+    associate_specs(&mut supply, group, &set, &BTreeMap::new())
+        .unwrap_err()
+        .kind
 }
 
 #[test]
@@ -110,4 +112,27 @@ fn extra_specialization_without_spec_is_not_an_error() {
         .iter()
         .any(|s| matches!(s.origin, SignatureOrigin::SpecAssisted(_))));
     assert!(assoc.unsatisfied.is_empty());
+}
+
+#[test]
+fn shared_open_row_must_absorb_consistently() {
+    // The implementation's row variable appears in both parameter and result
+    // positions; riding spec fields into one position must not silently
+    // accept a contradictory shape in the other.
+    let contradictory = associate_err(
+        "spec f : { x: int, y: int } -> { x: int, y: int, z: int }\n\
+         fn f value = value");
+    assert!(matches!(contradictory, SpecErrorKind::UnsatisfiedSpec { .. }),
+        "expected the contradictory row shape to be rejected, got {contradictory:?}");
+}
+
+#[test]
+fn open_row_binding_respects_spec_field_types() {
+    // `y` rides the row on the parameter side with type int; the result
+    // side then demands y : str, which the bound row cannot provide.
+    let contradictory = associate_err(
+        "spec f : { x: int, y: int } -> { x: str, y: bool }\n\
+         fn f value = { y: false }");
+    assert!(matches!(contradictory, SpecErrorKind::UnsatisfiedSpec { .. }),
+        "expected the type-contradictory ride to be rejected, got {contradictory:?}");
 }
