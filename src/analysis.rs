@@ -156,7 +156,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
             validate_nested_matches(&clause.body, &group.name)?;
         }
 
-        associate_specs(&mut ctx.supply, group, &set)
+        associate_specs(&mut ctx.supply, group, &set, &ctx.type_declarations)
             .map_err(|error| format!("specification failed for '{}': {error}", group.name))?;
 
         // The inferred specialization is now the canonical environment entry

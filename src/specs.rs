@@ -34,7 +34,7 @@ use crate::ast::{Quantifier, SpecType};
 use crate::semantics::{FunctionGroup, ParsedSpec, Span};
 use crate::specialize::OverloadSet;
 use crate::types::{
-    implementation_covers_spec, lower_constraint, lower_ty, MonoType, SchemeConstraint, TypeScheme,
+    implementation_covers_spec, lower_constraint, MonoType, SchemeConstraint, TypeScheme,
     TypeVarId, TypeVarSupply,
 };
 
@@ -113,6 +113,19 @@ impl std::error::Error for SpecError {}
 /// `all a b :: Ord.` quantifiers become quantified variables (fresh ids from
 /// `supply`); constraint arguments lower through the same binder environment.
 pub fn lower_spec(supply: &mut TypeVarSupply, spec: &SpecType) -> TypeScheme {
+    lower_spec_with_declarations(supply, spec, &BTreeMap::new())
+}
+
+/// [`lower_spec`] resolving named type applications through declared types:
+/// sum declarations lower to their `MonoType::Sum`, record synonyms to their
+/// record structure, so a spec written against a declared name covers an
+/// implementation inferred from the same declaration's constructors or
+/// fields.
+pub fn lower_spec_with_declarations(
+    supply: &mut TypeVarSupply,
+    spec: &SpecType,
+    type_declarations: &BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
+) -> TypeScheme {
     let mut binders: BTreeMap<String, MonoType> = BTreeMap::new();
     let mut quantified: Vec<TypeVarId> = Vec::new();
     for Quantifier { vars, .. } in &spec.quantifiers {
@@ -128,7 +141,7 @@ pub fn lower_spec(supply: &mut TypeVarSupply, spec: &SpecType) -> TypeScheme {
             constraints.push(lower_constraint(c, &binders));
         }
     }
-    let body = lower_ty(&spec.ty, &binders);
+    let body = crate::types::lower_surface_ty(&spec.ty, &binders, type_declarations);
     TypeScheme {
         quantified,
         constraints,
@@ -150,12 +163,13 @@ pub fn associate_specs(
     supply: &mut TypeVarSupply,
     group: &FunctionGroup,
     set: &OverloadSet,
+    type_declarations: &BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
 ) -> Result<SpecAssociation, SpecError> {
     let lowered: Vec<LoweredSpec> = group
         .explicit_specs
         .iter()
         .map(|ParsedSpec { decl, index }| LoweredSpec {
-            scheme: lower_spec(supply, &decl.ty),
+            scheme: lower_spec_with_declarations(supply, &decl.ty, type_declarations),
             index: *index,
         })
         .collect();

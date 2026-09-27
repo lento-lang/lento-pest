@@ -727,3 +727,22 @@ fn nested_type_application_requires_parentheses() {
     };
     assert_eq!(args.len(), 0, "arguments never absorb further identifiers");
 }
+
+#[test]
+fn record_synonym_spec_is_satisfied_by_field_implementation() {
+    let source = "type Pair a b = { fst: a, snd: b }\n\
+                  spec first : all a, b. Pair a b -> a\n\
+                  fn first value = value.fst\n\
+                  first { fst: 1, snd: \"two\" }";
+    analyze(source).expect("a record synonym spec should be covered by its field implementation");
+}
+
+#[test]
+fn record_synonym_spec_rejects_missing_field() {
+    let source = "type Pair a b = { fst: a, snd: b }\n\
+                  spec wrong : all a, b. Pair a b -> a\n\
+                  fn wrong value = value.nope";
+    let error = analyze(source).expect_err("a missing field must not satisfy a record synonym spec");
+    assert!(error.contains("no instance") || error.contains("field") || error.contains("not implemented"),
+        "{error}");
+}

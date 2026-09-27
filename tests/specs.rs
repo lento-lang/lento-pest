@@ -10,6 +10,7 @@ use lento::semantics::collect_function_groups;
 use lento::specialize::partition;
 use lento::specs::{associate_specs, SignatureOrigin, SpecErrorKind};
 use lento::types::TypeVarSupply;
+use std::collections::BTreeMap;
 
 fn associate(src: &str) -> lento::specs::SpecAssociation {
     let ast = parse_program(src).unwrap();
@@ -19,7 +20,7 @@ fn associate(src: &str) -> lento::specs::SpecAssociation {
     let env = base_env(&mut ctx.supply);
     let set = partition(&mut ctx, group, &env).unwrap();
     let mut supply = TypeVarSupply::new();
-    associate_specs(&mut supply, group, &set).unwrap()
+    associate_specs(&mut supply, group, &set, &BTreeMap::new()).unwrap()
 }
 
 fn associate_err(src: &str) -> SpecErrorKind {
@@ -30,7 +31,7 @@ fn associate_err(src: &str) -> SpecErrorKind {
     let env = base_env(&mut ctx.supply);
     let set = partition(&mut ctx, group, &env).unwrap();
     let mut supply = TypeVarSupply::new();
-    associate_specs(&mut supply, group, &set).unwrap_err().kind
+    associate_specs(&mut supply, group, &set, &BTreeMap::new()).unwrap_err().kind
 }
 
 #[test]
@@ -82,7 +83,7 @@ fn abstract_spec_only_group_is_allowed() {
     let env = base_env(&mut ctx.supply);
     let set = partition(&mut ctx, group, &env).unwrap();
     let mut supply = TypeVarSupply::new();
-    let assoc = associate_specs(&mut supply, group, &set).unwrap();
+    let assoc = associate_specs(&mut supply, group, &set, &BTreeMap::new()).unwrap();
     assert!(assoc.signatures.is_empty());
 }
 
