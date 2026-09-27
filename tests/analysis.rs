@@ -91,20 +91,30 @@ fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline()
          assert (unwrap_or 0 (Some 3) == 3)\n\
          assert (unwrap_or 7 None == 7)\n\
          assert (unwrap_or \"fallback\" (Some \"value\") == \"value\")\n\
-         assert (map_option (x => x + 1) (Some 2) == Some 3)\n\
-         assert (is_none (map_option (x => x + 1) None))\n\
+         assert (map (x => x + 1) (Some 2) == Some 3)\n\
+         assert (is_none (map (x => x + 1) None))\n\
          assert (is_ok (Ok 3))\n\
          assert (is_err (Err \"bad\"))\n\
-         assert (map_result (x => x + 1) (Ok 2) == Ok 3)\n\
-         assert (is_err (map_result (x => x + 1) (Err \"bad\")))\n\
+         assert (map (x => x + 1) (Ok 2) == Ok 3)\n\
+         assert (is_err (map (x => x + 1) (Err \"bad\")))\n\
          assert (map_err (s => concat s \"!\") (Err \"bad\") == Err \"bad!\")\n\
          assert (map_err (s => concat s \"!\") (Ok 2) == Ok 2)\n\
-         assert (and_then_result (x => Ok (x + 1)) (Ok 2) == Ok 3)\n\
-         assert (is_err (and_then_result (x => Ok (x + 1)) (Err \"bad\")))\n\
+         assert (and_then (x => Ok (x + 1)) (Ok 2) == Ok 3)\n\
+         assert (is_err (and_then (x => Ok (x + 1)) (Err \"bad\")))\n\
          (Left 1, Right \"right\", Break \"stop\", Continue 2, Unbounded, Included 3, Excluded 4)\n",
     );
     let program = parse_program(&source).expect("prelude and consumers should parse");
     let result = analyze_program(&program).expect("prelude and consumers should analyze");
+    assert_eq!(
+        result
+            .overloads
+            .iter()
+            .find(|set| set.name == "map")
+            .expect("map overloads should be collected")
+            .specializations
+            .len(),
+        2
+    );
     let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
         .expect("prelude combinators and constructors should evaluate");
