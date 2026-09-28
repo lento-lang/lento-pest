@@ -1001,6 +1001,9 @@ fn type_base(pair: Pair<'_, Rule>) -> Ty {
     };
     match first.as_rule() {
         Rule::list_union => list_union(first.clone()),
+        Rule::ty_tuple => {
+            Ty::Tuple(first.clone().into_inner().map(type_).collect())
+        }
         Rule::ty_record => ty_record(first.clone()),
         Rule::identifier => {
             let name = first.as_str().to_string();

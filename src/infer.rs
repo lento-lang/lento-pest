@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use crate::ast::{BinaryOp, Expr, FnDecl, Lit, PatKind, Pattern, RecordValueEntry, UnaryOp};
+use crate::ast::{BinaryOp, Decl, Expr, FnDecl, Lit, PatKind, Pattern, RecordValueEntry, Stmt, UnaryOp};
 use crate::resolve::{resolve_call, Resolution};
 use crate::semantics::FunctionGroup;
 use crate::specialize::OverloadSet;
@@ -347,6 +347,11 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
         ("__bool_to_string", unary(ctor::bool(), ctor::str())),
         ("__str_to_string", unary(ctor::str(), ctor::str())),
         ("__bool_assert", unary(ctor::bool(), ctor::unit())),
+        ("__str_trim", unary(ctor::str(), ctor::str())),
+        (
+            "__str_chars",
+            unary(ctor::str(), list(ctor::str())),
+        ),
     ] {
         env.insert(name.to_string(), mono(body));
     }
@@ -487,6 +492,25 @@ pub fn base_env(_supply: &mut TypeVarSupply) -> TypeEnv {
     env.insert(
         "range".to_string(),
         mono(binary(ctor::int(), ctor::int(), list(ctor::int()))),
+    );
+    // Total string parse: `str -> Option int`, built with the prelude's
+    // Option sum shape.
+    env.insert(
+        "__str_to_int".to_string(),
+        mono(unary(
+            ctor::str(),
+            MonoType::Sum {
+                name: "Option".to_string(),
+                args: vec![ctor::int()],
+                alts: vec![
+                    MonoSumAlt::Constructor { name: "None".to_string(), payload: None },
+                    MonoSumAlt::Constructor {
+                        name: "Some".to_string(),
+                        payload: Some(ctor::int()),
+                    },
+                ],
+            },
+        )),
     );
     let _ = b;
     env
@@ -834,6 +858,18 @@ pub fn infer_typed_expr(
                 }
                 result = ret;
                 args.push(arg);
+            }
+            if c.args.is_empty() {
+                // A zero-argument call `f ()` must still constrain the callee
+                // to consume unit; without this the callee keeps a bare
+                // variable and the clause generalizes over the wrong shape.
+                let ret = ctx.fresh();
+                let expected = MonoType::Function(Box::new(MonoType::Tuple(Vec::new())), Box::new(ret.clone()));
+                match ctx.resolve(&result) {
+                    MonoType::Function(_, output) => ctx.unify(&output, &ret)?,
+                    _ => ctx.unify(&result, &expected)?,
+                }
+                result = ret;
             }
             validate_intrinsic_call(ctx, &callee, &args)?;
             Ok(TypedExpr {
@@ -1303,6 +1339,74 @@ pub fn infer_expr(
 ///   3. annotations unify with `Pi` (inside `check_pattern`);
 ///   4. body infers against fresh `R`, or unifies with the declared return;
 ///   5. the curried clause type is `P1 -> ... -> Pn -> R`.
+/// Does the expression mention `name` as a variable (syntactic check)?
+fn expr_references_var(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::Var(var) => var.name == name,
+        Expr::Lit(_) => false,
+        Expr::Ref(r) => expr_references_var(r.inner.as_ref(), name),
+        Expr::Assign(a) => {
+            expr_references_var(a.place.as_ref(), name)
+                || expr_references_var(a.value.as_ref(), name)
+        }
+        Expr::Lambda(l) => expr_references_var(&l.body, name),
+        Expr::Call(c) => {
+            expr_references_var(c.callee.as_ref(), name)
+                || c.args.iter().any(|arg| expr_references_var(arg, name))
+        }
+        Expr::Member(m) => expr_references_var(m.obj.as_ref(), name),
+        Expr::Index(i) => {
+            expr_references_var(i.obj.as_ref(), name)
+                || expr_references_var(i.index.as_ref(), name)
+        }
+        Expr::Unary(u) => expr_references_var(u.operand.as_ref(), name),
+        Expr::Binary(b) => {
+            expr_references_var(b.lhs.as_ref(), name) || expr_references_var(b.rhs.as_ref(), name)
+        }
+        Expr::Tuple(t) => t.items.iter().any(|item| expr_references_var(item, name)),
+        Expr::List(list) => {
+            let mut current = list;
+            loop {
+                match current {
+                    crate::ast::ListExpr::Empty => break,
+                    crate::ast::ListExpr::Cells(cell) => {
+                        if expr_references_var(&cell.head, name) {
+                            return true;
+                        }
+                        current = &cell.tail;
+                    }
+                    crate::ast::ListExpr::Spread { source, rest } => {
+                        if expr_references_var(source, name) {
+                            return true;
+                        }
+                        current = rest.as_ref();
+                    }
+                }
+            }
+            false
+        }
+        Expr::Record(record) => record.entries.iter().any(|entry| match entry {
+            RecordValueEntry::Field(_, value) | RecordValueEntry::Spread(value) => {
+                expr_references_var(value, name)
+            }
+        }),
+        Expr::Block(block) => block.body.iter().any(|stmt| match stmt {
+            Stmt::Expr(expression) => expr_references_var(expression, name),
+            Stmt::Decl(Decl::Let(binding)) => expr_references_var(&binding.value, name),
+            _ => false,
+        }),
+        Expr::Match(matched) => {
+            expr_references_var(matched.scrutinee.as_ref(), name)
+                || matched.arms.iter().any(|arm| {
+                    arm.guard
+                        .as_ref()
+                        .is_some_and(|guard| expr_references_var(guard, name))
+                        || expr_references_var(&arm.body, name)
+                })
+        }
+    }
+}
+
 pub fn infer_clause(
     ctx: &mut InferCtx,
     clause: &FnDecl,
@@ -1311,6 +1415,18 @@ pub fn infer_clause(
     let saved_places = ctx.mutable_places.clone();
     let constraints_start = ctx.constraints.len();
     let mut local = env.clone();
+    // A recursive reference to the clause's own name inside its body must
+    // constrain a DEDICATED variable (tied to the clause type afterwards),
+    // not the caller's seed entry — unifying through the seed mis-types
+    // higher-order recursive calls. The binding is only installed when the
+    // body actually mentions the name, so plain clauses keep the classic
+    // fresh-variable numbering.
+    let mut recursive_var: Option<MonoType> = None;
+    if expr_references_var(&clause.body, &clause.name) {
+        let recursive = ctx.fresh();
+        local.insert(clause.name.clone(), TypeScheme::mono(recursive.clone()));
+        recursive_var = Some(recursive);
+    }
     let mut param_tys = Vec::with_capacity(clause.params.len());
     for p in &clause.params {
         let pi = ctx.fresh();
@@ -1335,6 +1451,9 @@ pub fn infer_clause(
     let mut ty = result_ty;
     for pt in param_tys.into_iter().rev() {
         ty = MonoType::Function(Box::new(pt), Box::new(ty));
+    }
+    if let Some(recursive) = &recursive_var {
+        ctx.unify(recursive, &ty)?;
     }
     Ok(InferredClause {
         ty,

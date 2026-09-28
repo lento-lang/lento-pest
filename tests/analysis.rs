@@ -125,7 +125,7 @@ fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline()
             .expect("map overloads should be collected")
             .specializations
             .len(),
-        2
+        3
     );
     let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
