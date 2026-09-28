@@ -193,19 +193,37 @@ fn spec_decl(pair: Pair<'_, Rule>) -> SpecDecl {
 fn class_decl(pair: Pair<'_, Rule>) -> ClassDecl {
     let mut name = String::new();
     let mut params = Vec::new();
+    let mut param_kinds = Vec::new();
     let mut specs = Vec::new();
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::identifier if name.is_empty() => name = inner.as_str().to_string(),
-            Rule::type_param => params.push(inner.as_str().to_string()),
+            Rule::type_param => {
+                params.push(inner.as_str().to_string());
+                param_kinds.push(None);
+            }
+            Rule::kinded_param => {
+                let mut fields = inner.into_inner();
+                params.push(fields.next().unwrap().as_str().to_string());
+                param_kinds.push(Some(kind(fields.next().unwrap())));
+            }
             Rule::spec_decl => specs.push(spec_decl(inner)),
             _ => {}
         }
     }
-    ClassDecl {
-        name,
-        params,
-        specs,
+    ClassDecl { name, params, param_kinds, specs }
+}
+
+/// `*` | `* -> *` | `* -> (* -> *) -> *` — right-associative kind.
+fn kind(pair: Pair<'_, Rule>) -> crate::ast::Kind {
+    let mut inner = pair.into_inner();
+    let star = crate::ast::Kind::Star;
+    match inner.next() {
+        Some(rest) => crate::ast::Kind::Arrow(
+            Box::new(star),
+            Box::new(kind(rest)),
+        ),
+        None => star,
     }
 }
 

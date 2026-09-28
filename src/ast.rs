@@ -70,6 +70,10 @@ pub struct UseDecl {
 pub struct ClassDecl {
     pub name: String,
     pub params: Vec<String>,
+    /// Kind annotation per parameter, parallel to `params` (`None` when
+    /// written bare). A `None` parameter used at a higher kind in a spec
+    /// body gets its kind inferred from usage.
+    pub param_kinds: Vec<Option<Kind>>,
     pub specs: Vec<SpecDecl>,
 }
 
@@ -140,6 +144,46 @@ pub struct Quantifier {
 pub struct Constraint {
     pub name: String,
     pub args: Vec<Ty>,
+}
+
+/// The kind of a type: `Star` is a proper type (kind `*`); `Arrow(a, b)` is
+/// the kind of a type constructor taking `a` and yielding `b`, written
+/// `a -> b` (right-associative).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    Star,
+    Arrow(Box<Kind>, Box<Kind>),
+}
+
+impl Kind {
+    /// The kind of a constructor applied to `applied` arguments when its full
+    /// arity is `arity`: the remaining arrow. `None` when over-applied.
+    pub fn applied(arity: usize, applied: usize) -> Option<Kind> {
+        if applied > arity {
+            return None;
+        }
+        let mut kind = Kind::Star;
+        for _ in applied..arity {
+            kind = Kind::Arrow(Box::new(Kind::Star), Box::new(kind));
+        }
+        Some(kind)
+    }
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Kind::Star => write!(f, "*"),
+            Kind::Arrow(from, to) => {
+                let needs_parens = matches!(**from, Kind::Arrow(_, _));
+                if needs_parens {
+                    write!(f, "({from}) -> {to}")
+                } else {
+                    write!(f, "{from} -> {to}")
+                }
+            }
+        }
+    }
 }
 
 /// Types. `mut`/`ref` are memory markers; functions are right-associative

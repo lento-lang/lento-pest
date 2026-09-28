@@ -54,8 +54,14 @@ mod_decl       = { "mod" ~ identifier ~ block }
 use_decl       = { "use" ~ identifier ~ ("." ~ identifier)* }
 
 // A class is a named scope of required ordinary specs. Its type parameters
-// may be proper types or higher-kinded constructors; kinds are inferred later.
-class_decl     = { "class" ~ identifier ~ type_param* ~ "{" ~ NEWLINE* ~ (spec_decl ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+// may be proper types or higher-kinded constructors. A parameter may carry a
+// kind annotation (`f : * -> *`); unannotated parameters default to `*`, and
+// a parameter used at a higher kind in a spec body must be annotated or its
+// kind is inferred from the number of type applications it receives.
+class_decl     = { "class" ~ identifier ~ class_param* ~ "{" ~ NEWLINE* ~ (spec_decl ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+class_param    = _{ kinded_param | type_param }
+kinded_param   = { "(" ~ type_var ~ ":" ~ kind ~ ")" }
+kind           = { "*" ~ ("->" ~ kind)? }
 
 // An implementation explicitly associates a class with a type or type
 // constructor and supplies ordinary function definitions for its specs.
