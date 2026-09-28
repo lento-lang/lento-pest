@@ -19,9 +19,9 @@ struct Cli {
     print_code: bool,
     #[arg(long, requires = "file", conflicts_with_all = ["print_ast", "print_code"])]
     fmt: bool,
-    /// Load the class-based prelude (its global method names may shadow intrinsics).
+    /// Evaluate a file without loading the standard prelude.
     #[arg(long, requires = "file")]
-    prelude: bool,
+    no_prelude: bool,
 }
 
 fn read_line(prompt: Option<&str>) -> Option<String> {
@@ -96,7 +96,7 @@ fn main() -> Result<(), String> {
                 Ok(())
             } else {
                 let ast = load(path)?;
-                interpret(&ast, cli.prelude)
+                interpret(&ast, !cli.no_prelude)
             }
         }
         None => {

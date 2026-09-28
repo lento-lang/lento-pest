@@ -6,7 +6,8 @@ for the Lento language.
 ## Build & Run
 
 ```bash
-cargo run -- path/to/file.lt         # parse, type-check, evaluate
+cargo run -- path/to/file.lt         # parse, type-check, evaluate with the prelude
+cargo run -- --no-prelude path/to/file.lt  # evaluate without the prelude
 cargo run -- --fmt path/to/file.lt   # format in place
 cargo run -- --print-ast path/to/file.lt
 cargo run                            # REPL
