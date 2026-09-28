@@ -1720,41 +1720,21 @@ pub fn lower_surface_ty(
     binders: &BTreeMap<String, MonoType>,
     type_declarations: &BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
 ) -> MonoType {
-        match ty {
-            crate::ast::Ty::Named { name, args } => {
-                if let Some(bound) = binders.get(name) {
-                    // Bare binder -> variable; applied binder -> type app.
-                    if args.is_empty() {
-                        return bound.clone();
-                    }
-                    return MonoType::TypeApp {
-                        head: Box::new(bound.clone()),
-                        args: args
-                            .iter()
-                            .map(|argument| lower_surface_ty(argument, binders, type_declarations))
-                            .collect(),
-                    };
-                }
+    match ty {
+        crate::ast::Ty::Named { name, args } => {
+            if let Some(bound) = binders.get(name) {
                 if args.is_empty() {
-                    if name == "unit" {
-                        return MonoType::Tuple(Vec::new());
-                    }
-                    if let Some(primitive) = match name.as_str() {
-                        "Int" => Some("int"),
-                        "Float" => Some("float"),
-                        "String" => Some("str"),
-                        "Bool" => Some("bool"),
-                        "Unit" => Some("unit"),
-                        "usize" => Some("int"),
-                        _ => None,
-                    } {
-                        return if primitive == "unit" {
-                            MonoType::Tuple(Vec::new())
-                        } else {
-                            MonoType::Constructor(primitive.to_string(), Vec::new())
-                        };
-                    }
+                    return bound.clone();
                 }
+                return MonoType::TypeApp {
+                    head: Box::new(bound.clone()),
+                    args: args
+                        .iter()
+                        .map(|argument| lower_surface_ty(argument, binders, type_declarations))
+                        .collect(),
+                };
+            }
+            if args.is_empty() {
                 if name == "unit" {
                     return MonoType::Tuple(Vec::new());
                 }
