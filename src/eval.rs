@@ -412,11 +412,26 @@ fn eval_let_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
     Ok(value)
 }
 
-/// Impl methods are ordinary functions, but their definitions are not
-/// recursive bindings.  Avoid installing a self-referential cell while
-/// evaluating a method that delegates to a same-named intrinsic.
+/// Impl methods are ordinary functions. A method whose value is a closure
+/// gets a self-referential cell so the body can call the method recursively
+/// (`fn fmap f xs = ... fmap f t ...`); the cell is filled with the closure
+/// after evaluation, so a method delegating to a same-named intrinsic still
+/// resolves through the temporary inline binding rather than an empty cell.
 fn eval_method_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
     if let PatKind::Var(name) = &let_decl.pattern.kind {
+        if binding_needs_cell(&let_decl.value) {
+            let cell = Rc::new(RefCell::new(Value::Unit));
+            env.insert(
+                name.clone(),
+                Binding::Cell {
+                    value: cell.clone(),
+                    mutable: false,
+                },
+            );
+            let value = eval_expr(&let_decl.value, env)?;
+            *cell.borrow_mut() = value.clone();
+            return Ok(value);
+        }
         let value = eval_expr(&let_decl.value, env)?;
         env.insert(name.clone(), Binding::Inline(value.clone()));
         Ok(value)
@@ -1090,6 +1105,9 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
             "bool" => matches!(value, Value::Bool(_)),
             "str" | "string" => matches!(value, Value::Str(_)),
             "unit" => matches!(value, Value::Unit),
+            // The list type constructor as an impl target (`impl Functor
+            // list`): any list value matches.
+            "list" => matches!(value, Value::List(_)),
             _ => match env.get(name) {
                 Some(Binding::TypeDef { params, ty: decl }) => {
                     // A type parameter matches anything at runtime.

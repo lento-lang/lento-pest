@@ -1801,8 +1801,10 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
 }
 
 fn validate_advanced_declarations(program: &Program) -> Result<(), String> {
+    // `list` names the list type constructor (kind `* -> *`) so impl targets
+    // like `impl Functor list` are valid; `[a]` remains the applied spelling.
     let mut type_names = BTreeSet::from_iter(
-        ["int", "float", "str", "bool", "bytes", "unit", "char"]
+        ["int", "float", "str", "bool", "bytes", "unit", "char", "list"]
             .into_iter()
             .map(String::from),
     );

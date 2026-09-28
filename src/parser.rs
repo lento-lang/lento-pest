@@ -842,33 +842,31 @@ fn tuple(pair: Pair<'_, Rule>) -> Expr {
 }
 
 fn list(pair: Pair<'_, Rule>) -> Expr {
-    let mut tail = ListExpr::Empty;
-    let mut entries: Vec<Expr> = Vec::new();
+    // Entries in source order; build the cons/spine right-to-left so that a
+    // spread sits exactly at its source position in the chain.
+    let mut entries: Vec<(bool, Expr)> = Vec::new();
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::list_spread => {
-                // Flush accumulated concrete cells before the spread so the
-                // spine order matches the source order.
-                for item in entries.drain(..).rev() {
-                    tail = ListExpr::Cells(Box::new(ListCons {
-                        head: Box::new(item),
-                        tail: Box::new(tail),
-                    }));
-                }
                 let source = expression(inner.into_inner().next().unwrap());
-                tail = ListExpr::Spread {
-                    source: Box::new(source),
-                    rest: Box::new(tail),
-                };
+                entries.push((true, source));
             }
-            _ => entries.push(expression(inner)),
+            _ => entries.push((false, expression(inner))),
         }
     }
-    for item in entries.into_iter().rev() {
-        tail = ListExpr::Cells(Box::new(ListCons {
-            head: Box::new(item),
-            tail: Box::new(tail),
-        }));
+    let mut tail = ListExpr::Empty;
+    for (is_spread, entry) in entries.into_iter().rev() {
+        tail = if is_spread {
+            ListExpr::Spread {
+                source: Box::new(entry),
+                rest: Box::new(tail),
+            }
+        } else {
+            ListExpr::Cells(Box::new(ListCons {
+                head: Box::new(entry),
+                tail: Box::new(tail),
+            }))
+        };
     }
     Expr::List(tail)
 }

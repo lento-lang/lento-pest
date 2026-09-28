@@ -630,6 +630,19 @@ pub fn unify(
         (MonoType::List(a), MonoType::List(b))
         | (MonoType::Ref(a), MonoType::Ref(b))
         | (MonoType::Mut(a), MonoType::Mut(b)) => unify(subst, &a.clone(), &b.clone()),
+        // The `list` type constructor applied to one argument denotes the
+        // same type as the structural List node (impl targets like
+        // `impl Functor list`). The bare constructor (kind `* -> *`) is
+        // compatible with any List instance shape.
+        (MonoType::Constructor(name, args), MonoType::List(inner))
+        | (MonoType::List(inner), MonoType::Constructor(name, args))
+            if name == "list" && args.len() <= 1 =>
+        {
+            match (args.first(), args.len()) {
+                (Some(arg), _) => unify(subst, arg, inner),
+                _ => Ok(()),
+            }
+        }
         (MonoType::Mut(inner), other) => unify(subst, inner, &other),
         (other, MonoType::Mut(inner)) => unify(subst, &other, inner),
         (
@@ -1523,6 +1536,20 @@ fn matches(
         | (MonoType::Mut(a), MonoType::Mut(b)) => {
             let (a, b) = (a.clone(), b.clone());
             matches(&a, &b, matchable, subst, open_absorption)
+        }
+        // The `list` type constructor vs the structural List node. The bare
+        // constructor is compatible with any List shape.
+        (MonoType::Constructor(name, args), MonoType::List(inner))
+        | (MonoType::List(inner), MonoType::Constructor(name, args))
+            if name == "list" && args.len() <= 1 =>
+        {
+            match (args.first(), args.len()) {
+                (Some(arg), _) => {
+                    let (arg, inner) = (arg.clone(), inner.clone());
+                    matches(&arg, &inner, matchable, subst, open_absorption)
+                }
+                _ => true,
+            }
         }
         (MonoType::Mut(inner), other) | (other, MonoType::Mut(inner)) => {
             matches(inner, other, matchable, subst, open_absorption)
