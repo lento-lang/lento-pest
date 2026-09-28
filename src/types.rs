@@ -50,6 +50,17 @@ pub enum MonoType {
     Var(TypeVarId),
     /// An applied named type constructor: `int`, `bytes`, `Ast`, `Map k v`.
     Constructor(TypeConstructorId, Vec<MonoType>),
+    /// Type application `f a` where the head is not (yet) a known
+    /// constructor: a higher-kinded type variable (`f : * -> *`) applied to
+    /// arguments. When the head resolves to a constructor-like type
+    /// (`Constructor`, `Sum`, or the `list` constructor), substitution
+    /// *reduces* the application (see `Substitution::apply`). A `Var` head
+    /// may be bound to a partially applied constructor during unification,
+    /// which is how `Functor f` constraints dispatch.
+    TypeApp {
+        head: Box<MonoType>,
+        args: Vec<MonoType>,
+    },
     /// A function type `from -> to` (right-associative at the surface).
     Function(Box<MonoType>, Box<MonoType>),
     /// `(a, b, ...)`. `Tuple(vec![])` is the unit type `()`.
@@ -170,6 +181,12 @@ impl MonoType {
                     a.collect_free_vars(seen, out);
                 }
             }
+            MonoType::TypeApp { head, args } => {
+                head.collect_free_vars(seen, out);
+                for a in args {
+                    a.collect_free_vars(seen, out);
+                }
+            }
             MonoType::Function(from, to) => {
                 from.collect_free_vars(seen, out);
                 to.collect_free_vars(seen, out);
@@ -238,6 +255,46 @@ fn env_free_vars(env: &TypeEnv) -> BTreeSet<TypeVarId> {
 }
 
 // --------------------------------------------------------------------------
+// Type application (higher-kinded types)
+// --------------------------------------------------------------------------
+
+/// Reduce a type application when the head is a known constructor-like type:
+///
+///   - `Constructor("list", []) a`      -> `List a`   (the list constructor)
+///   - `Constructor(n, hargs) args`     -> `Constructor(n, hargs ++ args)`
+///   - `Sum { name, args: hargs, alts } args` -> the sum with `args` appended
+///
+/// Anything else (an unresolved `Var` head, a function type, ...) stays as an
+/// unreduced [`MonoType::TypeApp`]. This is the beta-step of type-level
+/// application: binding a higher-kinded variable to a constructor makes
+/// every `TypeApp` over it collapse to that constructor applied.
+fn reduce_type_app(head: MonoType, args: Vec<MonoType>) -> MonoType {
+    match head {
+        MonoType::Constructor(name, head_args)
+            if name == "list" && head_args.is_empty() && args.len() == 1 =>
+        {
+            MonoType::List(Box::new(args.into_iter().next().unwrap()))
+        }
+        MonoType::Constructor(name, mut head_args) => {
+            head_args.extend(args);
+            MonoType::Constructor(name, head_args)
+        }
+        MonoType::Sum {
+            name,
+            args: mut sum_args,
+            alts,
+        } => {
+            sum_args.extend(args);
+            MonoType::Sum { name, args: sum_args, alts }
+        }
+        head => MonoType::TypeApp {
+            head: Box::new(head),
+            args,
+        },
+    }
+}
+
+// --------------------------------------------------------------------------
 // Capture-avoiding substitution
 // --------------------------------------------------------------------------
 
@@ -292,12 +349,19 @@ impl Substitution {
                 Some(t) => t.clone(),
                 None => ty.clone(),
             },
-            MonoType::Constructor(name, args) => {
-                MonoType::Constructor(name.clone(), args.iter().map(|a| self.apply(a)).collect())
+            MonoType::Constructor(name, args) => MonoType::Constructor(
+                name.clone(),
+                args.iter().map(|a| self.apply(a)).collect(),
+            ),
+            MonoType::TypeApp { head, args } => {
+                let head = self.apply(head);
+                let args: Vec<MonoType> = args.iter().map(|a| self.apply(a)).collect();
+                reduce_type_app(head, args)
             }
-            MonoType::Function(from, to) => {
-                MonoType::Function(Box::new(self.apply(from)), Box::new(self.apply(to)))
-            }
+            MonoType::Function(from, to) => MonoType::Function(
+                Box::new(self.apply(from)),
+                Box::new(self.apply(to)),
+            ),
             MonoType::Tuple(items) => {
                 MonoType::Tuple(items.iter().map(|t| self.apply(t)).collect())
             }
@@ -433,6 +497,33 @@ fn bind_var(subst: &mut Substitution, var: TypeVarId, ty: &MonoType) -> Result<(
     Ok(())
 }
 
+/// Bind a higher-kinded variable (the head of a `TypeApp`) to the constructor
+/// prefix of `other` and report that prefix for re-application. The prefix
+/// keeps any leading arguments that the type application does not itself
+/// supply: `f a ~ Result int e` is a kind error, but a partially applied
+/// head like `map : ... -> (Result int) a -> ...` binds `f := Result int`.
+/// Returns `None` when `other` is not constructor-like (kind mismatch: a
+/// `* -> *` variable cannot unify with a plain `*` type).
+fn bind_type_app_head(
+    subst: &mut Substitution,
+    var: TypeVarId,
+    other: &MonoType,
+    app_arg_count: usize,
+) -> Result<Option<MonoType>, UnifyError> {
+    let prefix = |name: &str, constructor_args: &[MonoType]| {
+        let keep = constructor_args.len().saturating_sub(app_arg_count);
+        MonoType::Constructor(name.to_string(), constructor_args[..keep].to_vec())
+    };
+    let head = match other {
+        MonoType::Constructor(name, args) => prefix(name, args),
+        MonoType::Sum { name, args, .. } => prefix(name, args),
+        MonoType::List(_) => MonoType::Constructor("list".to_string(), Vec::new()),
+        _ => return Ok(None),
+    };
+    bind_var(subst, var, &head)?;
+    Ok(Some(head))
+}
+
 /// Unify two monotypes, extending `subst` on success.
 pub fn unify(
     subst: &mut Substitution,
@@ -445,6 +536,52 @@ pub fn unify(
         (MonoType::Var(a), MonoType::Var(b)) if a == b => Ok(()),
         (MonoType::Var(v), _) => bind_var(subst, *v, &right),
         (_, MonoType::Var(v)) => bind_var(subst, *v, &left),
+        // `f a` vs `f' a'`: same arity -> unify heads, then arguments.
+        (
+            MonoType::TypeApp { head: h1, args: a1 },
+            MonoType::TypeApp { head: h2, args: a2 },
+        ) => {
+            if a1.len() != a2.len() {
+                return Err(UnifyError::Mismatch { left, right });
+            }
+            unify(subst, h1, h2)?;
+            for (x, y) in a1.clone().iter().zip(a2.clone().iter()) {
+                unify(subst, x, y)?;
+            }
+            Ok(())
+        }
+        // `f a` (variable head) vs a constructor-like type: bind the head to
+        // the bare constructor (kind `* -> *`), then unify the reduced
+        // application against the other side. A plain `List` head binds to
+        // the `list` constructor.
+        (MonoType::TypeApp { head, args }, other) if matches!(&**head, MonoType::Var(_)) => {
+            let MonoType::Var(var) = &**head else { unreachable!() };
+            match bind_type_app_head(subst, *var, other, args.len()) {
+                Ok(Some(bound_head)) => {
+                    let applied = subst.apply(&MonoType::TypeApp {
+                        head: Box::new(bound_head),
+                        args: args.clone(),
+                    });
+                    unify(subst, &applied, other)
+                }
+                Ok(None) => Err(UnifyError::Mismatch { left, right }),
+                Err(error) => Err(error),
+            }
+        }
+        (other, MonoType::TypeApp { head, args }) if matches!(&**head, MonoType::Var(_)) => {
+            let MonoType::Var(var) = &**head else { unreachable!() };
+            match bind_type_app_head(subst, *var, other, args.len()) {
+                Ok(Some(bound_head)) => {
+                    let applied = subst.apply(&MonoType::TypeApp {
+                        head: Box::new(bound_head),
+                        args: args.clone(),
+                    });
+                    unify(subst, other, &applied)
+                }
+                Ok(None) => Err(UnifyError::Mismatch { left, right }),
+                Err(error) => Err(error),
+            }
+        }
         (MonoType::Constructor(n1, a1), MonoType::Constructor(n2, a2)) => {
             if n1 != n2 || a1.len() != a2.len() {
                 return Err(UnifyError::Mismatch { left, right });
@@ -963,6 +1100,10 @@ fn rename_vars(ty: &MonoType, renaming: &BTreeMap<TypeVarId, TypeVarId>) -> Mono
             name.clone(),
             args.iter().map(|a| rename_vars(a, renaming)).collect(),
         ),
+        MonoType::TypeApp { head, args } => MonoType::TypeApp {
+            head: Box::new(rename_vars(head, renaming)),
+            args: args.iter().map(|a| rename_vars(a, renaming)).collect(),
+        },
         MonoType::Function(from, to) => MonoType::Function(
             Box::new(rename_vars(from, renaming)),
             Box::new(rename_vars(to, renaming)),
@@ -1017,10 +1158,18 @@ pub fn alpha_equiv(a: &TypeScheme, b: &TypeScheme) -> bool {
 pub fn lower_ty(ty: &Ty, binders: &BTreeMap<String, MonoType>) -> MonoType {
     match ty {
         Ty::Named { name, args } => {
-            if args.is_empty() {
-                if let Some(var) = binders.get(name) {
+            if let Some(var) = binders.get(name) {
+                // A quantified binder used bare is a variable; applied to
+                // arguments it is a higher-kinded type application (`f a`).
+                if args.is_empty() {
                     return var.clone();
                 }
+                return MonoType::TypeApp {
+                    head: Box::new(var.clone()),
+                    args: args.iter().map(|a| lower_ty(a, binders)).collect(),
+                };
+            }
+                if args.is_empty() {
                 if name == "unit" {
                     return MonoType::Tuple(Vec::new());
                 }
@@ -1193,6 +1342,22 @@ pub fn call_type_compatible(expected: &MonoType, actual: &MonoType) -> bool {
     }
 }
 
+/// The bare, unapplied constructor of a constructor-like type, for binding a
+/// higher-kinded variable's head: `Option a`/`Option` -> `Option`,
+/// `[a]`/`List` -> `list`. `None` for non-constructor kinds.
+fn bare_constructor_prefix(ty: &MonoType, app_arg_count: usize) -> Option<MonoType> {
+    let prefix = |name: &str, constructor_args: &[MonoType]| {
+        let keep = constructor_args.len().saturating_sub(app_arg_count);
+        MonoType::Constructor(name.to_string(), constructor_args[..keep].to_vec())
+    };
+    match ty {
+        MonoType::Constructor(name, args) => Some(prefix(name, args)),
+        MonoType::Sum { name, args, .. } => Some(prefix(name, args)),
+        MonoType::List(_) => Some(MonoType::Constructor("list".to_string(), Vec::new())),
+        _ => None,
+    }
+}
+
 /// One-way matching: bind `left`'s matchable variables (via `subst`) so that
 /// `left` becomes structurally equal to the rigid `right`. Only variables in
 /// `matchable` may be bound; all other variables are rigid constants and are
@@ -1277,14 +1442,48 @@ fn matches(
                     .zip(a2.clone().iter())
                     .all(|(x, y)| matches(x, y, matchable, subst, open_absorption))
         }
-        (
-            MonoType::Sum {
-                name: sum_name,
-                args: sum_args,
-                ..
-            },
-            MonoType::Constructor(name, args),
-        ) => {
+        (MonoType::TypeApp { head: h1, args: a1 }, MonoType::TypeApp { head: h2, args: a2 }) => {
+            a1.len() == a2.len()
+                && matches(h1, h2, matchable, subst, open_absorption)
+                && a1
+                    .clone()
+                    .iter()
+                    .zip(a2.clone().iter())
+                    .all(|(x, y)| matches(x, y, matchable, subst, open_absorption))
+        }
+        // A matchable `TypeApp` head binds to the bare constructor of the
+        // other side, then the reduced application is matched. This is how a
+        // generic spec (`Functor f => ... -> f a -> f b`) covers a concrete
+        // implementation (`... -> Option a -> Option b`).
+        (MonoType::TypeApp { head, args }, right)
+            if matches!(&**head, MonoType::Var(v) if matchable.contains(v)) =>
+        {
+            let MonoType::Var(var) = &**head else { unreachable!() };
+            let Some(bound_head) = bare_constructor_prefix(right, args.len()) else {
+                return false;
+            };
+            subst.insert(*var, bound_head.clone());
+            let applied = subst.apply(&MonoType::TypeApp {
+                head: Box::new(bound_head),
+                args: args.clone(),
+            });
+            matches(&applied, right, matchable, subst, open_absorption)
+        }
+        (left, MonoType::TypeApp { head, args })
+            if matches!(&**head, MonoType::Var(v) if matchable.contains(v)) =>
+        {
+            let MonoType::Var(var) = &**head else { unreachable!() };
+            let Some(bound_head) = bare_constructor_prefix(left, args.len()) else {
+                return false;
+            };
+            subst.insert(*var, bound_head.clone());
+            let applied = subst.apply(&MonoType::TypeApp {
+                head: Box::new(bound_head),
+                args: args.clone(),
+            });
+            matches(left, &applied, matchable, subst, open_absorption)
+        }
+        (MonoType::Sum { name: sum_name, args: sum_args, .. }, MonoType::Constructor(name, args)) => {
             sum_name == name
                 && sum_args.len() == args.len()
                 && sum_args
@@ -1482,11 +1681,40 @@ pub fn lower_surface_ty(
     binders: &BTreeMap<String, MonoType>,
     type_declarations: &BTreeMap<String, (Vec<String>, crate::ast::Ty)>,
 ) -> MonoType {
-    match ty {
-        crate::ast::Ty::Named { name, args } => {
-            if args.is_empty() {
+        match ty {
+            crate::ast::Ty::Named { name, args } => {
                 if let Some(bound) = binders.get(name) {
-                    return bound.clone();
+                    // Bare binder -> variable; applied binder -> type app.
+                    if args.is_empty() {
+                        return bound.clone();
+                    }
+                    return MonoType::TypeApp {
+                        head: Box::new(bound.clone()),
+                        args: args
+                            .iter()
+                            .map(|argument| lower_surface_ty(argument, binders, type_declarations))
+                            .collect(),
+                    };
+                }
+                if args.is_empty() {
+                    if name == "unit" {
+                        return MonoType::Tuple(Vec::new());
+                    }
+                    if let Some(primitive) = match name.as_str() {
+                        "Int" => Some("int"),
+                        "Float" => Some("float"),
+                        "String" => Some("str"),
+                        "Bool" => Some("bool"),
+                        "Unit" => Some("unit"),
+                        "usize" => Some("int"),
+                        _ => None,
+                    } {
+                        return if primitive == "unit" {
+                            MonoType::Tuple(Vec::new())
+                        } else {
+                            MonoType::Constructor(primitive.to_string(), Vec::new())
+                        };
+                    }
                 }
                 if name == "unit" {
                     return MonoType::Tuple(Vec::new());

@@ -923,7 +923,12 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
             args.iter().any(contains_type_variable)
         }
-        MonoType::Function(from, to) => contains_type_variable(from) || contains_type_variable(to),
+        MonoType::TypeApp { head, args } => {
+            contains_type_variable(head) || args.iter().any(contains_type_variable)
+        }
+        MonoType::Function(from, to) => {
+            contains_type_variable(from) || contains_type_variable(to)
+        }
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
             contains_type_variable(inner)
         }
