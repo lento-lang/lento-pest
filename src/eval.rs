@@ -39,9 +39,9 @@ pub struct MethodBinding {
     pub target: Vec<Ty>,
     pub arity: usize,
     pub value: Value,
-    /// The environment at impl-installation time. Deferred dispatch (partial
-    /// application) re-resolves user types against the type definitions
-    /// visible where the instance was declared.
+    /// Type declarations visible when the instance was declared. Deferred
+    /// dispatch only needs these to match nominal targets; retaining methods
+    /// here would recursively copy every earlier instance.
     pub env: Env,
 }
 
@@ -345,7 +345,11 @@ fn eval_decl(decl: &Decl, env: &mut Env) -> Result<Value, String> {
                     target: i.target.clone(),
                     arity: method.params.len(),
                     value,
-                    env: env.clone(),
+                    env: env
+                        .iter()
+                        .filter(|(_, binding)| matches!(binding, Binding::TypeDef { .. }))
+                        .map(|(name, binding)| (name.clone(), binding.clone()))
+                        .collect(),
                 };
                 let existing = env.remove(&method.name);
                 match existing {
