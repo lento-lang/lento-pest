@@ -238,7 +238,12 @@ match_arm_sep  = _{ "," ~ NEWLINE* }
 // `()` is the empty tuple (unit-ish); tuples need at least one comma, so a
 // single parenthesized expression `(e)` is a grouped expression, which lets
 // calls be passed as juxtaposed arguments: `concat "a" (to_string 1)`.
-call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+// `f(a, b)` — explicit multi-argument call sugar. Parens without a comma
+// are a GROUPED expression, not a call: `f (x)` is application of `f` to
+// `(x)`, and `f g (x)` is `(f g) (x)` (curried juxtaposition), not
+// `f (g (x))`. This keeps identifier arguments followed by parenthesized
+// arguments from being absorbed as the identifier's own arguments.
+call           = { identifier ~ "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 tuple          = { "(" ~ ")" | "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 // `[a, ...rest, b]` — list literal. A `...expr` entry splices the elements
 // of a list value into the literal at that position; the spread value must
