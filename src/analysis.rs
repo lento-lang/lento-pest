@@ -53,6 +53,10 @@ pub struct DeclarationMetadata {
 pub struct ClassMetadata {
     pub name: String,
     pub parameters: Vec<String>,
+    /// Resolved kind per parameter (parallel to `parameters`): the explicit
+    /// annotation when written, else inferred from spec usage (bare `*`
+    /// when unused at a higher kind).
+    pub param_kinds: Vec<crate::ast::Kind>,
     pub methods: Vec<String>,
 }
 
@@ -1478,12 +1482,392 @@ fn validate_pending_constraints(
     Ok(())
 }
 
+
+/// Resolve a class's parameter kinds.
+///
+/// Explicit annotations (`f : * -> *`) win. Remaining parameters are
+/// inferred from spec-body usage: every `f a1 ... an` application contributes
+/// an `* -> ... -> *` arrow of n steps, a bare use contributes `*`. All
+/// usages must agree; a conflict (e.g. both `f` and `f a`) is a kind error.
+///
+/// `type_declarations` provides declared parameter counts, so an applied
+/// constructor's arity is checked against its declaration.
+fn class_param_kinds(
+    class: &crate::ast::ClassDecl,
+) -> Result<(Vec<crate::ast::Kind>, Vec<bool>), String> {
+    use crate::ast::Kind;
+    let mut kinds: Vec<Option<Kind>> = class
+        .param_kinds
+        .iter()
+        .cloned()
+        .chain(std::iter::repeat(None))
+        .take(class.params.len().max(class.param_kinds.len()))
+        .collect();
+
+    for spec in &class.specs {
+        let mut binders = std::collections::BTreeMap::new();
+        for parameter in &class.params {
+            // Kinds are checked on the SHAPE, so any placeholder var works.
+            binders.insert(parameter.clone(), MonoType::Var(0));
+        }
+        let body = lower_ty(&spec.ty.ty, &binders);
+        let mut usage: std::collections::BTreeMap<u32, Kind> = std::collections::BTreeMap::new();
+
+        // A TypeApp over a class-parameter variable means that variable has
+        // arrow kind. Collect per-variable usage: count applications.
+        fn usage_walk(
+            ty: &MonoType,
+            usage: &mut std::collections::BTreeMap<u32, usize>,
+            bare: &mut std::collections::BTreeSet<u32>,
+        ) {
+            match ty {
+                MonoType::Var(id) => {
+                    bare.insert(*id);
+                }
+                MonoType::TypeApp { head, args } => {
+                    if let MonoType::Var(head_id) = &**head {
+                        *usage.entry(*head_id).or_insert(0) += args.len();
+                    }
+                    usage_walk(head, usage, bare);
+                    for arg in args {
+                        usage_walk(arg, usage, bare);
+                    }
+                }
+                MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
+                    for arg in args {
+                        usage_walk(arg, usage, bare);
+                    }
+                }
+                MonoType::Function(from, to) => {
+                    usage_walk(from, usage, bare);
+                    usage_walk(to, usage, bare);
+                }
+                MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
+                    usage_walk(inner, usage, bare);
+                }
+                MonoType::Record { fields, rest } => {
+                    for (_, field) in fields {
+                        usage_walk(field, usage, bare);
+                    }
+                    let _ = rest;
+                }
+                MonoType::Sum { args, alts, .. } => {
+                    for arg in args {
+                        usage_walk(arg, usage, bare);
+                    }
+                    for alt in alts {
+                        match alt {
+                            MonoSumAlt::Constructor { payload: Some(payload), .. } => {
+                                usage_walk(payload, usage, bare);
+                            }
+                            MonoSumAlt::Bare(inner) | MonoSumAlt::Row(inner) => {
+                                usage_walk(inner, usage, bare);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut applications: std::collections::BTreeMap<u32, usize> = std::collections::BTreeMap::new();
+        let mut bare_vars: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+        usage_walk(&body, &mut applications, &mut bare_vars);
+        for (id, applied) in applications {
+            let kind = Kind::applied(applied, applied).map(|_| {
+                // n applications of the variable -> n-step arrow from * to *
+                let mut kind = Kind::Star;
+                for _ in 0..applied {
+                    kind = Kind::Arrow(Box::new(Kind::Star), Box::new(kind));
+                }
+                kind
+            });
+            if let Some(kind) = kind {
+                if let Some(existing) = usage.insert(id, kind.clone()) {
+                    if existing != kind {
+                        return Err(format!(
+                            "spec '{}' uses a class parameter at conflicting kinds {existing} and {kind}",
+                            spec.name
+                        ));
+                    }
+                }
+            } else {
+                return Err(format!(
+                    "spec '{}' applies a class parameter to more arguments than its kind allows",
+                    spec.name
+                ));
+            }
+        }
+        for id in bare_vars {
+            usage.entry(id).or_insert(Kind::Star);
+        }
+
+
+        // Merge this spec's usage kinds into the class-wide kinds.
+        for (index, parameter) in class.params.iter().enumerate() {
+            if class.param_kinds.get(index).is_some_and(|k| k.is_some()) {
+                continue; // explicit annotation wins
+            }
+            let var_id = match binders.get(parameter) {
+                Some(MonoType::Var(id)) => *id,
+                _ => continue,
+            };
+            if let Some(kind) = usage.get(&var_id) {
+                match &kinds[index] {
+                    None => kinds[index] = Some(kind.clone()),
+                    Some(existing) if existing != kind => {
+                        return Err(format!(
+                            "class parameter '{parameter}' used at conflicting kinds {existing} and {kind}"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // A parameter is explicitly annotated when the source wrote a kind.
+    let annotated: Vec<bool> = (0..class.params.len())
+        .map(|index| class.param_kinds.get(index).is_some_and(|k| k.is_some()))
+        .collect();
+    Ok((
+        kinds
+            .into_iter()
+            .map(|kind| kind.unwrap_or(crate::ast::Kind::Star))
+            .collect(),
+        annotated,
+    ))
+}
+
+/// The kind of a lowered impl target type, using declared parameter counts.
+/// The number of trailing argument slots a class parameter of this kind
+/// takes (its arrow depth).
+fn expected_slot_count(expected: &crate::ast::Kind) -> usize {
+    match expected {
+        crate::ast::Kind::Star => 0,
+        crate::ast::Kind::Arrow(_, to) => 1 + expected_slot_count(to),
+    }
+}
+
+/// Strip `slots` trailing type-variable arguments from a target type,
+/// leaving the constructor prefix the class parameter binds to.
+fn strip_target_slots(ty: &mut MonoType, slots: usize) {
+    if slots == 0 {
+        return;
+    }
+    match ty {
+        MonoType::Constructor(_, args) => {
+            let keep = args.len().saturating_sub(slots);
+            args.truncate(keep);
+        }
+        MonoType::Sum { args, .. } => {
+            let keep = args.len().saturating_sub(slots);
+            args.truncate(keep);
+        }
+        MonoType::List(_) => *ty = MonoType::Constructor("list".to_string(), Vec::new()),
+        _ => {}
+    }
+}
+
+/// Validate an impl target against the class parameter's kind.
+///
+/// `expected` is the parameter's kind. The target must be a constructor
+/// application whose constructor PREFIX has exactly `expected`; the trailing
+/// arguments (one per remaining arrow step in `expected`) must be impl
+/// type variables (they become the parameter's argument slots).
+fn check_kinded_target(
+    ty: &MonoType,
+    expected: &crate::ast::Kind,
+    quantified_vars: &std::collections::BTreeSet<u32>,
+    type_declarations: &[TypeMetadata],
+) -> Result<(), String> {
+    use crate::ast::Kind;
+    // Count the arrow steps: how many trailing argument slots the parameter
+    // takes.
+    let slot_count = match expected {
+        Kind::Star => 0,
+        Kind::Arrow(_, to) => 1 + match &**to {
+            Kind::Star => 0,
+            _ => {
+                return Err(format!(
+                    "class parameter kind {expected} deeper than * -> * is not supported yet"
+                ))
+            }
+        },
+    };
+    if slot_count == 0 {
+        let actual = impl_target_kind(ty, type_declarations)?;
+        if actual != Kind::Star {
+            return Err(format!(
+                "class parameter expects a proper type (kind *), but the implementation target has kind {actual}"
+            ));
+        }
+        return Ok(());
+    }
+    // Higher-kinded: the target must be a constructor-like application whose
+    // trailing `slot_count` arguments are quantified variables.
+    match ty {
+        MonoType::Constructor(name, args) => {
+            if args.len() < slot_count {
+                return Err(format!(
+                    "implementation target '{name}' has too few arguments for class parameter kind {expected}"
+                ));
+            }
+            let trailing = &args[args.len() - slot_count..];
+            for slot in trailing {
+                match slot {
+                    MonoType::Var(id) if quantified_vars.contains(id) => {}
+                    other => {
+                        return Err(format!(
+                            "the trailing argument of a higher-kinded implementation target must be a type variable bound by 'all'; got {other:?}"
+                        ))
+                    }
+                }
+            }
+            Ok(())
+        }
+        MonoType::List(inner) => {
+            if slot_count != 1 {
+                return Err(format!(
+                    "list implementation target does not match class parameter kind {expected}"
+                ));
+            }
+            match &**inner {
+                MonoType::Var(id) if quantified_vars.contains(id) => Ok(()),
+                other => Err(format!(
+                    "the list element of a higher-kinded implementation target must be a type variable bound by 'all'; got {other:?}"
+                )),
+            }
+        }
+        MonoType::Sum { name, args, .. } => {
+            if args.len() < slot_count {
+                return Err(format!(
+                    "implementation target '{name}' has too few arguments for class parameter kind {expected}"
+                ));
+            }
+            let trailing = &args[args.len() - slot_count..];
+            for slot in trailing {
+                match slot {
+                    MonoType::Var(id) if quantified_vars.contains(id) => {}
+                    other => {
+                        return Err(format!(
+                            "the trailing argument of a higher-kinded implementation target must be a type variable bound by 'all'; got {other:?}"
+                        ))
+                    }
+                }
+            }
+            Ok(())
+        }
+        MonoType::TypeApp { head: _, args } => {
+            // The head itself may be a quantified variable (generic impl).
+            if args.len() < slot_count {
+                return Err(format!(
+                    "implementation target applies its head to {} argument(s); kind {expected} needs {slot_count}",
+                    args.len()
+                ));
+            }
+            Ok(())
+        }
+        other => Err(format!(
+            "higher-kinded implementation target must be a type constructor application; got {other:?}"
+        )),
+    }
+}
+
+fn impl_target_kind(
+    ty: &MonoType,
+    type_declarations: &[TypeMetadata],
+) -> Result<crate::ast::Kind, String> {
+    use crate::ast::Kind;
+    let constructor_arity = |name: &str| -> Option<usize> {
+        crate::types::builtin_constructor_arity(name).or_else(|| {
+            type_declarations
+                .iter()
+                .find(|decl| decl.name == name)
+                .map(|decl| decl.parameters.len())
+        })
+    };
+    match ty {
+        MonoType::Var(_) => Ok(Kind::Star),
+        MonoType::Constructor(name, args) => {
+            for arg in args {
+                impl_target_kind(arg, type_declarations)?;
+            }
+            let arity = constructor_arity(name).unwrap_or(args.len());
+            Ok(Kind::applied(arity, args.len()).ok_or_else(|| {
+                format!(
+                    "type constructor '{name}' is applied to {} argument(s) but has arity {arity}",
+                    args.len()
+                )
+            })?)
+        }
+        MonoType::List(inner) => {
+            impl_target_kind(inner, type_declarations)?;
+            Ok(Kind::Arrow(Box::new(Kind::Star), Box::new(Kind::Star)))
+        }
+        MonoType::Sum { args, alts, .. } => {
+            for arg in args {
+                impl_target_kind(arg, type_declarations)?;
+            }
+            for alt in alts {
+                match alt {
+                    MonoSumAlt::Constructor { payload: Some(payload), .. } => {
+                        impl_target_kind(payload, type_declarations)?;
+                    }
+                    MonoSumAlt::Bare(inner) | MonoSumAlt::Row(inner) => {
+                        impl_target_kind(inner, type_declarations)?;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Kind::Star)
+        }
+        MonoType::TypeApp { head, args } => {
+            let head_kind = impl_target_kind(head, type_declarations)?;
+            for arg in args {
+                impl_target_kind(arg, type_declarations)?;
+            }
+            match head_kind {
+                Kind::Star => {
+                    return Err("a proper type is applied to arguments".to_string());
+                }
+                Kind::Arrow(_, to) => Ok((*to).clone()),
+            }
+        }
+        MonoType::Function(from, to) => {
+            impl_target_kind(from, type_declarations)?;
+            impl_target_kind(to, type_declarations)?;
+            Ok(Kind::Star)
+        }
+        MonoType::Tuple(items) => {
+            for item in items {
+                impl_target_kind(item, type_declarations)?;
+            }
+            Ok(Kind::Star)
+        }
+        MonoType::Record { fields, rest } => {
+            for (_, field) in fields {
+                impl_target_kind(field, type_declarations)?;
+            }
+            let _ = rest;
+            Ok(Kind::Star)
+        }
+        MonoType::Ref(inner) | MonoType::Mut(inner) => {
+            impl_target_kind(inner, type_declarations)?;
+            Ok(Kind::Star)
+        }
+    }
+}
+
 fn resolve_declarations(
     program: &Program,
     ctx: &mut InferCtx,
 ) -> Result<DeclarationMetadata, String> {
     let mut declarations = DeclarationMetadata::default();
     let mut next_impl_var = 2_000_000u32;
+    // Explicit-kind flags per class parameter: `class name param_annotated`.
+    let mut class_param_annotated: std::collections::BTreeMap<String, Vec<bool>> =
+        std::collections::BTreeMap::new();
     for statement in &program.statements {
         let Stmt::Decl(Decl::Type(declaration)) = statement else {
             continue;
@@ -1549,9 +1933,13 @@ fn resolve_declarations(
     for statement in &program.statements {
         match statement {
             Stmt::Decl(Decl::Class(class)) => {
+                let (param_kinds, param_annotated) = class_param_kinds(class)
+                    .map_err(|error| format!("class '{}': {error}", class.name))?;
+                class_param_annotated.insert(class.name.clone(), param_annotated);
                 declarations.classes.push(ClassMetadata {
                     name: class.name.clone(),
                     parameters: class.params.clone(),
+                    param_kinds,
                     methods: class.specs.iter().map(|spec| spec.name.clone()).collect(),
                 });
             }
@@ -1566,6 +1954,48 @@ fn resolve_declarations(
                         quantified.push(id);
                     }
                 }
+                let mut target = implementation
+                    .target
+                    .iter()
+                    .map(|ty| lower_ty(ty, &binders))
+                    .collect::<Vec<_>>();
+                // Normalize higher-kinded targets: for an annotated
+                // parameter of kind `* -> *`, the target `Opt a` (or `[a]`)
+                // means the parameter binds to the constructor PREFIX (`Opt`
+                // / `list`); the trailing arguments are the parameter's own
+                // slots, bound by the impl quantifiers. Strip them so
+                // instance matching sees the same shape call sites bind.
+                let Some(class_meta) = declarations
+                    .classes
+                    .iter()
+                    .find(|class| class.name == implementation.class)
+                else {
+                    return Err(format!("unknown class '{}'", implementation.class));
+                };
+                let quantified_vars: std::collections::BTreeSet<u32> = binders
+                    .values()
+                    .filter_map(|ty| match ty {
+                        MonoType::Var(id) => Some(*id),
+                        _ => None,
+                    })
+                    .collect();
+                for (index, target_ty) in target.iter_mut().enumerate() {
+                    if !class_param_annotated
+                        .get(&implementation.class)
+                        .and_then(|flags| flags.get(index))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        continue;
+                    }
+                    let expected = class_meta
+                        .param_kinds
+                        .get(index)
+                        .cloned()
+                        .unwrap_or(crate::ast::Kind::Star);
+                    check_kinded_target(target_ty, &expected, &quantified_vars, &declarations.types)?;
+                    strip_target_slots(target_ty, expected_slot_count(&expected));
+                }
                 declarations.instances.push(InstanceMetadata {
                     class: implementation.class.clone(),
                     quantified,
@@ -1579,11 +2009,7 @@ fn resolve_declarations(
                                 .map(|constraint| lower_constraint(constraint, &binders))
                         })
                         .collect(),
-                    target: implementation
-                        .target
-                        .iter()
-                        .map(|ty| lower_ty(ty, &binders))
-                        .collect(),
+                    target,
                     methods: implementation
                         .methods
                         .iter()

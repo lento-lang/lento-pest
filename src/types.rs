@@ -36,7 +36,19 @@ use crate::ast::{Constraint, Ty};
 /// the context that creates them.
 pub type TypeVarId = u32;
 
-/// Identity of a named type constructor (`int`, `str`, a user `type` alias).
+pub use crate::ast::Kind;
+
+/// Known arities for builtin type constructors. Declared types are checked
+/// against their declaration parameter counts by the analysis pass.
+pub fn builtin_constructor_arity(name: &str) -> Option<usize> {
+    match name {
+        "int" | "float" | "str" | "bool" | "bytes" | "char" => Some(0),
+        "list" => Some(1),
+        _ => None,
+    }
+}
+
+// Identity of a named type constructor (`int`, `str`, a user `type` alias).
 ///
 /// This is a name for now; it becomes a resolved interned id when the
 //  type-declaration environment lands.
