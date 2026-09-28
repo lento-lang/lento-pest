@@ -136,23 +136,22 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
             println!("{}", intrinsic.args[0]);
             Ok(Value::Unit)
         }
-        IntrinsicKind::TypeOf => Ok(Value::Str(
-            match &intrinsic.args[0] {
-                Value::Unit => "unit",
-                Value::Bool(_) => "bool",
-                Value::Int(_) => "int",
-                Value::Float(_) => "float",
-                Value::Str(_) => "str",
-                Value::Tuple(_) => "tuple",
-                Value::List(_) => "list",
-                Value::Record(_) => "record",
-                Value::Sum { .. } => "sum",
-                Value::Closure(_) => "function",
-                Value::Intrinsic(_) => "function",
-                Value::Ref(_) => "ref",
-            }
-            .to_string(),
-        )),
+        IntrinsicKind::TypeOf => Ok(Value::Str(match &intrinsic.args[0] {
+            Value::Unit => "unit",
+            Value::Bool(_) => "bool",
+            Value::Int(_) => "int",
+            Value::Float(_) => "float",
+            Value::Str(_) => "str",
+            Value::Tuple(_) => "tuple",
+            Value::List(_) => "list",
+            Value::Record(_) => "record",
+            Value::Sum { .. } => "sum",
+            Value::Closure(_) => "function",
+            Value::Intrinsic(_) => "function",
+            Value::MethodPartial { .. } => "function",
+            Value::Ref(_) => "ref",
+        }
+        .to_string())),
         IntrinsicKind::Len => match &intrinsic.args[0] {
             Value::List(items) => Ok(Value::Int(items.len() as i64)),
             Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
