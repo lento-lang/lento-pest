@@ -1726,13 +1726,12 @@ pub fn lower_surface_ty(
                 if args.is_empty() {
                     return bound.clone();
                 }
-                return MonoType::TypeApp {
-                    head: Box::new(bound.clone()),
-                    args: args
-                        .iter()
+                return reduce_type_app(
+                    bound.clone(),
+                    args.iter()
                         .map(|argument| lower_surface_ty(argument, binders, type_declarations))
                         .collect(),
-                };
+                );
             }
             if args.is_empty() {
                 if name == "unit" {

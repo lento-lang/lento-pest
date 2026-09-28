@@ -1428,8 +1428,8 @@ fn validate_implementation_methods(
             };
             if !crate::types::is_instance(&mut ctx.supply, &implementation, &signature) {
                 return Err(format!(
-                    "method '{}' does not match class '{}' signature",
-                    method.name, class.name
+                    "method '{}' does not match class '{}' signature: inferred {:?}, required {:?}",
+                    method.name, class.name, implementation.body, signature.body
                 ));
             }
         }
