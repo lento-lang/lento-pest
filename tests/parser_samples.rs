@@ -1,5 +1,6 @@
 // Full-pipeline sample tests: every `tests/samples/**/*.lt` must parse,
-// load and evaluate without error through the default CLI. Samples are
+// load and evaluate without error through the CLI in standalone mode. Many
+// samples define their own types and classes with prelude names. Samples are
 // organized into
 // categorical subdirectories (basics, matching, types, specs); the walk
 // here is recursive, so new categories need no harness changes.
@@ -54,6 +55,7 @@ fn run(source: &str) -> Result<(), String> {
     let path = std::env::temp_dir().join(format!("lento-parser-sample-{}.lt", std::process::id()));
     std::fs::write(&path, source).map_err(|e| format!("write sample: {e}"))?;
     let result = std::process::Command::new(env!("CARGO_BIN_EXE_lento_rust"))
+        .arg("--no-prelude")
         .arg(&path)
         .output()
         .map_err(|e| format!("run CLI: {e}"))?;

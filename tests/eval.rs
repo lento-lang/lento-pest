@@ -29,6 +29,23 @@ fn assert_int(value: Value, expected: i64) {
 }
 
 #[test]
+fn deferred_method_dispatch_keeps_type_definitions_and_closure_bindings() {
+    let value = eval(
+        "type Option a = None | Some a\n\
+         class Mapper f { spec fmap : all a, b. (a -> b) -> f a -> f b }\n\
+         let bonus = 1\n\
+         impl Mapper Option {\n\
+             fn fmap transform opt = match opt { Some x => Some (transform x + bonus), None => None }\n\
+         }\n\
+         let increment = fmap (x => x + 1)\n\
+         increment (Some 2)\n",
+    )
+    .unwrap();
+    assert!(matches!(value, Value::Sum { tag, payload }
+        if tag == "Some" && matches!(payload.as_ref(), Value::Int(4))));
+}
+
+#[test]
 fn let_mut_assignment_updates_binding() {
     let value = eval("let mut counter = 0\ncounter = counter + 1\ncounter\n").unwrap();
     assert_int(value, 1);

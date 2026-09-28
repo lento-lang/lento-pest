@@ -193,19 +193,37 @@ fn spec_decl(pair: Pair<'_, Rule>) -> SpecDecl {
 fn class_decl(pair: Pair<'_, Rule>) -> ClassDecl {
     let mut name = String::new();
     let mut params = Vec::new();
+    let mut param_kinds = Vec::new();
     let mut specs = Vec::new();
     for inner in pair.into_inner() {
         match inner.as_rule() {
             Rule::identifier if name.is_empty() => name = inner.as_str().to_string(),
-            Rule::type_param => params.push(inner.as_str().to_string()),
+            Rule::type_param => {
+                params.push(inner.as_str().to_string());
+                param_kinds.push(None);
+            }
+            Rule::kinded_param => {
+                let mut fields = inner.into_inner();
+                params.push(fields.next().unwrap().as_str().to_string());
+                param_kinds.push(Some(kind(fields.next().unwrap())));
+            }
             Rule::spec_decl => specs.push(spec_decl(inner)),
             _ => {}
         }
     }
-    ClassDecl {
-        name,
-        params,
-        specs,
+    ClassDecl { name, params, param_kinds, specs }
+}
+
+/// `*` | `* -> *` | `* -> (* -> *) -> *` — right-associative kind.
+fn kind(pair: Pair<'_, Rule>) -> crate::ast::Kind {
+    let mut inner = pair.into_inner();
+    let star = crate::ast::Kind::Star;
+    match inner.next() {
+        Some(rest) => crate::ast::Kind::Arrow(
+            Box::new(star),
+            Box::new(kind(rest)),
+        ),
+        None => star,
     }
 }
 
@@ -842,16 +860,31 @@ fn tuple(pair: Pair<'_, Rule>) -> Expr {
 }
 
 fn list(pair: Pair<'_, Rule>) -> Expr {
-    let items: Vec<Expr> = pair.into_inner().map(expression).collect();
-    if items.is_empty() {
-        return Expr::List(ListExpr::Empty);
+    // Entries in source order; build the cons/spine right-to-left so that a
+    // spread sits exactly at its source position in the chain.
+    let mut entries: Vec<(bool, Expr)> = Vec::new();
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::list_spread => {
+                let source = expression(inner.into_inner().next().unwrap());
+                entries.push((true, source));
+            }
+            _ => entries.push((false, expression(inner))),
+        }
     }
     let mut tail = ListExpr::Empty;
-    for item in items.into_iter().rev() {
-        tail = ListExpr::Cells(Box::new(ListCons {
-            head: Box::new(item),
-            tail: Box::new(tail),
-        }));
+    for (is_spread, entry) in entries.into_iter().rev() {
+        tail = if is_spread {
+            ListExpr::Spread {
+                source: Box::new(entry),
+                rest: Box::new(tail),
+            }
+        } else {
+            ListExpr::Cells(Box::new(ListCons {
+                head: Box::new(entry),
+                tail: Box::new(tail),
+            }))
+        };
     }
     Expr::List(tail)
 }
@@ -986,6 +1019,9 @@ fn type_base(pair: Pair<'_, Rule>) -> Ty {
     };
     match first.as_rule() {
         Rule::list_union => list_union(first.clone()),
+        Rule::ty_tuple => {
+            Ty::Tuple(first.clone().into_inner().map(type_).collect())
+        }
         Rule::ty_record => ty_record(first.clone()),
         Rule::identifier => {
             let name = first.as_str().to_string();

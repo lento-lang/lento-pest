@@ -39,6 +39,10 @@ pub struct MethodBinding {
     pub target: Vec<Ty>,
     pub arity: usize,
     pub value: Value,
+    /// Type declarations visible when the instance was declared. Deferred
+    /// dispatch only needs these to match nominal targets; retaining methods
+    /// here would recursively copy every earlier instance.
+    pub env: Env,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +63,14 @@ pub enum Value {
     },
     Closure(Rc<Closure>),
     Intrinsic(Intrinsic),
+    /// A partially applied class method awaiting enough arguments to
+    /// dispatch among the candidate instances. Deferred dispatch keeps
+    /// `fmap f` from committing to the wrong instance before the functor
+    /// argument arrives.
+    MethodPartial {
+        candidates: Vec<MethodBinding>,
+        args: Vec<Value>,
+    },
     Ref(CellRef),
 }
 
@@ -117,6 +129,7 @@ impl fmt::Display for Value {
                 }
             }
             Value::Closure(_) => write!(f, "<closure>"),
+            Value::MethodPartial { .. } => write!(f, "<method>"),
             Value::Intrinsic(intrinsic) => write!(f, "<intrinsic:{}>", intrinsic.name),
             Value::Ref(_) => write!(f, "<ref>"),
         }
@@ -332,6 +345,11 @@ fn eval_decl(decl: &Decl, env: &mut Env) -> Result<Value, String> {
                     target: i.target.clone(),
                     arity: method.params.len(),
                     value,
+                    env: env
+                        .iter()
+                        .filter(|(_, binding)| matches!(binding, Binding::TypeDef { .. }))
+                        .map(|(name, binding)| (name.clone(), binding.clone()))
+                        .collect(),
                 };
                 let existing = env.remove(&method.name);
                 match existing {
@@ -412,11 +430,26 @@ fn eval_let_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
     Ok(value)
 }
 
-/// Impl methods are ordinary functions, but their definitions are not
-/// recursive bindings.  Avoid installing a self-referential cell while
-/// evaluating a method that delegates to a same-named intrinsic.
+/// Impl methods are ordinary functions. A method whose value is a closure
+/// gets a self-referential cell so the body can call the method recursively
+/// (`fn fmap f xs = ... fmap f t ...`); the cell is filled with the closure
+/// after evaluation, so a method delegating to a same-named intrinsic still
+/// resolves through the temporary inline binding rather than an empty cell.
 fn eval_method_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
     if let PatKind::Var(name) = &let_decl.pattern.kind {
+        if binding_needs_cell(&let_decl.value) {
+            let cell = Rc::new(RefCell::new(Value::Unit));
+            env.insert(
+                name.clone(),
+                Binding::Cell {
+                    value: cell.clone(),
+                    mutable: false,
+                },
+            );
+            let value = eval_expr(&let_decl.value, env)?;
+            *cell.borrow_mut() = value.clone();
+            return Ok(value);
+        }
         let value = eval_expr(&let_decl.value, env)?;
         env.insert(name.clone(), Binding::Inline(value.clone()));
         Ok(value)
@@ -443,15 +476,30 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
                     for arg in &call.args {
                         args.push(eval_expr(arg, env)?);
                     }
+                    let arity = methods.first().map(|method| method.arity).unwrap_or(0);
+                    if args.len() < arity {
+                        // Not enough arguments to dispatch: defer, keeping
+                        // every candidate so the final application picks the
+                        // instance by the argument types.
+                        return Ok(Value::MethodPartial {
+                            candidates: methods,
+                            args,
+                        });
+                    }
                     let method = methods
                         .iter()
                         .find(|method| method_matches(&method.target, method.arity, &args, env))
                         .ok_or_else(|| format!("no matching method '{}'", var.name))?;
-                    let args = args
-                        .into_iter()
-                        .zip(method.target.iter())
-                        .map(|(value, ty)| coerce_value_to_type(value, ty))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let args = if method.target.len() == args.len() {
+                        args.into_iter()
+                            .zip(method.target.iter())
+                            .map(|(value, ty)| coerce_value_to_type(value, ty))
+                            .collect::<Result<Vec<_>, _>>()?
+                    } else {
+                        // One target per class parameter; zip only when they
+                        // align, never truncate arguments.
+                        args
+                    };
                     return apply_call(method.value.clone(), args);
                 }
             }
@@ -627,8 +675,42 @@ pub(crate) fn apply_one(callee: Value, arg: Value) -> Result<Value, String> {
                 apply_intrinsic(intrinsic)
             }
         }
+        Value::MethodPartial { candidates, mut args } => {
+            args.push(arg);
+            apply_method_partial(candidates, args)
+        }
         _ => Err(format!("cannot call non-function value {callee}")),
     }
+}
+
+/// Dispatch a (possibly partial) method application across the candidate
+/// instance bindings. When enough arguments have accumulated for the
+/// candidates' arity, the candidate whose target types match the argument
+/// values is chosen; before that, dispatch stays deferred.
+fn apply_method_partial(candidates: Vec<MethodBinding>, args: Vec<Value>) -> Result<Value, String> {
+    let arity = candidates.first().map(|method| method.arity).unwrap_or(0);
+    if args.len() < arity {
+        // Keep the full candidate set: filtering early would commit to an
+        // instance before the discriminating argument arrives.
+        return Ok(Value::MethodPartial { candidates, args });
+    }
+    let Some(method) = candidates
+        .iter()
+        .find(|method| method_matches(&method.target, method.arity, &args, &method.env))
+    else {
+        return Err("no matching method".to_string());
+    };
+    let args = if method.target.len() == args.len() {
+        args.into_iter()
+            .zip(method.target.iter())
+            .map(|(value, ty)| coerce_value_to_type(value, ty))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        // The target names one type per CLASS PARAMETER, not per method
+        // argument; zip only when they align, never truncate arguments.
+        args
+    };
+    apply_call(method.value.clone(), args)
 }
 
 fn eval_member(value: Value, field: &str) -> Result<Value, String> {
@@ -810,6 +892,18 @@ fn eval_list(list: &crate::ast::ListExpr, env: &mut Env) -> Result<Value, String
             crate::ast::ListExpr::Cells(cons) => {
                 items.push(eval_expr(&cons.head, env)?);
                 current = cons.tail.as_ref();
+            }
+            crate::ast::ListExpr::Spread { source, rest } => {
+                let value = eval_expr(source, env)?;
+                match value {
+                    Value::List(spliced) => items.extend(spliced),
+                    other => {
+                        return Err(format!(
+                            "list spread expects a list; got {other}"
+                        ))
+                    }
+                }
+                current = rest.as_ref();
             }
         }
     }
@@ -1078,6 +1172,9 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
             "bool" => matches!(value, Value::Bool(_)),
             "str" | "string" => matches!(value, Value::Str(_)),
             "unit" => matches!(value, Value::Unit),
+            // The list type constructor as an impl target (`impl Functor
+            // list`): any list value matches.
+            "list" => matches!(value, Value::List(_)),
             _ => match env.get(name) {
                 Some(Binding::TypeDef { params, ty: decl }) => {
                     // A type parameter matches anything at runtime.

@@ -568,6 +568,9 @@ fn contains_type_variable(ty: &MonoType) -> bool {
         MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
             args.iter().any(contains_type_variable)
         }
+        MonoType::TypeApp { head, args } => {
+            contains_type_variable(head) || args.iter().any(contains_type_variable)
+        }
         MonoType::Function(from, to) => contains_type_variable(from) || contains_type_variable(to),
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
             contains_type_variable(inner)
@@ -593,6 +596,9 @@ fn type_nodes(ty: &MonoType) -> usize {
         MonoType::Var(_) => 1,
         MonoType::Constructor(_, args) | MonoType::Tuple(args) => {
             1 + args.iter().map(type_nodes).sum::<usize>()
+        }
+        MonoType::TypeApp { head, args } => {
+            1 + type_nodes(head) + args.iter().map(type_nodes).sum::<usize>()
         }
         MonoType::Function(from, to) => 1 + type_nodes(from) + type_nodes(to),
         MonoType::List(inner) | MonoType::Ref(inner) | MonoType::Mut(inner) => {
@@ -731,6 +737,12 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
                         )),
                         tail: Box::new(lower_list(&cell.tail, children)),
                     })),
+                    ListExpr::Spread { source: _, rest } => ListExpr::Spread {
+                        source: Box::new(lower_typed_expr(
+                            children.next().expect("typed list spread child missing"),
+                        )),
+                        rest: Box::new(lower_list(rest, children)),
+                    },
                 }
             }
             Expr::List(lower_list(list, &mut children))

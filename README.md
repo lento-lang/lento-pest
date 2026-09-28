@@ -6,7 +6,8 @@ for the Lento language.
 ## Build & Run
 
 ```bash
-cargo run -- path/to/file.lt         # parse, type-check, evaluate
+cargo run -- path/to/file.lt         # parse, type-check, evaluate with the prelude
+cargo run -- --no-prelude path/to/file.lt  # evaluate without the prelude
 cargo run -- --fmt path/to/file.lt   # format in place
 cargo run -- --print-ast path/to/file.lt
 cargo run                            # REPL
@@ -93,6 +94,6 @@ println doubled
 cargo test
 ```
 
-The suite runs every `tests/samples/**/*.lt` through the full pipeline
-(parse → type-check → evaluate) plus targeted positive/negative type-checker
+The suite runs every standalone `tests/samples/**/*.lt` through the full
+pipeline without the prelude (parse → type-check → evaluate), plus targeted type-checker
 tests in `tests/typecheck.rs`. See `SUM_TYPES_PLAN.md` for the design notes.

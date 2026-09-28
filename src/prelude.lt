@@ -1,3 +1,19 @@
+// Lento prelude
+//
+// The standard library loaded ahead of every program: core algebraic types,
+// the operator-like classes (Num/Ord/Eq/Add/Sub/Mul/Div/...), collection and
+// string utilities, and the higher-kinded Functor/Foldable interfaces.
+//
+// Layering:
+//   - Implementations delegate to the `__`-prefixed native intrinsics
+//     (see src/intrinsics.rs); no prelude function calls a same-named
+//     intrinsic, which would shadow it.
+//   - Derived combinators (`all`, `any`, `find`, `sum`, ...) are ordinary
+//     recursive functions written in source, generic over the classes.
+//   - Higher-kinded classes use the class parameter as a type constructor
+//     (`Functor f`, `f a`): instances name the constructor itself, e.g.
+//     `impl Functor list` or `impl Functor Option`.
+
 type Ordering = Less | Equal | Greater
 
 type Option a = None | Some a
@@ -10,6 +26,13 @@ type ControlFlow b c = Break b | Continue c
 
 type Bound a = Unbounded | Included a | Excluded a
 
+// A named two-element product with field access (`point.fst`).
+type Pair a b = { fst: a, snd: b }
+
+// --------------------------------------------------------------------------
+// Option
+// --------------------------------------------------------------------------
+
 spec is_some : all a. Option a -> bool
 fn is_some option = match option { Some _ => true, None => false }
 
@@ -17,11 +40,31 @@ spec is_none : all a. Option a -> bool
 fn is_none option = match option { Some _ => false, None => true }
 
 spec unwrap_or : all a. a -> Option a -> a
-fn unwrap_or fallback option = match option { Some value => value, None => fallback }
+fn unwrap_or fallback (Some value) = value
+fn unwrap_or fallback None = fallback
+
+spec unwrap_or : all a, e. a -> Result a e -> a
+fn unwrap_or fallback (Ok value) = value
+fn unwrap_or fallback (Err _) = fallback
+
+spec unwrap_or_else : all a. (unit -> a) -> Option a -> a
+fn unwrap_or_else fallback option = match option { Some value => value, None => fallback () }
+
+spec or_else : all a. Option a -> Option a -> Option a
+fn or_else option fallback = match option { Some _ => option, None => fallback }
 
 spec map : all a, b. (a -> b) -> Option a -> Option b
 fn map transform (Some value) = Some (transform value)
 fn map _ None = None
+
+// Bind a computation that may fail again.
+spec and_then : all a, b. (a -> Option b) -> Option a -> Option b
+fn and_then transform (Some value) = transform value
+fn and_then _ None = None
+
+// --------------------------------------------------------------------------
+// Result
+// --------------------------------------------------------------------------
 
 spec is_ok : all a, e. Result a e -> bool
 fn is_ok result = match result { Ok _ => true, Err _ => false }
@@ -36,8 +79,22 @@ fn map _ (Err error) = Err error
 spec map_err : all a, e, f. (e -> f) -> Result a e -> Result a f
 fn map_err transform result = match result { Ok value => Ok value, Err error => Err (transform error) }
 
+// Bind a computation that may fail again.
 spec and_then : all a, b, e. (a -> Result b e) -> Result a e -> Result b e
-fn and_then transform result = match result { Ok value => transform value, Err error => Err error }
+fn and_then transform (Ok value) = transform value
+fn and_then _ (Err error) = Err error
+
+// --------------------------------------------------------------------------
+// Ordering
+// --------------------------------------------------------------------------
+
+// Lexicographic composition: `compare x y` then `then_compare (compare u v)`.
+spec then_compare : Ordering -> Ordering -> Ordering
+fn then_compare first second = match first { Equal => second, Less => Less, Greater => Greater }
+
+// --------------------------------------------------------------------------
+// Classes
+// --------------------------------------------------------------------------
 
 class Num a {
     spec abs : a -> a
@@ -55,8 +112,28 @@ class Add a {
     spec add : a -> a -> a
 }
 
-class Concat a {
+class Sub a {
+    spec sub : a -> a -> a
+    spec negate : a -> a
+}
+
+class Mul a {
+    spec mul : a -> a -> a
+}
+
+class Div a {
+    spec div : a -> a -> a
+}
+
+// Generalized concatenation (was `Concat`).
+class Semigroup a {
     spec concat : a -> a -> a
+}
+
+// A Semigroup with an identity element. `empty` takes `unit` so it can be
+// called as `empty ()` at a polymorphic type.
+class Monoid a {
+    spec empty : unit -> a
 }
 
 class Seq a {
@@ -73,6 +150,26 @@ class Len e {
 class Haystack h e {
     spec contains : h -> e -> bool
 }
+
+// String rendering of any value. `to_string` dispatches through instances;
+// user types implement `Show` to participate.
+class Show a {
+    spec to_string : a -> str
+}
+
+// Higher-kinded interfaces: `f` ranges over type constructors (kind * -> *).
+// Instances name the constructor: `Functor list`, `Functor Option`.
+class Functor f {
+    spec fmap : all a, b. (a -> b) -> f a -> f b
+}
+
+class Foldable f {
+    spec fold : all a, b. (b -> a -> b) -> b -> f a -> b
+}
+
+// --------------------------------------------------------------------------
+// Primitive implementations
+// --------------------------------------------------------------------------
 
 impl Num int {
     fn abs x = __int_abs x
@@ -98,6 +195,18 @@ impl Eq str {
     fn equal x y = __str_equal x y
 }
 
+impl Ord int {
+    fn compare x y = match (x < y, x > y) { (true, _) => Less, (_, true) => Greater, _ => Equal }
+}
+
+impl Ord float {
+    fn compare x y = match (x < y, x > y) { (true, _) => Less, (_, true) => Greater, _ => Equal }
+}
+
+impl Ord str {
+    fn compare x y = match (x < y, x > y) { (true, _) => Less, (_, true) => Greater, _ => Equal }
+}
+
 impl Add int {
     fn add x y = __int_add x y
 }
@@ -106,8 +215,46 @@ impl Add float {
     fn add x y = __float_add x y
 }
 
-impl Concat str {
+impl Sub int {
+    fn sub x y = __int_sub x y
+    fn negate x = __int_sub 0 x
+}
+
+impl Sub float {
+    fn sub x y = __float_sub x y
+    fn negate x = __float_sub 0.0 x
+}
+
+impl Mul int {
+    fn mul x y = __int_mul x y
+}
+
+impl Mul float {
+    fn mul x y = __float_mul x y
+}
+
+impl Div int {
+    fn div x y = __int_div x y
+}
+
+impl Div float {
+    fn div x y = __float_div x y
+}
+
+impl Semigroup str {
     fn concat x y = __str_concat x y
+}
+
+impl all a. Semigroup [a] {
+    fn concat xs ys = __list_concat xs ys
+}
+
+impl Monoid str {
+    fn empty _ = ""
+}
+
+impl all a. Monoid [a] {
+    fn empty _ = []
 }
 
 impl all a. Seq [a] {
@@ -136,14 +283,120 @@ impl Haystack (str) (str) {
     fn contains hay needle = __str_contains hay needle
 }
 
+impl Show int {
+    fn to_string value = __int_to_string value
+}
+
+impl Show float {
+    fn to_string value = __float_to_string value
+}
+
+impl Show bool {
+    fn to_string value = __bool_to_string value
+}
+
+impl Show str {
+    fn to_string value = __str_to_string value
+}
+
+// --------------------------------------------------------------------------
+// Functor / Foldable instances
+// --------------------------------------------------------------------------
+
+impl Functor Option {
+    fn fmap transform opt = match opt { Some value => Some (transform value), None => None }
+}
+
+impl Functor list {
+    fn fmap transform xs = match xs { [] => [], [h, ...t] => [transform h, ...fmap transform t] }
+}
+
+impl Foldable Option {
+    fn fold step init opt = match opt { Some value => step init value, None => init }
+}
+
+impl Foldable list {
+    // Delegates to the native list fold: avoids source-level self-recursion
+    // inside the class instance.
+    fn fold step init xs = foldl step init xs
+}
+
+// --------------------------------------------------------------------------
+// Derived combinators
+// --------------------------------------------------------------------------
+
+// List mapping and filtering. (The Option/Result `map` overloads above are
+// the shape-specialized entries of the same overload set.)
+spec map : all a, b. (a -> b) -> [a] -> [b]
+fn map transform xs = match xs { [] => [], [h, ...t] => [transform h, ...map transform t] }
+
+spec filter : all a. (a -> bool) -> [a] -> [a]
+fn filter pred xs = match xs {
+    [] => [],
+    [h, ...t] => match pred h { true => [h, ...filter pred t], false => filter pred t }
+}
+
+spec zip : all a, b. [a] -> [b] -> [(a, b)]
+fn zip xs ys = match xs {
+    [] => [],
+    [x, ...xt] => match ys {
+        [] => [],
+        [y, ...yt] => [(x, y), ...zip xt yt]
+    }
+}
+
+spec head_option : all a. [a] -> Option a
+fn head_option xs = match xs { [] => None, [h, ..._] => Some h }
+
+// Foldable-derived: generic over any Foldable f (lists, Options, ...).
+fn all pred xs = fold (acc x => acc && pred x) true xs
+fn any pred xs = fold (acc x => acc || pred x) false xs
+fn find pred xs = fold (acc x => match acc {
+    Some found => acc,
+    None => match pred x { true => Some x, false => None }
+}) None xs
+fn sum xs = fold (acc x => add acc x) 0 xs
+fn product xs = fold (acc x => mul acc x) 1 xs
+fn to_list container = fold (acc x => [...acc, x]) [] container
+
+// Minimum and maximum of two values by Ord.
+spec min : all a : Ord. a -> a -> a
+fn min a b = match compare a b { Less => a, _ => b }
+
+spec max : all a : Ord. a -> a -> a
+fn max a b = match compare a b { Less => b, _ => a }
+
+// --------------------------------------------------------------------------
+// Strings
+// --------------------------------------------------------------------------
+
+// Strip leading and trailing whitespace.
+spec trim : str -> str
+fn trim text = __str_trim text
+
+// The characters of a string as single-character strings.
+spec chars : str -> [str]
+fn chars text = __str_chars text
+
+// Total integer parse: `Some n` on success, `None` on failure.
+spec to_int : str -> Option int
+fn to_int text = __str_to_int text
+
+spec starts_with : str -> str -> bool
+fn starts_with hay needle = __str_take (__str_len needle) hay == needle
+
+spec ends_with : str -> str -> bool
+fn ends_with hay needle = match __str_len hay < __str_len needle {
+    true => false,
+    false => __str_drop (__str_len hay - __str_len needle) hay == needle
+}
+
+// --------------------------------------------------------------------------
+// Assertions
+// --------------------------------------------------------------------------
+
 spec assert : bool -> unit
 fn assert (value : bool) = __bool_assert value
 
-spec to_string : int -> str
-spec to_string : float -> str
-spec to_string : bool -> str
-spec to_string : str -> str
-fn to_string value = __int_to_string value
-fn to_string value = __float_to_string value
-fn to_string value = __bool_to_string value
-fn to_string value = __str_to_string value
+spec assert_eq : all a : Eq. a -> a -> unit
+fn assert_eq expected actual = assert (equal expected actual)

@@ -1,4 +1,5 @@
 use std::io::{self, Write};
+use std::rc::Rc;
 
 use crate::eval::{apply_one, value_eq, Binding, Env, Value};
 
@@ -103,6 +104,9 @@ pub(crate) fn install_intrinsics(env: &mut Env) {
         ("__str_slice", IntrinsicKind::Native, 3),
         ("__str_contains", IntrinsicKind::Native, 2),
         ("__list_contains", IntrinsicKind::Native, 2),
+        ("__str_trim", IntrinsicKind::Native, 1),
+        ("__str_chars", IntrinsicKind::Native, 1),
+        ("__str_to_int", IntrinsicKind::Native, 1),
         ("__int_to_string", IntrinsicKind::Native, 1),
         ("__float_to_string", IntrinsicKind::Native, 1),
         ("__bool_to_string", IntrinsicKind::Native, 1),
@@ -132,23 +136,22 @@ pub(crate) fn apply_intrinsic(intrinsic: Intrinsic) -> Result<Value, String> {
             println!("{}", intrinsic.args[0]);
             Ok(Value::Unit)
         }
-        IntrinsicKind::TypeOf => Ok(Value::Str(
-            match &intrinsic.args[0] {
-                Value::Unit => "unit",
-                Value::Bool(_) => "bool",
-                Value::Int(_) => "int",
-                Value::Float(_) => "float",
-                Value::Str(_) => "str",
-                Value::Tuple(_) => "tuple",
-                Value::List(_) => "list",
-                Value::Record(_) => "record",
-                Value::Sum { .. } => "sum",
-                Value::Closure(_) => "function",
-                Value::Intrinsic(_) => "function",
-                Value::Ref(_) => "ref",
-            }
-            .to_string(),
-        )),
+        IntrinsicKind::TypeOf => Ok(Value::Str(match &intrinsic.args[0] {
+            Value::Unit => "unit",
+            Value::Bool(_) => "bool",
+            Value::Int(_) => "int",
+            Value::Float(_) => "float",
+            Value::Str(_) => "str",
+            Value::Tuple(_) => "tuple",
+            Value::List(_) => "list",
+            Value::Record(_) => "record",
+            Value::Sum { .. } => "sum",
+            Value::Closure(_) => "function",
+            Value::Intrinsic(_) => "function",
+            Value::MethodPartial { .. } => "function",
+            Value::Ref(_) => "ref",
+        }
+        .to_string())),
         IntrinsicKind::Len => match &intrinsic.args[0] {
             Value::List(items) => Ok(Value::Int(items.len() as i64)),
             Value::Tuple(items) => Ok(Value::Int(items.len() as i64)),
@@ -450,8 +453,34 @@ fn apply_native(name: &str, args: &[Value]) -> Result<Value, String> {
             }
             _ => Err("__list_contains expects list, value".into()),
         },
-        "__list_take" | "__list_drop" | "__list_reverse" | "__list_slice" | "__str_take"
-        | "__str_drop" | "__str_reverse" | "__str_slice" => apply_sequence_native(name, args),
+        "__str_trim" => match args {
+            [Value::Str(text)] => Ok(Value::Str(text.trim().to_string())),
+            _ => Err("__str_trim expects str".into()),
+        },
+        "__str_chars" => match args {
+            [Value::Str(text)] => Ok(Value::List(
+                text.chars().map(|ch| Value::Str(ch.to_string())).collect(),
+            )),
+            _ => Err("__str_chars expects str".into()),
+        },
+        // Total parse: `Some n` on success, `None` on failure (no runtime error).
+        "__str_to_int" => match args {
+            [Value::Str(text)] => Ok(match text.trim().parse::<i64>() {
+                Ok(value) => Value::Sum {
+                    tag: "Some".to_string(),
+                    payload: Rc::new(Value::Int(value)),
+                },
+                Err(_) => Value::Sum {
+                    tag: "None".to_string(),
+                    payload: Rc::new(Value::Unit),
+                },
+            }),
+            _ => Err("__str_to_int expects str".into()),
+        },
+        "__list_take" | "__list_drop" | "__list_reverse" | "__list_slice"
+        | "__str_take" | "__str_drop" | "__str_reverse" | "__str_slice" => {
+            apply_sequence_native(name, args)
+        }
         _ => Err(format!("unknown native intrinsic {name}")),
     }
 }
