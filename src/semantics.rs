@@ -731,6 +731,12 @@ fn lower_composite_expr(source: &Expr, children: &[TypedExpr]) -> Expr {
                         )),
                         tail: Box::new(lower_list(&cell.tail, children)),
                     })),
+                    ListExpr::Spread { source, rest } => ListExpr::Spread {
+                        source: Box::new(lower_typed_expr(
+                            children.next().expect("typed list spread child missing"),
+                        )),
+                        rest: Box::new(lower_list(rest, children)),
+                    },
                 }
             }
             Expr::List(lower_list(list, &mut children))

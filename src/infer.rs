@@ -140,6 +140,9 @@ pub(crate) fn is_value(expr: &Expr) -> bool {
                 }
                 current = &cell.tail;
             }
+            // A spread entry is a value only when the spliced expression is.
+            // Non-cell tails (Empty / Spread) impose no further restriction
+            // here beyond the walk below.
             true
         }
         Expr::Record(record) => record.entries.iter().all(|entry| match entry {
@@ -891,20 +894,33 @@ pub fn infer_typed_expr(
         Expr::List(l) => {
             let mut current = l;
             let mut children = Vec::new();
+            let mut head_types = Vec::new();
+            let mut spreads = Vec::new();
             loop {
                 match current {
                     crate::ast::ListExpr::Empty => break,
                     crate::ast::ListExpr::Cells(cell) => {
                         let head = infer_typed_expr(ctx, &cell.head, env)?;
+                        head_types.push(head.ty.clone());
                         children.push(head);
                         current = &cell.tail;
                     }
+                    crate::ast::ListExpr::Spread { source, rest } => {
+                        let spread = infer_typed_expr(ctx, source, env)?;
+                        spreads.push(spread.ty.clone());
+                        children.push(spread);
+                        current = rest.as_ref();
+                    }
                 }
             }
-            let element_types = children
-                .iter()
-                .map(|child| child.ty.clone())
-                .collect::<Vec<_>>();
+            // A spread contributes its ELEMENT type, not the list type:
+            // unify the spread value against `List(elem)` and take `elem`.
+            let mut element_types = head_types;
+            for spread in &spreads {
+                let element = ctx.fresh();
+                ctx.unify(spread, &MonoType::List(Box::new(element.clone())))?;
+                element_types.push(element);
+            }
             let element = infer_list_element_type(ctx, &element_types)?;
             Ok(composite(MonoType::List(Box::new(element)), children))
         }

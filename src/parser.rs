@@ -842,12 +842,29 @@ fn tuple(pair: Pair<'_, Rule>) -> Expr {
 }
 
 fn list(pair: Pair<'_, Rule>) -> Expr {
-    let items: Vec<Expr> = pair.into_inner().map(expression).collect();
-    if items.is_empty() {
-        return Expr::List(ListExpr::Empty);
-    }
     let mut tail = ListExpr::Empty;
-    for item in items.into_iter().rev() {
+    let mut entries: Vec<Expr> = Vec::new();
+    for inner in pair.into_inner() {
+        match inner.as_rule() {
+            Rule::list_spread => {
+                // Flush accumulated concrete cells before the spread so the
+                // spine order matches the source order.
+                for item in entries.drain(..).rev() {
+                    tail = ListExpr::Cells(Box::new(ListCons {
+                        head: Box::new(item),
+                        tail: Box::new(tail),
+                    }));
+                }
+                let source = expression(inner.into_inner().next().unwrap());
+                tail = ListExpr::Spread {
+                    source: Box::new(source),
+                    rest: Box::new(tail),
+                };
+            }
+            _ => entries.push(expression(inner)),
+        }
+    }
+    for item in entries.into_iter().rev() {
         tail = ListExpr::Cells(Box::new(ListCons {
             head: Box::new(item),
             tail: Box::new(tail),

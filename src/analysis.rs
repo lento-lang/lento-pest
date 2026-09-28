@@ -682,6 +682,10 @@ fn verify_canonical_smt_calls(
                             walk(&cell.head, refinements, false)?;
                             current = &cell.tail;
                         }
+                        crate::ast::ListExpr::Spread { source, rest } => {
+                            walk(source, refinements, false)?;
+                            current = rest.as_ref();
+                        }
                     }
                 }
             }
@@ -1126,6 +1130,10 @@ fn validate_refinement_calls_in_expr(
                             walk(&cell.head, obligations, false)?;
                             current = &cell.tail;
                         }
+                        crate::ast::ListExpr::Spread { source, rest } => {
+                            walk(source, obligations, false)?;
+                            current = rest.as_ref();
+                        }
                     }
                 }
             }
@@ -1240,6 +1248,10 @@ fn collect_expr_names(expression: &Expr, names: &mut BTreeSet<String>) {
                     crate::ast::ListExpr::Cells(cell) => {
                         collect_expr_names(&cell.head, names);
                         current = &cell.tail;
+                    }
+                    crate::ast::ListExpr::Spread { source, rest } => {
+                        collect_expr_names(source, names);
+                        current = rest.as_ref();
                     }
                 }
             }
@@ -1744,6 +1756,10 @@ fn validate_nested_matches(expression: &Expr, owner: &str) -> Result<(), String>
                     crate::ast::ListExpr::Cells(cell) => {
                         validate_nested_matches(&cell.head, owner)?;
                         current = &cell.tail;
+                    }
+                    crate::ast::ListExpr::Spread { source, rest } => {
+                        validate_nested_matches(source, owner)?;
+                        current = rest.as_ref();
                     }
                 }
             }

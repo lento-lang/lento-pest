@@ -811,6 +811,18 @@ fn eval_list(list: &crate::ast::ListExpr, env: &mut Env) -> Result<Value, String
                 items.push(eval_expr(&cons.head, env)?);
                 current = cons.tail.as_ref();
             }
+            crate::ast::ListExpr::Spread { source, rest } => {
+                let value = eval_expr(source, env)?;
+                match value {
+                    Value::List(spliced) => items.extend(spliced),
+                    other => {
+                        return Err(format!(
+                            "list spread expects a list; got {other}"
+                        ))
+                    }
+                }
+                current = rest.as_ref();
+            }
         }
     }
 }

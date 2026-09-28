@@ -223,7 +223,12 @@ match_arm_sep  = _{ "," ~ NEWLINE* }
 // calls be passed as juxtaposed arguments: `concat "a" (to_string 1)`.
 call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
 tuple          = { "(" ~ ")" | "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
-list           = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
+// `[a, ...rest, b]` — list literal. A `...expr` entry splices the elements
+// of a list value into the literal at that position; the spread value must
+// evaluate to a list.
+list       = { "[" ~ (list_entry ~ ("," ~ list_entry)*)? ~ "]" }
+list_entry = _{ list_spread | expression }
+list_spread = { "..." ~ expression }
 
 // `{ a: 1, ...r, b: 2 }` — record value literal. A bare `{}` is a block
 // (empty braces), never an empty record, so records must have an entry.

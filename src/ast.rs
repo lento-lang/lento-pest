@@ -362,6 +362,12 @@ pub struct TupleExpr {
 pub enum ListExpr {
     Empty,
     Cells(Box<ListCons>),
+    /// `...expr` — splice a list value's elements into the literal here.
+    /// `rest` continues the literal spine after the spread.
+    Spread {
+        source: Box<Expr>,
+        rest: Box<ListExpr>,
+    },
 }
 
 /// `head :: tail` — one link of the list-literal spine.
