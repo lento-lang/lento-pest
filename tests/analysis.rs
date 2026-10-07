@@ -88,54 +88,53 @@ fn prelude_len_uses_type_specific_native_intrinsics() {
     assert!(!generic_len.target.is_empty());
 }
 
-// TODO: This does not terminate! Find out why?
-// #[test]
-// fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline() {
-//     let source = format!(
-//         "{}\n{}",
-//         include_str!("../src/prelude.lt"),
-//         "assert (is_some (Some 1))\n\
-//          assert (is_some (Some \"hello\"))\n\
-//          assert (is_none None)\n\
-//          assert (unwrap_or 0 (Some 3) == 3)\n\
-//          assert (unwrap_or 7 None == 7)\n\
-//          assert (unwrap_or \"fallback\" (Some \"value\") == \"value\")\n\
-//          assert (map (x => x + 1) (Some 2) == Some 3)\n\
-//          assert (is_none (map (x => x + 1) None))\n\
-//          assert (is_ok (Ok 3))\n\
-//          assert (is_err (Err \"bad\"))\n\
-//          let success : Result int str = Ok 3\n\
-//          let failure : Result int str = Err \"bad\"\n\
-//          assert (is_ok success)\n\
-//          assert (is_err failure)\n\
-//          assert (map (x => x + 1) (Ok 2) == Ok 3)\n\
-//          assert (is_err (map (x => x + 1) (Err \"bad\")))\n\
-//          assert (map_err (s => concat s \"!\") (Err \"bad\") == Err \"bad!\")\n\
-//          assert (map_err (s => concat s \"!\") (Ok 2) == Ok 2)\n\
-//          assert (and_then (x => Ok (x + 1)) (Ok 2) == Ok 3)\n\
-//          assert (is_err (and_then (x => Ok (x + 1)) (Err \"bad\")))\n\
-//          (Left 1, Right \"right\", Break \"stop\", Continue 2, Unbounded, Included 3, Excluded 4)\n",
-//     );
-//     let program = parse_program(&source).expect("prelude and consumers should parse");
-//     let result = analyze_program(&program).expect("prelude and consumers should analyze");
-//     assert_eq!(
-//         result
-//             .overloads
-//             .iter()
-//             .find(|set| set.name == "map")
-//             .expect("map overloads should be collected")
-//             .specializations
-//             .len(),
-//         3
-//     );
-//     let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
-//     let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
-//         .expect("prelude combinators and constructors should evaluate");
-//     assert_eq!(
-//         value.to_string(),
-//         "(Left(1), Right(right), Break(stop), Continue(2), Unbounded, Included(3), Excluded(4))"
-//     );
-// }
+#[test]
+fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline() {
+    let source = format!(
+        "{}\n{}",
+        include_str!("../src/prelude.lt"),
+        "assert (is_some (Some 1))\n\
+         assert (is_some (Some \"hello\"))\n\
+         assert (is_none None)\n\
+         assert (unwrap_or 0 (Some 3) == 3)\n\
+         assert (unwrap_or 7 None == 7)\n\
+         assert (unwrap_or \"fallback\" (Some \"value\") == \"value\")\n\
+         assert (map (x => x + 1) (Some 2) == Some 3)\n\
+         assert (is_none (map (x => x + 1) None))\n\
+         assert (is_ok (Ok 3))\n\
+         assert (is_err (Err \"bad\"))\n\
+         let success : Result int str = Ok 3\n\
+         let failure : Result int str = Err \"bad\"\n\
+         assert (is_ok success)\n\
+         assert (is_err failure)\n\
+         assert (map (x => x + 1) (Ok 2) == Ok 3)\n\
+         assert (is_err (map (x => x + 1) (Err \"bad\")))\n\
+         assert (map_err (s => concat s \"!\") (Err \"bad\") == Err \"bad!\")\n\
+         assert (map_err (s => concat s \"!\") (Ok 2) == Ok 2)\n\
+         assert (and_then (x => Ok (x + 1)) (Ok 2) == Ok 3)\n\
+         assert (is_err (and_then (x => Ok (x + 1)) (Err \"bad\")))\n\
+         (Left 1, Right \"right\", Break \"stop\", Continue 2, Unbounded, Included 3, Excluded 4)\n",
+    );
+    let program = parse_program(&source).expect("prelude and consumers should parse");
+    let result = analyze_program(&program).expect("prelude and consumers should analyze");
+    assert_eq!(
+        result
+            .overloads
+            .iter()
+            .find(|set| set.name == "map")
+            .expect("map overloads should be collected")
+            .specializations
+            .len(),
+        3
+    );
+    let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
+    let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
+        .expect("prelude combinators and constructors should evaluate");
+    assert_eq!(
+        value.to_string(),
+        "(Left(1), Right(right), Break(stop), Continue(2), Unbounded, Included(3), Excluded(4))"
+    );
+}
 
 #[test]
 fn prelude_map_rejects_unrelated_argument_types() {
