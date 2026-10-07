@@ -120,8 +120,7 @@ pub fn analyze_program(program: &Program) -> Result<Analysis, String> {
     validate_spec_refinements(program, &mut ctx, &env)?;
     let refinements = collect_refinement_metadata(&collected.function_groups);
     validate_refinement_calls(program, &collected.function_groups)?;
-    #[cfg(feature = "canonical-smt")]
-    verify_canonical_smt(program, &collected.function_groups)?;
+        verify_canonical_smt(program, &collected.function_groups)?;
 
     // Seed every function before inferring any body. This preserves WIP's
     // recursive and mutually recursive definitions while the master pipeline
@@ -462,7 +461,6 @@ fn collect_named_binders(ty: &Ty, binders: &mut BTreeMap<String, Ty>) {
     }
 }
 
-#[cfg(feature = "canonical-smt")]
 #[derive(Clone)]
 struct SmtRefinement {
     inputs: Vec<(Option<String>, Option<crate::smt::SVal>)>,
@@ -471,7 +469,6 @@ struct SmtRefinement {
     arity: usize,
 }
 
-#[cfg(feature = "canonical-smt")]
 fn verify_canonical_smt(program: &Program, groups: &[FunctionGroup]) -> Result<(), String> {
     let mut refinements = BTreeMap::<String, SmtRefinement>::new();
 
@@ -604,7 +601,6 @@ fn verify_canonical_smt(program: &Program, groups: &[FunctionGroup]) -> Result<(
     Ok(())
 }
 
-#[cfg(feature = "canonical-smt")]
 fn verify_canonical_smt_calls(
     program: &Program,
     groups: &[FunctionGroup],
@@ -745,7 +741,6 @@ fn verify_canonical_smt_calls(
     Ok(())
 }
 
-#[cfg(feature = "canonical-smt")]
 fn curry_function_clause(clause: &crate::ast::FnDecl) -> Expr {
     let mut body = clause.body.clone();
     for parameter in clause.params.iter().rev() {

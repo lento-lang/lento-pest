@@ -7,14 +7,10 @@ edition = "2021"
 name = "lento"
 path = "src/lib.rs"
 
-[features]
-default = ["canonical-smt"]
-canonical-smt = ["dep:cvc5"]
-
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 colorful = "0.2.2"
 pest = "2.5.2"
 pest_derive = "2.4.0"
 pest_ascii_tree = "0.1.0"
-cvc5 = { version = "0.4", features = ["static"], optional = true }
+cvc5 = { version = "0.4", features = ["static"] }

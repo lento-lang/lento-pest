@@ -12,7 +12,6 @@ pub mod patterns;
 pub mod pprint;
 pub mod resolve;
 pub mod semantics;
-#[cfg(feature = "canonical-smt")]
 pub mod smt;
 pub mod specialize;
 pub mod specs;

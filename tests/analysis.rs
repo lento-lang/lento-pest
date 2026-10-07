@@ -12,7 +12,6 @@ fn analysis(source: &str) -> Result<lento::analysis::Analysis, String> {
     analyze_program(&program)
 }
 
-#[cfg(feature = "canonical-smt")]
 #[test]
 fn canonical_smt_proves_refinement_postconditions() {
     analyze(
@@ -21,7 +20,6 @@ fn canonical_smt_proves_refinement_postconditions() {
     .expect("SMT should prove the postcondition when increment cannot overflow");
 }
 
-#[cfg(feature = "canonical-smt")]
 #[test]
 fn canonical_smt_rejects_increment_at_i64_max() {
     let error = analyze(
@@ -31,14 +29,12 @@ fn canonical_smt_rejects_increment_at_i64_max() {
     assert!(error.contains("precondition"), "{error}");
 }
 
-#[cfg(feature = "canonical-smt")]
 #[test]
 fn canonical_smt_checks_calls_inside_function_bodies() {
     let source = "spec divide:\n    (x: int) -> (y: int) -> int\n    where\n        y != 0\nfn divide x y = x / y\nfn bad x = divide 1 0\n";
     assert!(analyze(source).unwrap_err().contains("precondition"));
 }
 
-#[cfg(feature = "canonical-smt")]
 #[test]
 fn canonical_smt_rejects_false_refinement_postconditions() {
     let error = analyze(

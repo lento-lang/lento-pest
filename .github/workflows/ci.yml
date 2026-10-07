@@ -19,7 +19,5 @@ jobs:
           toolchain: 1.85.1
           components: rustfmt
       - run: cargo fmt --all
-      - name: Test without SMT
-        run: cargo test --locked --all-targets --no-default-features
-      - name: Test with SMT
+      - name: Test
         run: cargo test --locked --all-targets
