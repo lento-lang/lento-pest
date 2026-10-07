@@ -11,10 +11,12 @@
 //   - Memory: `T` is logical value semantics; `ref T` shared borrow (inferred);
 //     `mut T` explicit exclusive mutable place; `ref x` materializes a borrow.
 
-WHITESPACE            = _{ " " | "\t" | "\r" }
+WHITESPACE            = _{ COMMENT | " " | "\t" | "\r" }
 COMMENT               = _{ multiline_comment | singleline_comment }
 multiline_comment     = _{ "/*" ~ (!"*/" ~ ANY)* ~ "*/" }
-singleline_comment    = _{ "//" ~ (!NEWLINE ~ ANY)* ~ (NEWLINE | EOI) }
+// A single-line comment stops before the newline: `statement_sep` still
+// consumes the line break, so comments can end any statement.
+singleline_comment    = _{ "//" ~ (!NEWLINE ~ ANY)* }
 statement_sep         = _{ (";" ~ NEWLINE*) | NEWLINE+ | &EOI }
 
 // --------------------------------------------------------------------------
@@ -36,7 +38,11 @@ string               = { "\"" ~ string_inner ~ "\"" }
 // Program / declaration structure
 // --------------------------------------------------------------------------
 
-program        = { SOI ~ (statement ~ statement_sep)* ~ EOI }
+// Leading blank lines and comment lines are allowed before the first
+// statement. `prologue` requires progress through COMMENT, so a run of
+// blank lines/comments cannot loop forever.
+program        = { SOI ~ prologue ~ (statement ~ statement_sep)* ~ EOI }
+prologue       = _{ (NEWLINE* ~ COMMENT ~ NEWLINE*)* ~ NEWLINE* }
 body           = { NEWLINE* ~ ((statement ~ statement_sep)* ~ statement?)? ~ NEWLINE* }
 block          = { "{" ~ body ~ "}" }
 
@@ -48,8 +54,14 @@ mod_decl       = { "mod" ~ identifier ~ block }
 use_decl       = { "use" ~ identifier ~ ("." ~ identifier)* }
 
 // A class is a named scope of required ordinary specs. Its type parameters
-// may be proper types or higher-kinded constructors; kinds are inferred later.
-class_decl     = { "class" ~ identifier ~ type_param* ~ "{" ~ NEWLINE* ~ (spec_decl ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+// may be proper types or higher-kinded constructors. A parameter may carry a
+// kind annotation (`f : * -> *`); unannotated parameters default to `*`, and
+// a parameter used at a higher kind in a spec body must be annotated or its
+// kind is inferred from the number of type applications it receives.
+class_decl     = { "class" ~ identifier ~ class_param* ~ "{" ~ NEWLINE* ~ (spec_decl ~ class_member_sep)* ~ NEWLINE* ~ "}" }
+class_param    = _{ kinded_param | type_param }
+kinded_param   = { "(" ~ type_var ~ ":" ~ kind ~ ")" }
+kind           = { "*" ~ ("->" ~ kind)? }
 
 // An implementation explicitly associates a class with a type or type
 // constructor and supplies ordinary function definitions for its specs.
@@ -112,15 +124,19 @@ ty_mut       = { "mut" ~ type_atom }
 // such as `[int | str]`. Named sums use unbracketed declaration syntax.
 // Record types `{ a: int, b: bool }` list named fields.
 type_base    = {
-      list_union
+      ty_tuple
+    | list_union
     | identifier ~ ty_app_args?
     | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
     | "[" ~ type_atom ~ "]"
     | ty_record
 }
-// Application arguments are non-applying atoms: a bare identifier (or
-// `ref`/`mut`-headed atom), a parenthesized type, a list type, or a record.
-// `Result a e` therefore
+// `(a, b)` — a tuple type. Ordered before the grouped type so parenthesized
+// commas win over function-type grouping; `()` stays the unit type.
+ty_tuple     = { "(" ~ type_atom ~ ("," ~ type_atom)+ ~ ")" }
+// Application arguments are non-applying atoms: a bare identifier, a
+// `ref`/`mut`-headed atom, a tuple, a parenthesized type, a list type,
+// or a record. `Result a e` therefore
 // applies `Result` to `a` and `e`; a nested application needs parentheses
 // (`Pair (Option int) bool`). Without this restriction a trailing
 // identifier would be absorbed as the previous argument's own arguments
@@ -129,6 +145,7 @@ ty_app_args  = { ty_app_arg+ }
 ty_app_arg   = {
       ty_ref
     | ty_mut
+    | ty_tuple
     | identifier
     | "(" ~ NEWLINE* ~ arrow_type? ~ NEWLINE* ~ ")"
     | "[" ~ type_atom ~ "]"
@@ -221,9 +238,19 @@ match_arm_sep  = _{ "," ~ NEWLINE* }
 // `()` is the empty tuple (unit-ish); tuples need at least one comma, so a
 // single parenthesized expression `(e)` is a grouped expression, which lets
 // calls be passed as juxtaposed arguments: `concat "a" (to_string 1)`.
-call           = { identifier ~ "(" ~ (expression ~ ("," ~ expression)*)? ~ ")" }
+// `f(a, b)` — explicit multi-argument call sugar. Parens without a comma
+// are a GROUPED expression, not a call: `f (x)` is application of `f` to
+// `(x)`, and `f g (x)` is `(f g) (x)` (curried juxtaposition), not
+// `f (g (x))`. This keeps identifier arguments followed by parenthesized
+// arguments from being absorbed as the identifier's own arguments.
+call           = { identifier ~ "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
 tuple          = { "(" ~ ")" | "(" ~ expression ~ ("," ~ expression)+ ~ ")" }
-list           = { "[" ~ (expression ~ ("," ~ expression)*)? ~ "]" }
+// `[a, ...rest, b]` — list literal. A `...expr` entry splices the elements
+// of a list value into the literal at that position; the spread value must
+// evaluate to a list.
+list       = { "[" ~ (list_entry ~ ("," ~ list_entry)*)? ~ "]" }
+list_entry = _{ list_spread | expression }
+list_spread = { "..." ~ expression }
 
 // `{ a: 1, ...r, b: 2 }` — record value literal. A bare `{}` is a block
 // (empty braces), never an empty record, so records must have an entry.

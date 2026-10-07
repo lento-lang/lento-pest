@@ -379,7 +379,7 @@ fn render_pat_atom(out: &mut String, atom: &str, annotation: Option<&Ty>) {
 /// grouping that the left-fold parser loses.
 #[derive(Clone, Copy, PartialEq, PartialOrd)]
 enum Prec {
-    Top,   // statement / argument context: lowest, allows any infix
+    Top, // statement / argument context: lowest, allows any infix
     Or,
     And,
     Cmp,
@@ -392,12 +392,9 @@ fn binary_prec(op: &BinaryOp) -> Prec {
     match op {
         BinaryOp::Or => Prec::Or,
         BinaryOp::And => Prec::And,
-        BinaryOp::Eq
-        | BinaryOp::Ne
-        | BinaryOp::Lt
-        | BinaryOp::Gt
-        | BinaryOp::Le
-        | BinaryOp::Ge => Prec::Cmp,
+        BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Gt | BinaryOp::Le | BinaryOp::Ge => {
+            Prec::Cmp
+        }
         BinaryOp::Add | BinaryOp::Sub => Prec::Add,
         BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => Prec::Mul,
     }
@@ -579,18 +576,28 @@ fn next_tighter(p: Prec) -> Prec {
     }
 }
 
-/// A list is stored as cons cells; print a proper list back as `[a, b, c]`.
+/// A list is stored as cons cells (plus optional spread entries); print a
+/// proper list back as `[a, ...spread, b]`.
 fn format_list(out: &mut String, list: &ListExpr) {
-    let mut items = Vec::new();
+    let mut entries = Vec::new();
     let mut cur = list;
-    while let ListExpr::Cells(c) = cur {
-        items.push(expr_str_top(&c.head));
-        cur = &c.tail;
+    while !matches!(cur, ListExpr::Empty) {
+        match cur {
+            ListExpr::Empty => break,
+            ListExpr::Cells(c) => {
+                entries.push(expr_str_top(&c.head));
+                cur = &c.tail;
+            }
+            ListExpr::Spread { source, rest } => {
+                entries.push(format!("...{}", expr_str_top(source)));
+                cur = rest.as_ref();
+            }
+        }
     }
-    if items.is_empty() {
+    if entries.is_empty() {
         out.push_str("[]");
     } else {
-        let _ = write!(out, "[{}]", items.join(", "));
+        let _ = write!(out, "[{}]", entries.join(", "));
     }
 }
 

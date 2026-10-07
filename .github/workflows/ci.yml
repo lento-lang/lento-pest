@@ -2,6 +2,7 @@ name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
@@ -10,11 +11,15 @@ permissions:
 jobs:
   rust:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          toolchain: 1.85.1
+          components: rustfmt
       - run: cargo fmt --all
-      - name: Test
-        run: cargo test --all-targets
+      - name: Test without SMT
+        run: cargo test --locked --all-targets --no-default-features
+      - name: Test with SMT
+        run: cargo test --locked --all-targets

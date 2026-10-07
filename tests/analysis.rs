@@ -33,6 +33,13 @@ fn canonical_smt_rejects_increment_at_i64_max() {
 
 #[cfg(feature = "canonical-smt")]
 #[test]
+fn canonical_smt_checks_calls_inside_function_bodies() {
+    let source = "spec divide:\n    (x: int) -> (y: int) -> int\n    where\n        y != 0\nfn divide x y = x / y\nfn bad x = divide 1 0\n";
+    assert!(analyze(source).unwrap_err().contains("precondition"));
+}
+
+#[cfg(feature = "canonical-smt")]
+#[test]
 fn canonical_smt_rejects_false_refinement_postconditions() {
     let error = analyze(
         "spec unchanged:\n             (x: int) -> (r: int)\n             where\n                 r > x\n         fn unchanged x = x\n",
@@ -118,7 +125,7 @@ fn prelude_algebraic_types_and_combinators_work_through_the_canonical_pipeline()
             .expect("map overloads should be collected")
             .specializations
             .len(),
-        2
+        3
     );
     let lowered = lento::semantics::lower_analyzed_program(&result.source, &result.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &result.declarations)
@@ -139,8 +146,9 @@ fn prelude_map_rejects_unrelated_argument_types() {
 
 #[test]
 fn implementation_type_variables_require_impl_quantifiers() {
-    let error = analyze("class Seq a { spec reverse : a -> a }\nimpl Seq [a] { fn reverse xs = xs }\n")
-        .expect_err("unbound implementation type variable should fail");
+    let error =
+        analyze("class Seq a { spec reverse : a -> a }\nimpl Seq [a] { fn reverse xs = xs }\n")
+            .expect_err("unbound implementation type variable should fail");
     assert!(error.contains("unknown implementation type 'a'"), "{error}");
 }
 
@@ -186,10 +194,8 @@ fn typed_match_arms_contribute_to_exhaustiveness() {
 
 #[test]
 fn anonymous_sum_annotations_are_structural() {
-    analyze(
-        "let identity : [int | str] -> [int | str] = value => value\n",
-    )
-    .expect("identical anonymous sum annotations should unify structurally");
+    analyze("let identity : [int | str] -> [int | str] = value => value\n")
+        .expect("identical anonymous sum annotations should unify structurally");
 }
 
 #[test]
@@ -338,11 +344,8 @@ fn sibling_files_are_automatic_modules() {
          sqrt 9\n",
     )
     .expect("root module should be written");
-    std::fs::write(
-        directory.join("math.lt"),
-        "fn sqrt value = value\n",
-    )
-    .expect("sibling module should be written");
+    std::fs::write(directory.join("math.lt"), "fn sqrt value = value\n")
+        .expect("sibling module should be written");
 
     let program = lento::parser::parse_file(&root).expect("file modules should parse");
     let result = lento::analysis::analyze_program(&program).expect("file modules should analyze");
@@ -363,10 +366,8 @@ fn canonical_pipeline_installs_sum_constructors() {
 
 #[test]
 fn runtime_uses_resolved_sum_metadata() {
-    let program = parse_program(
-        "type Option a = Some a | None\n         Some 5\n",
-    )
-    .expect("program should parse");
+    let program = parse_program("type Option a = Some a | None\n         Some 5\n")
+        .expect("program should parse");
     let analysis = analyze_program(&program).expect("sum type should analyze");
     let lowered = lento::semantics::lower_analyzed_program(&program, &analysis.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)
@@ -376,10 +377,9 @@ fn runtime_uses_resolved_sum_metadata() {
 
 #[test]
 fn typed_lowering_executes_analyzed_function_bodies_in_source_order() {
-    let program = parse_program(
-        "fn increment x = x + 1\n         let value = increment 4\n         value\n",
-    )
-    .expect("program should parse");
+    let program =
+        parse_program("fn increment x = x + 1\n         let value = increment 4\n         value\n")
+            .expect("program should parse");
     let analysis = analyze_program(&program).expect("program should analyze");
     let lowered = lento::semantics::lower_analyzed_program(&program, &analysis.typed);
     let value = lento::eval::eval_program_with_declarations(&lowered, &analysis.declarations)
@@ -392,7 +392,6 @@ fn canonical_pipeline_rejects_namespace_collisions() {
     let error = analyze("let f = 1\nfn f x = x\n").expect_err("collision should fail");
     assert!(error.contains("declaration collision"), "{error}");
 }
-
 
 #[test]
 fn canonical_pipeline_validates_class_implementations() {
@@ -408,7 +407,10 @@ fn canonical_pipeline_rejects_incomplete_class_implementation() {
         "class Comparable a { spec compare : a -> a -> int; spec equal : a -> a -> bool }\n         impl Comparable int { fn compare x y = 0 }\n",
     )
     .expect_err("missing class method should be rejected");
-    assert!(error.contains("missing required method"), "unexpected error: {error}");
+    assert!(
+        error.contains("missing required method"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -426,7 +428,10 @@ fn canonical_pipeline_rejects_ambiguous_global_class_method_names() {
         "class First a { spec compare : a -> a -> int }\n         class Second a { spec compare : a -> a -> int }\n",
     )
     .expect_err("method names currently require a unique global scheme");
-    assert!(error.contains("global method overload resolution"), "{error}");
+    assert!(
+        error.contains("global method overload resolution"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -438,40 +443,32 @@ fn canonical_pipeline_rejects_overlapping_implementations() {
     assert!(error.contains("overlapping"));
 }
 
-
 #[test]
 fn canonical_pipeline_type_checks_where_refinements() {
-    analyze(
-        "spec positive:\n         (x: int) -> int\n         where\n             x > 0\n",
-    )
-    .expect("well-typed refinement should analyze");
+    analyze("spec positive:\n         (x: int) -> int\n         where\n             x > 0\n")
+        .expect("well-typed refinement should analyze");
 }
 
 #[test]
 fn canonical_pipeline_rejects_unknown_where_names() {
-    let error = analyze(
-        "spec positive:\n         (x: int) -> int\n         where\n             y > 0\n",
-    )
-    .expect_err("unknown refinement name should fail");
+    let error =
+        analyze("spec positive:\n         (x: int) -> int\n         where\n             y > 0\n")
+            .expect_err("unknown refinement name should fail");
     assert!(error.contains("unbound variable"));
 }
 
 #[test]
 fn canonical_pipeline_rejects_non_boolean_where_refinements() {
-    let error = analyze(
-        "spec positive:\n         (x: int) -> int\n         where\n             x + 1\n",
-    )
-    .expect_err("non-boolean refinement should fail");
+    let error =
+        analyze("spec positive:\n         (x: int) -> int\n         where\n             x + 1\n")
+            .expect_err("non-boolean refinement should fail");
     assert!(error.contains("must be boolean"));
 }
 
-
 #[test]
 fn canonical_analysis_exposes_resolved_type_metadata() {
-    let result = analysis(
-        "type Option a = Some a | None\n         type User = { name: str }\n",
-    )
-    .expect("declarations should resolve");
+    let result = analysis("type Option a = Some a | None\n         type User = { name: str }\n")
+        .expect("declarations should resolve");
     let option = result
         .declarations
         .types
@@ -490,7 +487,6 @@ fn canonical_analysis_exposes_resolved_type_metadata() {
     assert_eq!(user.fields[0].0, "name");
 }
 
-
 #[test]
 fn canonical_analysis_exposes_class_dispatch_metadata() {
     let result = analysis(
@@ -502,7 +498,6 @@ fn canonical_analysis_exposes_class_dispatch_metadata() {
     assert_eq!(result.declarations.instances[0].methods, vec!["compare"]);
 }
 
-
 #[test]
 fn canonical_pipeline_rejects_partial_refinement_function_use() {
     let error = analyze(
@@ -511,7 +506,6 @@ fn canonical_pipeline_rejects_partial_refinement_function_use() {
     .expect_err("refinement-bearing function must not escape as a value");
     assert!(error.contains("partial application"), "{error}");
 }
-
 
 #[test]
 fn canonical_analysis_populates_typed_bodies_and_schemes() {
@@ -526,7 +520,6 @@ fn canonical_analysis_populates_typed_bodies_and_schemes() {
     ));
     assert!(!set.specializations[0].scheme.body.free_vars().is_empty());
 }
-
 
 #[test]
 fn canonical_typed_expressions_keep_recursive_annotations() {
@@ -591,17 +584,19 @@ fn canonical_pipeline_uses_let_annotations_to_solve_constraints() {
         "class Show a { spec show : a -> str }\n\
          let f : str -> str = x => show x\n",
     )
-        .expect_err("concrete unsatisfied class constraint must be rejected");
-    assert!(error.contains("no instance") || error.contains("unsupported"), "{error}");
+    .expect_err("concrete unsatisfied class constraint must be rejected");
+    assert!(
+        error.contains("no instance") || error.contains("unsupported"),
+        "{error}"
+    );
 }
 
 #[test]
 fn canonical_pipeline_resolves_fully_typed_overload_calls() {
-    let result = analysis("fn id x = x\nlet value = id 1\n")
-        .expect("fully applied call should resolve");
-    let lento::semantics::TypedExprKind::Call {
-        specialization, ..
-    } = &result.typed.lets[0].value.kind
+    let result =
+        analysis("fn id x = x\nlet value = id 1\n").expect("fully applied call should resolve");
+    let lento::semantics::TypedExprKind::Call { specialization, .. } =
+        &result.typed.lets[0].value.kind
     else {
         panic!("top-level value should retain its call node");
     };
@@ -621,9 +616,8 @@ fn canonical_overload_schemes_preserve_and_select_class_instances() {
         .find(|set| set.name == "same")
         .expect("same overload should be in typed program");
     assert_eq!(same.specializations[0].scheme.constraints.len(), 1);
-    let lento::semantics::TypedExprKind::Call {
-        specialization, ..
-    } = &result.typed.lets[0].value.kind
+    let lento::semantics::TypedExprKind::Call { specialization, .. } =
+        &result.typed.lets[0].value.kind
     else {
         panic!("same call should remain a typed call");
     };
@@ -649,10 +643,8 @@ fn canonical_pipeline_resolves_class_method_instances() {
 
 #[test]
 fn canonical_pipeline_rejects_missing_class_instance() {
-    let error = analyze(
-        "class Eq a { spec eq : a -> a -> bool }\n         assert (eq 1 1)\n",
-    )
-    .expect_err("missing class instance should fail");
+    let error = analyze("class Eq a { spec eq : a -> a -> bool }\n         assert (eq 1 1)\n")
+        .expect_err("missing class instance should fail");
     assert!(error.contains("no instance"), "{error}");
 }
 
@@ -662,6 +654,21 @@ fn type_constructor_application_uses_curried_syntax() {
     analyze(source).expect("curried type constructor application should analyze");
     assert!(parse_program("type Result a e = Ok a | Err e\n                        let value : Result<int, str> = Ok 1").is_err(),
         "angle bracket type application must be rejected");
+}
+
+#[test]
+fn class_implementation_checks_method_result_and_arity() {
+    let source = "class Show a { spec show : a -> str }\nimpl Show int { fn show x = 1 }\n";
+    let error = analyze(source).unwrap_err();
+    assert!(error.contains("does not match class"), "{error}");
+    let source =
+        "class Show a { spec show : a -> str }\nimpl Show int { fn show x y = \"wrong arity\" }\n";
+    let error = analyze(source).unwrap_err();
+    assert!(error.contains("does not match class"), "{error}");
+    let source =
+        "class Seq a { spec reverse : a -> a }\nimpl all a. Seq [a] { fn reverse xs = [1] }\n";
+    let error = analyze(source).unwrap_err();
+    assert!(error.contains("does not match class"), "{error}");
 }
 
 #[test]
@@ -722,10 +729,6 @@ fn nested_type_application_requires_parentheses() {
         panic!("expected a named argument");
     };
     assert_eq!(args.len(), 0, "arguments never absorb further identifiers");
-}
-
-#[test]
-fn record_synonym_spec_is_satisfied_by_field_implementation() {
     let source = "type Pair a b = { fst: a, snd: b }\n\
                   spec first : all a, b. Pair a b -> a\n\
                   fn first value = value.fst\n\
@@ -738,9 +741,14 @@ fn record_synonym_spec_rejects_missing_field() {
     let source = "type Pair a b = { fst: a, snd: b }\n\
                   spec wrong : all a, b. Pair a b -> a\n\
                   fn wrong value = value.nope";
-    let error = analyze(source).expect_err("a missing field must not satisfy a record synonym spec");
-    assert!(error.contains("no instance") || error.contains("field") || error.contains("not implemented"),
-        "{error}");
+    let error =
+        analyze(source).expect_err("a missing field must not satisfy a record synonym spec");
+    assert!(
+        error.contains("no instance")
+            || error.contains("field")
+            || error.contains("not implemented"),
+        "{error}"
+    );
 }
 
 #[test]

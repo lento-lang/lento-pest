@@ -49,10 +49,7 @@ const SAMPLES: &[&str] = &[
 fn formatted_samples_reparse_to_same_ast() {
     for name in SAMPLES {
         let src = std::fs::read_to_string(format!("tests/samples/{name}.lt")).unwrap();
-        assert!(
-            roundtrip_ok(&src),
-            "round-trip failed for sample {name}.lt"
-        );
+        assert!(roundtrip_ok(&src), "round-trip failed for sample {name}.lt");
     }
 }
 
@@ -120,7 +117,10 @@ fn pretty_printed_type_applications_are_curried() {
     .expect("curried type application should parse");
     let printed = format_program(&ast);
     assert!(printed.contains("Result a e"), "{printed}");
-    assert!(!printed.contains("<a") && !printed.contains("<a,"), "{printed}");
+    assert!(
+        !printed.contains("<a") && !printed.contains("<a,"),
+        "{printed}"
+    );
 }
 
 #[test]
@@ -132,7 +132,10 @@ fn nested_type_arguments_round_trip_with_parentheses() {
     // arguments on `Pair`.
     let reparsed = parse_program(&printed).expect("printed form should reparse");
     let printed_again = format_program(&reparsed);
-    assert_eq!(printed, printed_again, "type application printing must be stable");
+    assert_eq!(
+        printed, printed_again,
+        "type application printing must be stable"
+    );
 }
 
 #[test]
@@ -150,5 +153,9 @@ fn named_binder_arguments_round_trip_parenthesized() {
     let source = "type Pair a b = Mk a b\n         spec check : (value : Pair int bool) -> bool\n";
     let printed = format_program(&parse_program(source).expect("should parse"));
     let reparsed = parse_program(&printed).expect("printed named binder should reparse");
-    assert_eq!(printed, format_program(&reparsed), "named binder printing must be stable");
+    assert_eq!(
+        printed,
+        format_program(&reparsed),
+        "named binder printing must be stable"
+    );
 }

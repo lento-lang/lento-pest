@@ -28,6 +28,61 @@ fn list(inner: MonoType) -> MonoType {
     MonoType::List(Box::new(inner))
 }
 
+#[test]
+fn solved_record_tail_is_materialized_by_substitution() {
+    let mut subst = Substitution::new();
+    let open = MonoType::Record {
+        fields: vec![("a".into(), con("int", vec![]))],
+        rest: Some(42),
+    };
+    let closed = MonoType::Record {
+        fields: vec![
+            ("a".into(), con("int", vec![])),
+            ("b".into(), con("str", vec![])),
+        ],
+        rest: None,
+    };
+    unify(&mut subst, &open, &closed).unwrap();
+    assert_eq!(subst.apply(&open), closed);
+}
+
+#[test]
+fn independently_reconciled_rows_do_not_share_a_fresh_tail() {
+    let mut subst = Substitution::new();
+    let open = |name: &str, tail| MonoType::Record {
+        fields: vec![(name.into(), con("int", vec![]))],
+        rest: Some(tail),
+    };
+    unify(&mut subst, &open("a", 10), &open("b", 11)).unwrap();
+    unify(&mut subst, &open("c", 12), &open("d", 13)).unwrap();
+    assert_ne!(subst.apply(&var(10)), subst.apply(&var(12)));
+}
+
+#[test]
+fn nominal_sums_keep_identity_and_structural_sums_check_payloads() {
+    use lento::types::MonoSumAlt;
+    let sum = |name: &str, payload: &str| MonoType::Sum {
+        name: name.into(),
+        args: vec![],
+        alts: vec![MonoSumAlt::Constructor {
+            name: "Some".into(),
+            payload: Some(con(payload, vec![])),
+        }],
+    };
+    assert!(unify(
+        &mut Substitution::new(),
+        &sum("Left", "int"),
+        &sum("Right", "int")
+    )
+    .is_err());
+    assert!(unify(
+        &mut Substitution::new(),
+        &sum("<sum:1>", "int"),
+        &sum("<sum:1>", "str")
+    )
+    .is_err());
+}
+
 // -- fresh variables --------------------------------------------------------
 
 #[test]
@@ -119,15 +174,26 @@ fn nominal_sum_and_named_type_representations_agree() {
         name: "Option".into(),
         args: vec![var(0)],
         alts: vec![
-            MonoSumAlt::Constructor { name: "None".into(), payload: None },
-            MonoSumAlt::Constructor { name: "Some".into(), payload: Some(var(0)) },
+            MonoSumAlt::Constructor {
+                name: "None".into(),
+                payload: None,
+            },
+            MonoSumAlt::Constructor {
+                name: "Some".into(),
+                payload: Some(var(0)),
+            },
         ],
     };
     let named = con("Option", vec![con("int", vec![])]);
     let mut substitution = Substitution::new();
     unify(&mut substitution, &option, &named).expect("same nominal sum should unify");
     assert_eq!(substitution.apply(&var(0)), con("int", vec![]));
-    assert!(unify(&mut Substitution::new(), &option, &con("Other", vec![var(0)])).is_err());
+    assert!(unify(
+        &mut Substitution::new(),
+        &option,
+        &con("Other", vec![var(0)])
+    )
+    .is_err());
 
     let implementation = TypeScheme {
         quantified: vec![0],
@@ -139,7 +205,11 @@ fn nominal_sum_and_named_type_representations_agree() {
         constraints: vec![],
         body: arrow(con("Option", vec![var(1)]), con("bool", vec![])),
     };
-    assert!(implementation_covers_spec(&mut TypeVarSupply::new(), &implementation, &specification));
+    assert!(implementation_covers_spec(
+        &mut TypeVarSupply::new(),
+        &implementation,
+        &specification
+    ));
 }
 
 #[test]
@@ -160,10 +230,7 @@ fn unification_is_structural_for_functions_tuples_and_lists() {
     let mut s = Substitution::new();
     unify(
         &mut s,
-        &arrow(
-            var(0),
-            MonoType::Tuple(vec![var(1), list(var(1))]),
-        ),
+        &arrow(var(0), MonoType::Tuple(vec![var(1), list(var(1))])),
         &arrow(
             con("str", vec![]),
             MonoType::Tuple(vec![con("bool", vec![]), list(con("bool", vec![]))]),
@@ -324,10 +391,7 @@ fn lower_ty_never_turns_a_bare_parameter_name_into_a_nominal_type() {
         name: "x".to_string(),
         args: vec![],
     };
-    assert_eq!(
-        lower_ty(&surface, &BTreeMap::new()),
-        con("x", vec![])
-    );
+    assert_eq!(lower_ty(&surface, &BTreeMap::new()), con("x", vec![]));
     // With a binder in scope the same name resolves to that variable.
     let mut binders = BTreeMap::new();
     binders.insert("x".to_string(), var(3));
@@ -459,4 +523,151 @@ fn equivalent_schemes_do_not_strictly_dominate() {
     };
     assert!(!dominates(&mut supply, &a, &b));
     assert!(!dominates(&mut supply, &b, &a));
+}
+
+#[test]
+fn type_app_reduces_when_head_binds_to_a_constructor() {
+    let mut subst = Substitution::new();
+    let f = 0;
+    let a = 1;
+    let app = MonoType::TypeApp {
+        head: Box::new(MonoType::Var(f)),
+        args: vec![MonoType::Var(a)],
+    };
+    // `f a ~ Option int`: bind f to the bare `Option` constructor, reduce,
+    // then unify the argument.
+    unify(&mut subst, &app, &option_int_sum()).expect("f a unifies with Option int");
+    assert_eq!(
+        subst.apply(&MonoType::Var(f)),
+        MonoType::Constructor("Option".to_string(), Vec::new())
+    );
+    // Reduction lands on the constructor form; `unify` treats that and the
+    // nominal sum as the same type via the Sum/Constructor equivalence case.
+    assert_eq!(
+        subst.apply(&app),
+        MonoType::Constructor(
+            "Option".to_string(),
+            vec![MonoType::Constructor("int".to_string(), Vec::new())]
+        )
+    );
+}
+
+#[test]
+fn type_app_reduces_list_head_to_list_type() {
+    let mut subst = Substitution::new();
+    let f = 0;
+    let a = 1;
+    let app = MonoType::TypeApp {
+        head: Box::new(MonoType::Var(f)),
+        args: vec![MonoType::Var(a)],
+    };
+    unify(&mut subst, &app, &MonoType::List(Box::new(MonoType::Var(a)))).expect("f a ~ [a]");
+    assert_eq!(
+        subst.apply(&app),
+        MonoType::List(Box::new(MonoType::Var(a)))
+    );
+}
+
+#[test]
+fn type_app_rejects_plain_type_head() {
+    let mut subst = Substitution::new();
+    let f = 0;
+    let app = MonoType::TypeApp {
+        head: Box::new(MonoType::Var(f)),
+        args: vec![MonoType::Var(1)],
+    };
+    let error = unify(&mut subst, &app, &MonoType::Constructor("int".to_string(), Vec::new()))
+        .expect_err("a * -> * variable cannot unify with a plain type");
+    assert!(matches!(error, UnifyError::Mismatch { .. }), "{error:?}");
+}
+
+#[test]
+fn type_app_unifies_two_variable_heads() {
+    let mut subst = Substitution::new();
+    let f = 0;
+    let g = 5;
+    let a = 1;
+    let left = MonoType::TypeApp { head: Box::new(MonoType::Var(f)), args: vec![MonoType::Var(a)] };
+    let right = MonoType::TypeApp { head: Box::new(MonoType::Var(g)), args: vec![MonoType::Var(a)] };
+    unify(&mut subst, &left, &right).expect("f a ~ g a");
+    assert_eq!(subst.apply(&MonoType::Var(f)), MonoType::Var(g));
+}
+
+fn option_int_sum() -> MonoType {
+    MonoType::Sum {
+        name: "Option".to_string(),
+        args: vec![MonoType::Constructor("int".to_string(), Vec::new())],
+        alts: vec![
+            MonoSumAlt::Constructor { name: "None".to_string(), payload: None },
+            MonoSumAlt::Constructor {
+                name: "Some".to_string(),
+                payload: Some(MonoType::Constructor("int".to_string(), Vec::new())),
+            },
+        ],
+    }
+}
+
+#[test]
+fn spec_instantiated_at_instance_head_covers_concrete_impl() {
+    // spec: all f a b. (a -> b) -> f a -> f b, instantiated at f := Option
+    // (the instance-check step for a class spec).
+    // impl: all a b. (a -> b) -> Option a -> Option b
+    let mut supply = TypeVarSupply::new();
+    let spec = TypeScheme {
+        quantified: vec![10, 11, 12],
+        constraints: vec![],
+        body: MonoType::Function(
+            Box::new(MonoType::Function(
+                Box::new(MonoType::Var(11)),
+                Box::new(MonoType::Var(12)),
+            )),
+            Box::new(MonoType::Function(
+                Box::new(MonoType::TypeApp { head: Box::new(MonoType::Var(10)), args: vec![MonoType::Var(11)] }),
+                Box::new(MonoType::TypeApp { head: Box::new(MonoType::Var(10)), args: vec![MonoType::Var(12)] }),
+            )),
+        ),
+    };
+    let option = |arg: u32| option_int_sum_with(arg);
+    let imp = TypeScheme {
+        quantified: vec![21, 22],
+        constraints: vec![],
+        body: MonoType::Function(
+            Box::new(MonoType::Function(
+                Box::new(MonoType::Var(21)),
+                Box::new(MonoType::Var(22)),
+            )),
+            Box::new(MonoType::Function(
+                Box::new(option(21)),
+                Box::new(option(22)),
+            )),
+        ),
+    };
+    // Instantiate the class param in the spec: f := bare `Option` constructor.
+    // `Substitution::apply` reduces the spec's `f a`/`f b` to the applied
+    // constructor form, which then covers the implementation's sum type.
+    let mut head_subst = Substitution::new();
+    head_subst.insert(10, MonoType::Constructor("Option".to_string(), Vec::new()));
+    let spec = TypeScheme {
+        quantified: spec.quantified.into_iter().filter(|q| *q != 10).collect(),
+        constraints: spec.constraints,
+        body: head_subst.apply(&spec.body),
+    };
+    assert!(
+        implementation_covers_spec(&mut supply, &imp, &spec),
+        "the Option implementation must cover the Functor spec at f := Option"
+    );
+}
+
+fn option_int_sum_with(arg: u32) -> MonoType {
+    MonoType::Sum {
+        name: "Option".to_string(),
+        args: vec![MonoType::Var(arg)],
+        alts: vec![
+            MonoSumAlt::Constructor { name: "None".to_string(), payload: None },
+            MonoSumAlt::Constructor {
+                name: "Some".to_string(),
+                payload: Some(MonoType::Var(arg)),
+            },
+        ],
+    }
 }

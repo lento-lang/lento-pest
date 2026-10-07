@@ -70,6 +70,10 @@ pub struct UseDecl {
 pub struct ClassDecl {
     pub name: String,
     pub params: Vec<String>,
+    /// Kind annotation per parameter, parallel to `params` (`None` when
+    /// written bare). A `None` parameter used at a higher kind in a spec
+    /// body gets its kind inferred from usage.
+    pub param_kinds: Vec<Option<Kind>>,
     pub specs: Vec<SpecDecl>,
 }
 
@@ -142,18 +146,67 @@ pub struct Constraint {
     pub args: Vec<Ty>,
 }
 
+/// The kind of a type: `Star` is a proper type (kind `*`); `Arrow(a, b)` is
+/// the kind of a type constructor taking `a` and yielding `b`, written
+/// `a -> b` (right-associative).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Kind {
+    Star,
+    Arrow(Box<Kind>, Box<Kind>),
+}
+
+impl Kind {
+    /// The kind of a constructor applied to `applied` arguments when its full
+    /// arity is `arity`: the remaining arrow. `None` when over-applied.
+    pub fn applied(arity: usize, applied: usize) -> Option<Kind> {
+        if applied > arity {
+            return None;
+        }
+        let mut kind = Kind::Star;
+        for _ in applied..arity {
+            kind = Kind::Arrow(Box::new(Kind::Star), Box::new(kind));
+        }
+        Some(kind)
+    }
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Kind::Star => write!(f, "*"),
+            Kind::Arrow(from, to) => {
+                let needs_parens = matches!(**from, Kind::Arrow(_, _));
+                if needs_parens {
+                    write!(f, "({from}) -> {to}")
+                } else {
+                    write!(f, "{from} -> {to}")
+                }
+            }
+        }
+    }
+}
+
 /// Types. `mut`/`ref` are memory markers; functions are right-associative
 /// arrows.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Ty {
-    Named { name: String, args: Vec<Ty> },
+    Named {
+        name: String,
+        args: Vec<Ty>,
+    },
     Tuple(Vec<Ty>),
     List(Box<Ty>),
     #[allow(non_camel_case_types)]
-    Arrow { from: Box<Ty>, to: Box<Ty> },
+    Arrow {
+        from: Box<Ty>,
+        to: Box<Ty>,
+    },
     Ref(Box<Ty>),
     Mut(Box<Ty>),
-    NamedBinder { name: String, ty: Box<Ty> },
+    NamedBinder {
+        name: String,
+        ty: Box<Ty>,
+    },
     /// `int | str` or `Some a | None` — a sum type declaration body.
     Sum(Vec<SumAlt>),
     /// `{ a: int, b: bool }` — a record type.
@@ -353,6 +406,12 @@ pub struct TupleExpr {
 pub enum ListExpr {
     Empty,
     Cells(Box<ListCons>),
+    /// `...expr` — splice a list value's elements into the literal here.
+    /// `rest` continues the literal spine after the spread.
+    Spread {
+        source: Box<Expr>,
+        rest: Box<ListExpr>,
+    },
 }
 
 /// `head :: tail` — one link of the list-literal spine.
@@ -457,13 +516,13 @@ pub fn param_type(p: &Pattern) -> Option<Ty> {
             }
             Some(Ty::Tuple(tys))
         }
-    // Literals, wildcards, lists, spread, records and constructors do not
-    // carry recoverable element types without more type inference.
-    PatKind::Lit(_)
-    | PatKind::Wildcard
-    | PatKind::List(_)
-    | PatKind::Spread(_)
-    | PatKind::Record { .. }
-    | PatKind::Constructor { .. } => None,
-}
+        // Literals, wildcards, lists, spread, records and constructors do not
+        // carry recoverable element types without more type inference.
+        PatKind::Lit(_)
+        | PatKind::Wildcard
+        | PatKind::List(_)
+        | PatKind::Spread(_)
+        | PatKind::Record { .. }
+        | PatKind::Constructor { .. } => None,
+    }
 }

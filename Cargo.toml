@@ -8,7 +8,7 @@ name = "lento"
 path = "src/lib.rs"
 
 [features]
-default = []
+default = ["canonical-smt"]
 canonical-smt = ["dep:cvc5"]
 
 [dependencies]

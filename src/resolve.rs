@@ -213,11 +213,7 @@ pub fn resolve_call_checked(
                     !survivors.iter().any(|(other_id, other_scheme)| {
                         other_id != id && {
                             let mut probe = TypeVarSupply::new();
-                            crate::types::dominates_constrained(
-                                &mut probe,
-                                other_scheme,
-                                scheme,
-                            )
+                            crate::types::dominates_constrained(&mut probe, other_scheme, scheme)
                         }
                     })
                 })
@@ -295,11 +291,7 @@ pub fn resolve_deferred(
                     !survivors.iter().any(|(other_id, other_scheme)| {
                         other_id != id && {
                             let mut probe = TypeVarSupply::new();
-                            crate::types::dominates_constrained(
-                                &mut probe,
-                                other_scheme,
-                                scheme,
-                            )
+                            crate::types::dominates_constrained(&mut probe, other_scheme, scheme)
                         }
                     })
                 })

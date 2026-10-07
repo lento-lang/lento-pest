@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use crate::ast::{
     BinaryOp, BlockExpr, Decl, Expr, FnDecl, LambdaExpr, LetDecl, Lit, MatchArm, MatchExpr,
-    PatKind, Pattern, Program, RecordValueExpr, Span, Stmt, SumAlt, Ty, TupleExpr, UnaryOp,
+    PatKind, Pattern, Program, RecordValueExpr, Span, Stmt, SumAlt, TupleExpr, Ty, UnaryOp,
     VarExpr,
 };
 use crate::intrinsics::{apply_intrinsic, install_intrinsics, Intrinsic};
@@ -16,12 +16,21 @@ pub type Env = HashMap<String, Binding>;
 #[derive(Debug, Clone)]
 pub enum Binding {
     Inline(Value),
-    Cell { value: CellRef, mutable: bool },
+    Cell {
+        value: CellRef,
+        mutable: bool,
+    },
     /// A nullary or unary constructor introduced by a `type ... = [Name t | ...]`
     /// declaration. `has_payload` distinguishes `Some` from `None`.
-    Constructor { tag: String, has_payload: bool },
+    Constructor {
+        tag: String,
+        has_payload: bool,
+    },
     /// A `type` declaration usable at runtime for typed-pattern checks.
-    TypeDef { params: Vec<String>, ty: Ty },
+    TypeDef {
+        params: Vec<String>,
+        ty: Ty,
+    },
     Methods(Vec<MethodBinding>),
 }
 
@@ -30,6 +39,10 @@ pub struct MethodBinding {
     pub target: Vec<Ty>,
     pub arity: usize,
     pub value: Value,
+    /// Type declarations visible when the instance was declared. Deferred
+    /// dispatch only needs these to match nominal targets; retaining methods
+    /// here would recursively copy every earlier instance.
+    pub env: Env,
 }
 
 #[derive(Debug, Clone)]
@@ -44,9 +57,20 @@ pub enum Value {
     Record(HashMap<String, Value>),
     /// A constructor-tagged sum value: `Some 5` -> tag "Some", payload `5`.
     /// Bare sum alternatives (`type X = int | str`) stay untagged.
-    Sum { tag: String, payload: Rc<Value> },
+    Sum {
+        tag: String,
+        payload: Rc<Value>,
+    },
     Closure(Rc<Closure>),
     Intrinsic(Intrinsic),
+    /// A partially applied class method awaiting enough arguments to
+    /// dispatch among the candidate instances. Deferred dispatch keeps
+    /// `fmap f` from committing to the wrong instance before the functor
+    /// argument arrives.
+    MethodPartial {
+        candidates: Vec<MethodBinding>,
+        args: Vec<Value>,
+    },
     Ref(CellRef),
 }
 
@@ -105,6 +129,7 @@ impl fmt::Display for Value {
                 }
             }
             Value::Closure(_) => write!(f, "<closure>"),
+            Value::MethodPartial { .. } => write!(f, "<method>"),
             Value::Intrinsic(intrinsic) => write!(f, "<intrinsic:{}>", intrinsic.name),
             Value::Ref(_) => write!(f, "<ref>"),
         }
@@ -182,7 +207,13 @@ fn prepare_runtime_program(program: &Program) -> Program {
     while index < program.statements.len() {
         let Stmt::Decl(Decl::Fn(first)) = &program.statements[index] else {
             statements.push(program.statements[index].clone());
-            spans.push(program.spans.get(index).copied().unwrap_or(Span { line: 0, col: 0 }));
+            spans.push(
+                program
+                    .spans
+                    .get(index)
+                    .copied()
+                    .unwrap_or(Span { line: 0, col: 0 }),
+            );
             index += 1;
             continue;
         };
@@ -192,8 +223,12 @@ fn prepare_runtime_program(program: &Program) -> Program {
         let mut clauses = vec![(first.params.clone(), first.body.clone())];
         let mut end = index + 1;
         while end < program.statements.len() {
-            let Stmt::Decl(Decl::Fn(next)) = &program.statements[end] else { break };
-            if next.name != name || next.params.len() != arity { break; }
+            let Stmt::Decl(Decl::Fn(next)) = &program.statements[end] else {
+                break;
+            };
+            if next.name != name || next.params.len() != arity {
+                break;
+            }
             clauses.push((next.params.clone(), next.body.clone()));
             end += 1;
         }
@@ -203,12 +238,19 @@ fn prepare_runtime_program(program: &Program) -> Program {
                 params: clauses[0].0.clone(),
                 ret: first.ret.clone(),
                 body: clauses[0].1.clone(),
-            }.desugar()
+            }
+            .desugar()
         } else {
             grouped_runtime_fn(name, clauses)
         };
         statements.push(Stmt::Decl(Decl::Let(let_decl)));
-        spans.push(program.spans.get(index).copied().unwrap_or(Span { line: 0, col: 0 }));
+        spans.push(
+            program
+                .spans
+                .get(index)
+                .copied()
+                .unwrap_or(Span { line: 0, col: 0 }),
+        );
         index = end;
     }
     Program { statements, spans }
@@ -223,31 +265,51 @@ fn grouped_runtime_fn(name: String, clauses: Vec<(Vec<Pattern>, Expr)>) -> LetDe
         })
         .collect();
     let scrutinee = if arity == 1 {
-        Expr::Var(VarExpr { name: bind[0].clone() })
+        Expr::Var(VarExpr {
+            name: bind[0].clone(),
+        })
     } else {
         Expr::Tuple(TupleExpr {
-            items: bind.iter().map(|name| Expr::Var(VarExpr { name: name.clone() })).collect(),
+            items: bind
+                .iter()
+                .map(|name| Expr::Var(VarExpr { name: name.clone() }))
+                .collect(),
         })
     };
-    let arms = clauses.into_iter().map(|(params, body)| MatchArm {
-        pattern: if params.len() == 1 {
-            params.into_iter().next().unwrap()
-        } else {
-            Pattern { annotation: None, kind: PatKind::Tuple(params) }
-        },
-        guard: None,
-        body: Box::new(body),
-    }).collect();
-    let mut value = Expr::Match(MatchExpr { scrutinee: Box::new(scrutinee), arms });
+    let arms = clauses
+        .into_iter()
+        .map(|(params, body)| MatchArm {
+            pattern: if params.len() == 1 {
+                params.into_iter().next().unwrap()
+            } else {
+                Pattern {
+                    annotation: None,
+                    kind: PatKind::Tuple(params),
+                }
+            },
+            guard: None,
+            body: Box::new(body),
+        })
+        .collect();
+    let mut value = Expr::Match(MatchExpr {
+        scrutinee: Box::new(scrutinee),
+        arms,
+    });
     for name in bind.iter().rev() {
         value = Expr::Lambda(LambdaExpr {
-            params: vec![Pattern { annotation: None, kind: PatKind::Var(name.clone()) }],
+            params: vec![Pattern {
+                annotation: None,
+                kind: PatKind::Var(name.clone()),
+            }],
             body: Box::new(value),
         });
     }
     LetDecl {
         mutable: false,
-        pattern: Pattern { annotation: None, kind: PatKind::Var(name) },
+        pattern: Pattern {
+            annotation: None,
+            kind: PatKind::Var(name),
+        },
         annotation: None,
         value,
     }
@@ -283,6 +345,11 @@ fn eval_decl(decl: &Decl, env: &mut Env) -> Result<Value, String> {
                     target: i.target.clone(),
                     arity: method.params.len(),
                     value,
+                    env: env
+                        .iter()
+                        .filter(|(_, binding)| matches!(binding, Binding::TypeDef { .. }))
+                        .map(|(name, binding)| (name.clone(), binding.clone()))
+                        .collect(),
                 };
                 let existing = env.remove(&method.name);
                 match existing {
@@ -363,11 +430,26 @@ fn eval_let_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
     Ok(value)
 }
 
-/// Impl methods are ordinary functions, but their definitions are not
-/// recursive bindings.  Avoid installing a self-referential cell while
-/// evaluating a method that delegates to a same-named intrinsic.
+/// Impl methods are ordinary functions. A method whose value is a closure
+/// gets a self-referential cell so the body can call the method recursively
+/// (`fn fmap f xs = ... fmap f t ...`); the cell is filled with the closure
+/// after evaluation, so a method delegating to a same-named intrinsic still
+/// resolves through the temporary inline binding rather than an empty cell.
 fn eval_method_decl(let_decl: &LetDecl, env: &mut Env) -> Result<Value, String> {
     if let PatKind::Var(name) = &let_decl.pattern.kind {
+        if binding_needs_cell(&let_decl.value) {
+            let cell = Rc::new(RefCell::new(Value::Unit));
+            env.insert(
+                name.clone(),
+                Binding::Cell {
+                    value: cell.clone(),
+                    mutable: false,
+                },
+            );
+            let value = eval_expr(&let_decl.value, env)?;
+            *cell.borrow_mut() = value.clone();
+            return Ok(value);
+        }
         let value = eval_expr(&let_decl.value, env)?;
         env.insert(name.clone(), Binding::Inline(value.clone()));
         Ok(value)
@@ -394,15 +476,30 @@ fn eval_expr(expr: &Expr, env: &mut Env) -> Result<Value, String> {
                     for arg in &call.args {
                         args.push(eval_expr(arg, env)?);
                     }
+                    let arity = methods.first().map(|method| method.arity).unwrap_or(0);
+                    if args.len() < arity {
+                        // Not enough arguments to dispatch: defer, keeping
+                        // every candidate so the final application picks the
+                        // instance by the argument types.
+                        return Ok(Value::MethodPartial {
+                            candidates: methods,
+                            args,
+                        });
+                    }
                     let method = methods
                         .iter()
                         .find(|method| method_matches(&method.target, method.arity, &args, env))
                         .ok_or_else(|| format!("no matching method '{}'", var.name))?;
-                    let args = args
-                        .into_iter()
-                        .zip(method.target.iter())
-                        .map(|(value, ty)| coerce_value_to_type(value, ty))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let args = if method.target.len() == args.len() {
+                        args.into_iter()
+                            .zip(method.target.iter())
+                            .map(|(value, ty)| coerce_value_to_type(value, ty))
+                            .collect::<Result<Vec<_>, _>>()?
+                    } else {
+                        // One target per class parameter; zip only when they
+                        // align, never truncate arguments.
+                        args
+                    };
                     return apply_call(method.value.clone(), args);
                 }
             }
@@ -578,8 +675,42 @@ pub(crate) fn apply_one(callee: Value, arg: Value) -> Result<Value, String> {
                 apply_intrinsic(intrinsic)
             }
         }
+        Value::MethodPartial { candidates, mut args } => {
+            args.push(arg);
+            apply_method_partial(candidates, args)
+        }
         _ => Err(format!("cannot call non-function value {callee}")),
     }
+}
+
+/// Dispatch a (possibly partial) method application across the candidate
+/// instance bindings. When enough arguments have accumulated for the
+/// candidates' arity, the candidate whose target types match the argument
+/// values is chosen; before that, dispatch stays deferred.
+fn apply_method_partial(candidates: Vec<MethodBinding>, args: Vec<Value>) -> Result<Value, String> {
+    let arity = candidates.first().map(|method| method.arity).unwrap_or(0);
+    if args.len() < arity {
+        // Keep the full candidate set: filtering early would commit to an
+        // instance before the discriminating argument arrives.
+        return Ok(Value::MethodPartial { candidates, args });
+    }
+    let Some(method) = candidates
+        .iter()
+        .find(|method| method_matches(&method.target, method.arity, &args, &method.env))
+    else {
+        return Err("no matching method".to_string());
+    };
+    let args = if method.target.len() == args.len() {
+        args.into_iter()
+            .zip(method.target.iter())
+            .map(|(value, ty)| coerce_value_to_type(value, ty))
+            .collect::<Result<Vec<_>, _>>()?
+    } else {
+        // The target names one type per CLASS PARAMETER, not per method
+        // argument; zip only when they align, never truncate arguments.
+        args
+    };
+    apply_call(method.value.clone(), args)
 }
 
 fn eval_member(value: Value, field: &str) -> Result<Value, String> {
@@ -680,13 +811,7 @@ fn eval_binary_values(op: &BinaryOp, left: Value, right: Value) -> Result<Value,
         },
         BinaryOp::Sub => numeric_binop(left, right, |a, b| a.checked_sub(b), |a, b| a - b, "-"),
         BinaryOp::Mul => numeric_binop(left, right, |a, b| a.checked_mul(b), |a, b| a * b, "*"),
-        BinaryOp::Div => numeric_binop(
-            left,
-            right,
-            |a, b| a.checked_div(b),
-            |a, b| a / b,
-            "/",
-        ),
+        BinaryOp::Div => numeric_binop(left, right, |a, b| a.checked_div(b), |a, b| a / b, "/"),
         BinaryOp::Mod => match (left, right) {
             (Value::Int(a), Value::Int(b)) => a
                 .checked_rem(b)
@@ -768,6 +893,18 @@ fn eval_list(list: &crate::ast::ListExpr, env: &mut Env) -> Result<Value, String
                 items.push(eval_expr(&cons.head, env)?);
                 current = cons.tail.as_ref();
             }
+            crate::ast::ListExpr::Spread { source, rest } => {
+                let value = eval_expr(source, env)?;
+                match value {
+                    Value::List(spliced) => items.extend(spliced),
+                    other => {
+                        return Err(format!(
+                            "list spread expects a list; got {other}"
+                        ))
+                    }
+                }
+                current = rest.as_ref();
+            }
         }
     }
 }
@@ -789,9 +926,7 @@ fn eval_record(record: &RecordValueExpr, env: &mut Env) -> Result<Value, String>
                         }
                     }
                     other => {
-                        return Err(format!(
-                            "record spread expects a record, got {other}"
-                        ));
+                        return Err(format!("record spread expects a record, got {other}"));
                     }
                 }
             }
@@ -883,7 +1018,11 @@ fn collect_pattern_bindings(
         PatKind::Var(name) => {
             // A bare uppercase identifier may name a nullary constructor
             // (`None`); in that case it matches instead of binding.
-            if let Some(Binding::Constructor { tag, has_payload: false }) = env.get(name) {
+            if let Some(Binding::Constructor {
+                tag,
+                has_payload: false,
+            }) = env.get(name)
+            {
                 return Ok(matches!(value, Value::Sum { tag: vtag, .. } if vtag == tag));
             }
             out.push((name.clone(), value.clone()));
@@ -892,7 +1031,10 @@ fn collect_pattern_bindings(
         PatKind::Wildcard => Ok(true),
         PatKind::Lit(lit) => Ok(value_eq(value, &eval_lit(lit))),
         PatKind::Constructor { name, payload } => match value {
-            Value::Sum { tag, payload: sum_payload } if tag == name => match payload {
+            Value::Sum {
+                tag,
+                payload: sum_payload,
+            } if tag == name => match payload {
                 Some(pat) => collect_pattern_bindings(pat, sum_payload, env, out),
                 None => Ok(matches!(**sum_payload, Value::Unit)),
             },
@@ -976,11 +1118,17 @@ fn lookup_var(env: &Env, name: &str) -> Result<Value, String> {
     match env.get(name) {
         Some(Binding::Inline(value)) => Ok(value.clone()),
         Some(Binding::Cell { value, .. }) => Ok(value.borrow().clone()),
-        Some(Binding::Constructor { tag, has_payload: false }) => Ok(Value::Sum {
+        Some(Binding::Constructor {
+            tag,
+            has_payload: false,
+        }) => Ok(Value::Sum {
             tag: tag.clone(),
             payload: Rc::new(Value::Unit),
         }),
-        Some(Binding::Constructor { tag, has_payload: true }) => Err(format!(
+        Some(Binding::Constructor {
+            tag,
+            has_payload: true,
+        }) => Err(format!(
             "constructor '{tag}' expects one argument; use '{tag} value'"
         )),
         Some(Binding::TypeDef { .. }) => Err(format!("'{name}' is a type, not a value")),
@@ -995,7 +1143,9 @@ fn method_matches(target: &[Ty], arity: usize, args: &[Value], env: &Env) -> boo
     }
     if args.len() < arity {
         return target.len() == 1
-            && (args.iter().any(|arg| value_matches_ty(arg, &target[0], env))
+            && (args
+                .iter()
+                .any(|arg| value_matches_ty(arg, &target[0], env))
                 || args.len() == 1);
     }
     if target.len() == args.len() {
@@ -1004,7 +1154,10 @@ fn method_matches(target: &[Ty], arity: usize, args: &[Value], env: &Env) -> boo
             .zip(args)
             .all(|(ty, arg)| value_matches_ty(arg, ty, env));
     }
-    target.len() == 1 && args.iter().any(|arg| value_matches_ty(arg, &target[0], env))
+    target.len() == 1
+        && args
+            .iter()
+            .any(|arg| value_matches_ty(arg, &target[0], env))
 }
 
 /// Runtime type test for typed patterns `(n : int)` / `(x : Option)`.
@@ -1019,6 +1172,9 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
             "bool" => matches!(value, Value::Bool(_)),
             "str" | "string" => matches!(value, Value::Str(_)),
             "unit" => matches!(value, Value::Unit),
+            // The list type constructor as an impl target (`impl Functor
+            // list`): any list value matches.
+            "list" => matches!(value, Value::List(_)),
             _ => match env.get(name) {
                 Some(Binding::TypeDef { params, ty: decl }) => {
                     // A type parameter matches anything at runtime.
@@ -1054,19 +1210,26 @@ fn value_matches_ty(value: &Value, ty: &Ty, env: &Env) -> bool {
         Ty::Tuple(elems) => match value {
             Value::Tuple(items) => {
                 items.len() == elems.len()
-                    && items.iter().zip(elems.iter()).all(|(v, t)| value_matches_ty(v, t, env))
+                    && items
+                        .iter()
+                        .zip(elems.iter())
+                        .all(|(v, t)| value_matches_ty(v, t, env))
             }
             _ => false,
         },
         Ty::RecordType(fields) => match value {
             Value::Record(fs) => fields.iter().all(|(name, t)| {
-                fs.get(name).map(|v| value_matches_ty(v, t, env)).unwrap_or(false)
+                fs.get(name)
+                    .map(|v| value_matches_ty(v, t, env))
+                    .unwrap_or(false)
             }),
             _ => false,
         },
         Ty::OpenRecordType { fields, .. } => match value {
             Value::Record(fs) => fields.iter().all(|(name, t)| {
-                fs.get(name).map(|v| value_matches_ty(v, t, env)).unwrap_or(false)
+                fs.get(name)
+                    .map(|v| value_matches_ty(v, t, env))
+                    .unwrap_or(false)
             }),
             _ => false,
         },
@@ -1104,10 +1267,19 @@ fn coerce_value_to_type(value: Value, ty: &Ty) -> Result<Value, String> {
 
 /// Like `value_matches_ty` but substitutes type parameters by position, so a
 /// declared `type Pair a = { fst: a, snd: a }` can be tested as `Pair int`.
-fn value_matches_ty_open(ty: &Ty, value: &Value, params: &[String], args: &[Ty], env: &Env) -> bool {
+fn value_matches_ty_open(
+    ty: &Ty,
+    value: &Value,
+    params: &[String],
+    args: &[Ty],
+    env: &Env,
+) -> bool {
     if let Ty::Named { name, .. } = ty {
         if let Some(i) = params.iter().position(|p| p == name) {
-            return args.get(i).map(|a| value_matches_ty(value, a, env)).unwrap_or(true);
+            return args
+                .get(i)
+                .map(|a| value_matches_ty(value, a, env))
+                .unwrap_or(true);
         }
     }
     match ty {
@@ -1167,14 +1339,26 @@ pub(crate) fn value_eq(left: &Value, right: &Value) -> bool {
         }
         (Value::Record(a), Value::Record(b)) => {
             a.len() == b.len()
-                && a.iter()
-                    .all(|(key, value)| b.get(key).map(|other| value_eq(value, other)).unwrap_or(false))
+                && a.iter().all(|(key, value)| {
+                    b.get(key)
+                        .map(|other| value_eq(value, other))
+                        .unwrap_or(false)
+                })
         }
-        (Value::Intrinsic(a), Value::Intrinsic(b)) => a.name == b.name && a.args.len() == b.args.len(),
+        (Value::Intrinsic(a), Value::Intrinsic(b)) => {
+            a.name == b.name && a.args.len() == b.args.len()
+        }
         (Value::Ref(a), Value::Ref(b)) => Rc::ptr_eq(a, b),
-        (Value::Sum { tag: ta, payload: pa }, Value::Sum { tag: tb, payload: pb }) => {
-            ta == tb && value_eq(pa, pb)
-        }
+        (
+            Value::Sum {
+                tag: ta,
+                payload: pa,
+            },
+            Value::Sum {
+                tag: tb,
+                payload: pb,
+            },
+        ) => ta == tb && value_eq(pa, pb),
         _ => false,
     }
 }

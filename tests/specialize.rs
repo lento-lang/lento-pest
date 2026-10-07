@@ -20,11 +20,17 @@ fn value_pattern_variants_of_same_type_share_one_specialization() {
     // `[]` and `[x, ...xs]` both refine the same [a] domain -> one
     // specialization with two clauses in source order.
     let set = partition_src("fn map2 f [] = []\nfn map2 f [x, ...xs] = [f x]");
-    assert_eq!(set.specializations.len(), 1, "value variants share a specialization");
+    assert_eq!(
+        set.specializations.len(),
+        1,
+        "value variants share a specialization"
+    );
     assert_eq!(set.specializations[0].clauses.len(), 2);
     // Source order preserved for pattern dispatch.
-    assert!(set.specializations[0].clauses[0].source_index
-        < set.specializations[0].clauses[1].source_index);
+    assert!(
+        set.specializations[0].clauses[0].source_index
+            < set.specializations[0].clauses[1].source_index
+    );
 }
 
 #[test]
@@ -43,7 +49,11 @@ fn concrete_annotation_forms_distinct_specialization() {
 fn different_arity_forms_different_specializations() {
     // Unary and binary clauses never merge, even with compatible domains.
     let set = partition_src("fn f x = x\nfn f x y = x");
-    assert_eq!(set.specializations.len(), 2, "different arity => different specialization");
+    assert_eq!(
+        set.specializations.len(),
+        2,
+        "different arity => different specialization"
+    );
 }
 
 #[test]
@@ -58,7 +68,11 @@ fn a_to_ast_and_bytes_to_ast_are_never_merged() {
     // The instruction's key case: never merge `a -> Ast` and `bytes -> Ast`
     // merely because they unify.
     let set = partition_src("fn p (x : bytes) = x\nfn p x = x");
-    assert_eq!(set.specializations.len(), 2, "must not merge strict specialization with generic");
+    assert_eq!(
+        set.specializations.len(),
+        2,
+        "must not merge strict specialization with generic"
+    );
 }
 
 #[test]
@@ -97,7 +111,11 @@ fn same_annotation_value_variants_merge() {
     // they merge into one specialization (the literal `0` is a value-shape
     // variant, not a boundary).
     let set = partition_src("fn f (x : int) 0 = x\nfn f (x : int) n = x");
-    assert_eq!(set.specializations.len(), 1, "same declared restriction merges");
+    assert_eq!(
+        set.specializations.len(),
+        1,
+        "same declared restriction merges"
+    );
     assert_eq!(set.specializations[0].clauses.len(), 2);
 }
 
@@ -106,7 +124,11 @@ fn redundant_generic_annotation_does_not_split() {
     // `(x : a)` induces no restriction (bare variable), so it merges with the
     // unannotated generic identity.
     let set = partition_src("fn id2 x = x\nfn id2 (x : a) = x");
-    assert_eq!(set.specializations.len(), 1, "redundant generic annotation is not a boundary");
+    assert_eq!(
+        set.specializations.len(),
+        1,
+        "redundant generic annotation is not a boundary"
+    );
     assert_eq!(set.specializations[0].clauses.len(), 2);
 }
 
